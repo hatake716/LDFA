@@ -1,0 +1,7 @@
+<resources>
+    <string name="app_name">LDFA</string>
+    <string name="keep_alive_channel_name">LDFA Linuxデスクトップ</string>
+    <string name="keep_alive_notification_title">LDFAでLinuxデスクトップを実行中</string>
+    <string name="keep_alive_notification_text">Androidによる終了を検知した場合は自動復旧します</string>
+    <string name="stop">停止</string>
+</resources>

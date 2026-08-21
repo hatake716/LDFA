@@ -1,0 +1,149 @@
+name: LDFA Android CI
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - "agent/**"
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ldfa-android-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout with embedded runtime sources
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install Android native toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ -x "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" ]; then
+            SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          elif command -v sdkmanager >/dev/null 2>&1; then
+            SDKMANAGER="$(command -v sdkmanager)"
+          else
+            echo "sdkmanager was not found on the GitHub-hosted Android runner." >&2
+            exit 1
+          fi
+
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" \
+            "platforms;android-36" \
+            "build-tools;36.0.0" \
+            "ndk;29.0.14206865" \
+            "cmake;3.22.1"
+
+          echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
+          echo "$ANDROID_HOME/build-tools/36.0.0" >> "$GITHUB_PATH"
+          echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+
+      - name: Validate Gradle 8.13 checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -qx '81a82aaea5abcc8ff68b3dfcb58b3c3c429378efd98e7433460610fecd7ae45f' \
+            gradle/wrapper/gradle-wrapper-8.13.jar.sha256
+          grep -qx 'distributionSha256Sum=20f1b1176237254a6fc204d8434196fa11a4cfb387567519c61556e8710aed78' \
+            gradle/wrapper/gradle-wrapper.properties
+
+      - name: Validate Ubuntu and display controllers
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash ./scripts/check-host-script.sh
+          bash ./scripts/test-host-controller.sh
+          bash ./scripts/check-x11-controller.sh
+
+      - name: Test, lint and build LDFA APK
+        shell: bash
+        run: |
+          set -o pipefail
+          bash ./gradlew --no-daemon \
+            testDebugUnitTest \
+            :app:lintDebug \
+            :termux-runtime:lintDebug \
+            :embedded-x11:lintDebug \
+            assembleDebug \
+            --stacktrace 2>&1 | tee gradle-build.log
+
+      - name: Verify embedded X11 and LDFA packaging
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK=app/build/outputs/apk/debug/app-debug.apk
+          test -f "$APK"
+
+          if [ -x "$ANDROID_HOME/cmdline-tools/latest/bin/apkanalyzer" ]; then
+            APKANALYZER="$ANDROID_HOME/cmdline-tools/latest/bin/apkanalyzer"
+          elif command -v apkanalyzer >/dev/null 2>&1; then
+            APKANALYZER="$(command -v apkanalyzer)"
+          else
+            echo "apkanalyzer was not found after Android SDK setup." >&2
+            exit 1
+          fi
+
+          # Native X11 is an Android-owned :x11 foreground service using libXlorie.
+          unzip -l "$APK" | grep -q 'libXlorie.so'
+          unzip -l "$APK" | grep -q 'assets/ldfa-x11.sh'
+          unzip -p "$APK" 'classes*.dex' | strings | grep -q 'EmbeddedX11ServerService'
+          unzip -p "$APK" 'classes*.dex' | strings | grep -q 'EmbeddedX11ServiceController'
+          "$APKANALYZER" manifest print "$APK" | grep -q 'com.hatake716.linuxdesktop.x11.EmbeddedX11ServerService'
+          "$APKANALYZER" manifest print "$APK" | grep -q 'android:process=":x11"'
+
+          # The obsolete app_process/loader and shell-owned Android lifecycle must not return.
+          ! unzip -l "$APK" | grep -q 'assets/x11-loader.apk'
+          ! unzip -p "$APK" assets/ldfa-x11.sh | grep -q '/system/bin/app_process'
+          ! unzip -p "$APK" assets/ldfa-x11.sh | grep -q 'com.termux.x11.Loader'
+          ! unzip -p "$APK" assets/ldfa-x11.sh | grep -q 'start-foreground-service'
+          ! unzip -p "$APK" assets/ldfa-x11.sh | grep -q 'am start'
+
+          # Compatibility display remains packaged as the last-resort recovery backend.
+          unzip -l "$APK" | grep -q 'assets/ldfa-vnc.sh'
+          unzip -p "$APK" 'classes*.dex' | strings | grep -q 'VncFallbackActivity'
+
+          # LDFA branding and Material 3 tools are included.
+          "$APKANALYZER" manifest application-id "$APK" | grep -qx 'com.termux'
+          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$APK" | grep -Fq "application-label:'LDFA'"
+          unzip -p "$APK" 'classes*.dex' | strings | grep -q 'ToolsScreen'
+
+          cp "$APK" app/build/outputs/apk/debug/LDFA-v0.9.0-debug.apk
+
+      - name: Upload Gradle diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ldfa-gradle-build-log
+          path: gradle-build.log
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Upload LDFA debug APK
+        if: success()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: LDFA-v0.9.0-debug-apk
+          path: app/build/outputs/apk/debug/LDFA-v0.9.0-debug.apk
+          if-no-files-found: error
+          retention-days: 14
