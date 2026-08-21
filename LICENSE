@@ -1,0 +1,26 @@
+Linux Desktop for Android
+Copyright (C) 2026 the Linux Desktop for Android contributors
+
+SPDX-License-Identifier: GPL-3.0-only
+
+This unified application is free software: you can redistribute it and/or
+modify it under the terms of the GNU General Public License as published by
+the Free Software Foundation, version 3 of the License only.
+
+This program is distributed in the hope that it will be useful, but WITHOUT
+ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+
+The complete, unmodified GNU GPL version 3 license text is included in the
+pinned Termux:X11 source tree at:
+
+    vendor/termux-x11/LICENSE
+
+It is also available from the Free Software Foundation at:
+
+    https://www.gnu.org/licenses/gpl-3.0.txt
+
+Termux and Termux:X11 retain their respective copyright notices. Components
+that upstream projects identify as Apache-2.0, MIT, BSD, or another compatible
+license remain under those component-specific terms. See THIRD_PARTY_NOTICES.md
+and the license files in the pinned vendor submodules.
