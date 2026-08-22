@@ -1,119 +1,157 @@
 # LDFA — Linux Desktop for Android
 
-**LDFA** は、Androidスマートフォン／タブレットをLinux PCとして使うための入口となるAndroidアプリです。
+[![LDFA Android CI](https://github.com/hatake716/LDFA/actions/workflows/android.yml/badge.svg?branch=main)](https://github.com/hatake716/LDFA/actions/workflows/android.yml)
+[![License: GPL-3.0-only](https://img.shields.io/badge/License-GPL--3.0--only-blue.svg)](LICENSE)
 
-Android上のUbuntu 24.04 PRootコンテナへ **XFCE、日本語ロケール、日本語フォント、Fcitx5 + Mozc、sudo** を構築し、アプリに内蔵したターミナルとX11サーバーを通してLinuxデスクトップをGUI操作できます。通常は外部Termux、外部Termux:X11、外部VNCクライアントを必要としません。
+**LDFA** は、Android端末の中にDebian 12（Bookworm）とXFCEデスクトップを構築し、1つのAndroidアプリ内で操作するためのプロジェクトです。
 
-現在の開発版は **v0.9.0** です。
+Termux互換ランタイム、X11サーバー、X11 viewer、ターミナル、Debian PRoot、XFCE、日本語入力環境をアプリに統合しています。通常利用では、外部Termux、外部Termux:X11、外部VNCクライアントを別々にインストールする必要はありません。
 
-## できること
+## 現在のステータス
 
-- Android上にUbuntu 24.04環境を作成・保存
-- XFCEデスクトップをアプリ内で表示
-- タッチ、マウス、物理キーボードでLinux GUIを操作
-- 複数のUbuntu環境を作成・切り替え
-- 日本語ロケール、Noto CJK、Fcitx5 + Mozcを自動設定
-- 一般ユーザー `desktop` とパスワードなし `sudo` を設定
-- Ubuntuの `apt` でARM64対応Linuxアプリを追加
-- Android共有ストレージをUbuntuの `/mnt/android` へ接続
-- 内蔵ターミナルからUbuntuを保守
-- Ubuntu／XFCE／X11のインストール・診断ログをアプリ内表示
-- native X11が使えない端末では互換VNC表示へ自動切り替え
-- Foreground Service、WakeLock、heartbeatでセッションを監視・復旧
+| 項目 | 状態 |
+| --- | --- |
+| バージョン | `0.9.0` / versionCode `16` |
+| リリース段階 | **プレリリース候補**。正式なGitHubプレリリースは実機受け入れ後に作成予定 |
+| Linux環境 | Debian 12（Bookworm）+ XFCE |
+| 通常表示 | 内蔵native X11、`DISPLAY=:1` |
+| 最終フォールバック | TigerVNC + noVNC、`DISPLAY=:2` |
+| ローカル／AVD検証 | clean build、155 unit tests、3 module lint、4 ABI APK、API 35 x86_64・4 KB page E2Eが成功 |
+| 実機検証 | 物理ARM64端末で受け入れテスト中。ARM64 16 KB pageは未完了 |
 
-## 初めて使うとき
+現在の`main`はv0.9.0のソース候補です。実機検証が完了するまでは、日常データを置く唯一のLinux環境としてではなく、バックアップを取ったテスト環境として使用してください。
+
+## 主な機能
+
+- Android上に複数のDebian 12環境を作成、保存、切り替え
+- XFCEデスクトップを内蔵X11 viewerへ直接表示
+- タッチ、マウス、物理キーボード、ソフトウェアキーボードで操作
+- 日本語ロケール、Noto CJK、日本語キーボード、Fcitx5 + Mozcを自動設定
+- Google公式のGoogle Chrome stableを64-bit Debianへ自動導入
+- 一般ユーザー`desktop`とパスワードなし`sudo`を構成
+- Android共有ストレージをDebianの`/mnt/android`へ接続
+- 内蔵ターミナルからDebianを保守
+- 作成、起動、停止、修復、削除とログ表示をMaterial 3 UIへ統合
+- native X11が利用できない場合にlegacy描画、互換VNCへ段階的にフォールバック
+- Foreground Service、WakeLock、heartbeat、世代IDで実行中セッションを監視
+- Surface再作成、バックグラウンド復帰、停止／再起動を考慮したX11 lifecycle
+
+## 動作要件
+
+- Android 8.0（API 26）以降
+- 64-bit ARM端末を推奨
+- Debian環境1つにつき、最低3〜5 GB程度の空き容量を推奨
+- 初回セットアップ時の安定したインターネット接続
+- Android共有ストレージへのアクセス許可
+- 互換VNC表示を使用する場合はAndroid System WebView
+
+APKには`arm64-v8a`、`armeabi-v7a`、`x86`、`x86_64`のnativeライブラリを収録しています。ただし、Google Chrome公式Linuxパッケージの自動導入対象は`arm64`と`amd64`だけです。32-bit環境ではChromeを別ブラウザへ無断で置換せず、Debian／XFCEの構築だけを継続します。
+
+## インストール前に必ず確認してください
+
+### 公式Termuxとは同時インストールできません
+
+内蔵Termuxランタイムは、互換性のため次の固定パスを使用します。
+
+```text
+/data/data/com.termux/files/usr
+```
+
+そのためLDFAのapplication IDは`com.termux`です。署名が異なる公式Termuxや別ビルドの`com.termux`とは同時インストールできません。
+
+既存Termuxに必要なスクリプト、SSH鍵、パッケージ、ホームディレクトリがある場合は、LDFAをインストールする前に必ずバックアップしてください。署名の異なるアプリへ`adb install -r`で上書きすることはできません。
+
+### PRootは完全なLinux仮想マシンではありません
+
+DebianはAndroidカーネル上のPRootとして動作します。systemd、カーネル機能、デバイスアクセス、sandbox、低レベルsyscallの挙動は、通常のDebian PCや仮想マシンと異なります。
+
+### Google Chromeのsandbox制約
+
+Android PRoot内ではChrome本来のnamespace／setuid sandboxを確立できません。LDFAの専用ランチャーは、一般ユーザー`desktop`から次の互換オプションでChromeを起動します。
+
+```text
+--no-sandbox
+--disable-dev-shm-usage
+--ozone-platform=x11
+--password-store=basic
+```
+
+通常のLinux版ChromeよりWebコンテンツの隔離が弱くなります。信頼できないサイト、拡張機能、ダウンロードファイルを扱う場合は、この制約を前提にしてください。詳細は[SECURITY.md](SECURITY.md)を参照してください。
+
+## APKの入手方法
+
+実機受け入れが完了するまでは正式なプレリリースを作成していません。
+
+現在の候補APKは、[LDFA Android CI](https://github.com/hatake716/LDFA/actions/workflows/android.yml)の成功した`main` runから、`LDFA-v0.9.0-debug-apk` artifactとして取得できます。Actions artifactには保存期限があります。
+
+実機検証完了後は、[GitHub Releases](https://github.com/hatake716/LDFA/releases)へv0.9.0プレリリースとしてAPKと検証情報を掲載する予定です。
+
+ローカルにAPKがある場合のインストール例:
+
+```bash
+adb install -r LDFA-v0.9.0-debug.apk
+```
+
+端末やADBの設定によってtest APKとしての許可を求められる場合は、`-t`を追加します。
+
+```bash
+adb install -r -t LDFA-v0.9.0-debug.apk
+```
+
+## 初回セットアップ
 
 LDFAの初回画面では、1つの主ボタンが次に必要な操作を順番に案内します。
 
 1. 内蔵ターミナルランタイムを展開
 2. 内蔵X11サーバーを確認
 3. Android共有ストレージへのアクセスを許可
-4. Ubuntu、XFCE、日本語環境を自動構築
+4. Debian環境の表示名を入力
+5. Debian 12、XFCE、日本語環境、Google Chromeを自動構築
 
-準備が完了したら「Ubuntu環境を作成」を押します。インストール後は「Ubuntu XFCEを開く」だけでLinuxデスクトップを起動できます。
+Debian、デスクトップパッケージ、ロケール、フォント、Mozc、Chromeを取得するため、初回構築には時間がかかります。処理中はアプリ内で進捗とログを確認できます。AndroidがLDFAをバックグラウンド制限しないよう、可能であればバッテリー設定を「制限なし」にしてください。
 
-Ubuntu環境1つにつき、最低3〜5GB程度の空き容量を推奨します。初回セットアップにはインターネット接続が必要です。
+構築が完了すると、ホーム画面の環境カードに「Debian XFCEを開く」が表示されます。
 
-## UI
+## デスクトップを起動する
 
-管理画面はJetpack ComposeとMaterial 3で構築しています。
+環境カードの「Debian XFCEを開く」を押します。
 
-- Android 12以降では端末のDynamic Colorへ対応
-- ライト／ダークテーマへ対応
-- セットアップの進捗を4段階で表示
-- ホーム画面からUbuntu作成・起動・停止・修復・削除
-- 設定画面で内蔵ターミナル、X11、共有ストレージ、Ubuntu基盤の状態を確認
-- インストール中のリアルタイムログを表示
+X11 service、Unix socket、Binder、Android Surface、EGL renderer、XFCEを順に準備するため、ボタンを押してからデスクトップが表示されるまで少し時間がかかります。起動中は次の注意を管理画面に表示します。
 
-## 動作要件
+> デスクトップが表示されるまで少し時間がかかります。初回や更新直後は数分かかる場合があります。そのままお待ちください。
 
-- Android 8.0以降
-- ARM64端末を推奨
-- Ubuntu + XFCE用に数GB以上の空き容量
-- 初回セットアップ時のインターネット接続
-- Android共有ストレージへのアクセス許可
-- 互換VNC表示を使う場合はAndroid System WebView
+既存のDebian環境にGoogle Chromeがまだない場合は、アプリ更新後の最初の起動前にChromeを追加します。このときもネットワーク速度により数分かかる場合があります。
 
-## インストール前の重要事項
+起動時はおおむね次の順でhealth checkを行います。
 
-内蔵Termuxランタイムは次の固定パスを使います。
+1. Android所有のX11 Foreground Service
+2. X11 Unix socketとDebianからの`xset q`
+3. viewer ActivityとBinder FD接続
+4. Android SurfaceとEGL renderer
+5. 成功したEGL presentationの増分
+6. XFCE sessionとwindow manager
+7. XFCE起動後の再描画
 
-```text
-/data/data/com.termux/files/usr
-```
+画面だけを閉じた場合、同じ環境を再度開くと実行中セッションへ再接続します。環境カードの「停止」を押すと、viewer、X11 server、XFCE、PRootの順で停止します。
 
-この互換性を維持するため、現在のapplicationIdは `com.termux` です。署名が異なる公式Termuxとは同時インストールできません。既存Termuxに必要なデータがある場合は、LDFAをインストールする前にバックアップしてください。
+## Google Chrome
 
-## APKのインストール
+ChromeのDEBをAPKへ固定収録するのではなく、Debian構築時にguest architectureを確認してGoogle公式のcurrent stable packageを取得します。
 
-GitHub Actionsまたはローカルビルドで生成したAPKを使用します。
+- `amd64`: `google-chrome-stable_current_amd64.deb`
+- `arm64`: `google-chrome-stable_current_arm64.deb`
 
-```bash
-adb install -r app-debug.apk
-```
+インストール前にDEBのPackage fieldが`google-chrome-stable`であり、Architecture fieldがguestと一致することを検証します。Chromeが作成する署名済みAPT sourceは保持されるため、Debian側のAPTから更新できます。
 
-署名の異なる既存 `com.termux` がある場合は上書きできません。
+既存環境ではデスクトップ起動前に、Chrome本体、LDFA専用launcher、XFCE desktop entryを確認します。すべて揃っていればダウンロードは行いません。
 
-## 基本操作
+Chrome本体と依存パッケージによる追加使用量はバージョンによって変わります。x86_64の動的検証では、Chrome packageの`Installed-Size`は約431 MiBでした。
 
-### Ubuntu環境を作成
-
-ホーム画面の「Ubuntu環境を作成」または右下の追加ボタンを押し、表示名を入力します。Ubuntu 24.04、XFCE、日本語環境が自動で構築され、処理中はリアルタイムログを確認できます。
-
-### Linuxデスクトップを開く
-
-環境カードの「Ubuntu XFCEを開く」を押します。
-
-起動時は次を順に検証します。
-
-1. 内蔵X11 Foreground Service
-2. X11 Unix socket
-3. Ubuntu内部からの `xset q`
-4. Binder接続
-5. Android Surface
-6. 実描画フレーム
-7. XFCEセッション
-
-native X11が正常に描画できない場合のみ、legacy描画、互換VNCの順に自動で切り替えます。
-
-### 停止・再表示
-
-実行中の環境はカードから停止できます。画面だけ閉じた場合は、同じ環境を再度開くと現在のセッションへ再接続します。
-
-### ターミナル
-
-設定画面の「ターミナルを開く」から、内蔵ターミナルを起動できます。
-
-UbuntuへLinuxアプリを追加する例:
-
-```bash
-sudo apt update
-sudo apt install <package>
-```
+Chromeの初回起動時には、Google Chromeの利用規約確認が表示されます。
 
 ## 日本語入力
 
-Ubuntu側では次の環境変数を設定し、XFCEセッション開始時にFcitx5を自動起動します。
+Debian側では次の環境変数を設定し、XFCE session開始時にFcitx5を自動起動します。
 
 ```text
 GTK_IM_MODULE=fcitx
@@ -121,88 +159,86 @@ QT_IM_MODULE=fcitx
 XMODIFIERS=@im=fcitx
 ```
 
-日本語入力エンジンはMozcです。
+日本語入力エンジンはMozcです。API 35 x86_64 AVDでは、`nihongo`から候補「日本語」を選び、XFCE terminalへ確定できることまで確認しています。
 
 ## Androidとのファイル共有
 
-UbuntuからAndroid共有ストレージへ次のパスでアクセスできます。
+環境ごとのAndroid共有ディレクトリを、Debian内の次のパスへ接続します。
 
 ```text
 /mnt/android
 ```
 
-## X11アーキテクチャ
+XFCEのデスクトップには「Android共有」へのショートカットを作成します。共有ストレージはバックアップやAndroidアプリとの受け渡しに利用できますが、重要データは別の場所にも保存してください。
 
-旧 `app_process` / loader APK / custom `PathClassLoader` 経路は使用しません。
+## 表示アーキテクチャ
+
+通常表示はAndroid所有のX11 serviceと、Termux:X11由来のviewerをアプリへ埋め込んだ構成です。旧`app_process`、loader APK、custom `PathClassLoader`、TCP 7892による通常接続は使用しません。
 
 ```text
-Android UI
+LDFA管理UI
    |
    v
 LinuxDesktopRepository
    |
-   v
-EmbeddedX11ServiceController
-   |
-   +--> EmbeddedX11ServerService (com.termux:x11)
-   |       |
-   |       v
-   |    libXlorie / Xorg :1
-   |       |
-   |       +---- Unix socket ---- Ubuntu PRoot / XFCE
-   |       |
-   |       +---- ICmdEntryInterface Binder
-   |                         |
-   +-------------------------+
-                             v
-                    Termux:X11 MainActivity
-                             |
-                             v
-                          LorieView
-                             |
-                             v
-                         Android Surface
+   +--> EmbeddedX11ServerService (process: com.termux:x11)
+   |          |
+   |          +--> libXlorie / Xorg :1
+   |          |          |
+   |          |          +---- Unix socket ---- Debian PRoot / XFCE
+   |          |
+   |          +---- ICmdEntryInterface Binder / X connection FD
+   |                                      |
+   +--------------------------------------+
+                                          v
+                                Termux:X11 MainActivity
+                                          |
+                                          v
+                                      LorieView
+                                          |
+                                          v
+                                    Android Surface
 ```
 
-X11サーバーは管理UIとは別の `com.termux:x11` プロセスでForeground Serviceとして動作します。native側のクラッシュが管理UIを巻き込まない構成です。
+Xorg serverは管理UIとは別の`com.termux:x11`プロセスで動作します。service起動ごとにUUID世代とPID markerを照合し、古い世代が完全に終了してから次の世代を開始します。
 
-表示ActivityはServiceへ直接 `bindService()` し、`ICmdEntryInterface` BinderからX接続FDを受け取ります。TCP 7892や通常接続用broadcastには依存しません。
+表示Activityとnative EGL rendererは現在main processに含まれます。mutex、EGL初期化、JNI ABI、Binder/FD世代競合、Surface再作成、teardownに対するhardeningは実装済みですが、vendor EGL driver内部の永久hangやnative SIGSEGVを管理UIから完全隔離するには、viewerの別process化が今後も必要です。
+
+詳細は[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)を参照してください。
 
 ## 描画フォールバック
 
 ```text
-native :1 / 通常描画
+native X11 :1 / 通常描画
         |
-        | failure
+        | classified failure
         v
-native :1 / legacy描画
+native X11 :1 / legacy描画
         |
-        | failure
+        | failure after clean teardown
         v
-互換VNC :2 / noVNC
+TigerVNC :2 / noVNC viewer
 ```
 
-native Termux:X11は `DISPLAY=:1`、互換VNCは `DISPLAY=:2` / RFB 5902を使います。表示番号を分離し、fallback時にX11 socketやlockが競合しないようにしています。
+native X11は`DISPLAY=:1`、互換VNCは`DISPLAY=:2`、RFBは`127.0.0.1:5902`、noVNCは`127.0.0.1:6080`を使用します。X11 TCPは`-nolisten tcp`で無効化しています。
 
-互換表示は次のloopbackアドレスだけで待ち受けます。
+normal、legacy、VNCを同時起動せず、切り替え前に前のviewer、server、socket、lock、workerを停止します。
 
-```text
-RFB    127.0.0.1:5902
-noVNC  127.0.0.1:6080
+## 内蔵ターミナルとログ
+
+設定画面の「ターミナルを開く」から内蔵ターミナルを起動できます。設定画面の死んでいた「X11ディスプレイを開く」は削除済みで、実行中デスクトップを表示する機能はツール画面側に残しています。
+
+Debianへパッケージを追加する例:
+
+```bash
+sudo apt update
+sudo apt install <package>
 ```
 
-X11 TCPは `-nolisten tcp` で無効化します。
-
-## 停止処理の安全性
-
-native X11を停止するときは、最初に通常の `stopService()` を使います。
-
-停止できない場合も、`.X1-lock` のPIDに対応する `/proc/<pid>/cmdline` が **`com.termux:x11` と完全一致すると確認できた場合だけ** SIGTERM／SIGKILLを使います。識別できないプロセスは停止しません。
-
-## ログ
+主なログ:
 
 ```text
-Ubuntu / XFCE
+Debian / XFCE
 ~/.local/share/linux-desktop-for-android/logs/<環境ID>.log
 
 Native X11
@@ -212,14 +248,73 @@ Compatibility VNC
 ~/.local/share/linux-desktop-for-android/logs/vnc-server.log
 ```
 
-ADBでnative X11プロセスを確認する例:
+ADBから確認する例:
 
 ```bash
+adb shell pidof com.termux
 adb shell pidof com.termux:x11
 adb logcat -s LorieNative gles-renderer MainActivity
 ```
 
+## 現在の検証状況
+
+2026-08-22時点のv0.9.0候補に対する結果です。
+
+| 検証項目 | 結果 |
+| --- | --- |
+| host controller static/integration gates | PASS |
+| clean Gradle build | PASS、377 tasks |
+| unit tests | 155 / 155 PASS |
+| app / termux-runtime / embedded-x11 lint | PASS、error 0 |
+| `arm64-v8a` / `armeabi-v7a` / `x86` / `x86_64` build | PASS |
+| APK v2 signature | PASS、debug certificate |
+| APK zipalign 16 KB check | PASS |
+| arm64-v8a / x86_64 `.so` PT_LOAD alignment | 全対象`0x4000`以上 |
+| API 35 x86_64・4 KB AVDでDebian 12 clean install | PASS |
+| native X11、XFCE、Surface再作成、background復帰 | PASS |
+| Fcitx5 + Mozc日本語確定 | PASS |
+| Android共有ストレージ往復 | PASS |
+| Google Chromeの起動とHTTPSページ描画 | PASS |
+| native failureからVNC `:2`へのfallback | PASS |
+| stop後のX11/XFCE/PRoot/socket cleanup | PASS |
+| 物理ARM64端末 | **受け入れテスト中** |
+| ARM64 16 KB page端末 | **未検証** |
+| “Don't keep activities”とlow-memory process recreation | **未完了** |
+
+APKの16 KB alignment成功は、Debian userlandとXFCEを含むARM64 16 KB実機E2Eの成功を意味しません。この二つは別の受け入れ条件です。
+
+## v0.9.0プレリリース前の実機確認項目
+
+物理ARM64端末で少なくとも次を確認してから、GitHubプレリリースを作成します。
+
+1. 既存の必要なTermuxデータをバックアップする。
+2. LDFAをclean installし、Debian 12の構築を完了する。
+3. 「Debian XFCEを開く」からnative X11でデスクトップを表示する。
+4. タッチ、スクロール、ソフトウェアキーボード、可能なら物理マウス／キーボードを確認する。
+5. Fcitx5 + Mozcで日本語を入力・確定する。
+6. Google Chromeを起動し、HTTPSページを表示する。
+7. `/mnt/android`でAndroidとのファイル往復を確認する。
+8. 縦横回転、Homeからの復帰、画面消灯復帰を確認する。
+9. 停止、再起動、画面の再表示を複数回行う。
+10. 停止後にデスクトップやChromeのプロセスが残らないことを確認する。
+11. 16 KB page端末の場合は、Debian loginとXFCE表示まで別途確認する。
+
+問題が発生した場合は、端末機種、Androidバージョン、ABI、page size、操作手順、画面、LDFAログ、`adb logcat`を添えてください。
+
 ## ソースからビルド
+
+### 必要なtoolchain
+
+- JDK 17
+- Gradle 8.13
+- Android SDK platform 36
+- Android build-tools 35.0.0 / 36.0.0
+- Android NDK 29.0.14206865
+- CMake 3.22.1
+- Python 3
+- Git submodules
+
+### cloneと検証
 
 ```bash
 git clone --recurse-submodules https://github.com/hatake716/LDFA.git
@@ -229,7 +324,8 @@ bash ./scripts/check-host-script.sh
 bash ./scripts/test-host-controller.sh
 bash ./scripts/check-x11-controller.sh
 
-bash ./gradlew --no-daemon \
+bash ./gradlew --no-daemon --console=plain \
+  clean \
   testDebugUnitTest \
   :app:lintDebug \
   :termux-runtime:lintDebug \
@@ -243,32 +339,28 @@ bash ./gradlew --no-daemon \
 app/build/outputs/apk/debug/app-debug.apk
 ```
 
-`gradlew` はGradle Wrapper JARがない場合、Gradle公開のSHA-256と照合した上でGradle 8.13用JARを取得します。
+`gradlew`はGradle Wrapper JARがない場合、取得したJARをリポジトリ内のSHA-256 contractと照合します。CIはさらに、全ABIの`libXlorie.so`、必須JNI symbol、manifest、obsolete loader不在、16 KB zipalign、APK署名を検証します。
 
-## CIで検証する内容
+## ドキュメント
 
-- Ubuntu host controllerの構文・統合テスト
-- native X11 `:1` / 互換VNC `:2` の分離
-- Android-owned X11 lifecycle
-- `app_process` / loader APKが復活していないこと
-- `:x11` Foreground Serviceのmanifest設定
-- direct Binder接続
-- normal / legacy / VNC fallback
-- Surfaceとrendered-frame probe
-- Kotlin unit tests
-- Android lint
-- `libXlorie.so` を含むDebug APK生成
-
-CIだけではAndroid実機のSurface表示、タッチ、マウス、物理キーボード、日本語入力を完全には検証できません。実機検証が完了するまでは開発PRをDraftとして扱います。
+- [インストールと初回セットアップ](docs/INSTALLATION.md)
+- [機能と構成の概要](docs/OVERVIEW.md)
+- [X11／lifecycleアーキテクチャ](docs/ARCHITECTURE.md)
+- [テスト手順](docs/TESTING.md)
+- [セキュリティ上の注意](SECURITY.md)
+- [第三者ソフトウェアとライセンス](THIRD_PARTY_NOTICES.md)
+- [今回の起動修正と残課題の引き継ぎ](HANDOVER.md)
 
 ## ライセンス
 
-LDFAは **GNU GPL version 3 only** で提供され、明示・黙示を問わず無保証です。詳細は `LICENSE` と `THIRD_PARTY_NOTICES.md` を確認してください。
+LDFAは**GNU GPL version 3 only**（`GPL-3.0-only`）で提供され、明示・黙示を問わず無保証です。詳細は[LICENSE](LICENSE)と[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)を確認してください。
 
 主な上流プロジェクト:
 
 - Termux App
 - Termux:X11
-- Ubuntu / proot-distro
+- Debian / proot-distro
 - XFCE
+- Fcitx5 / Mozc
 - TigerVNC / noVNC
+- Google Chrome（実行時にGoogle公式パッケージを取得）

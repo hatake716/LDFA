@@ -126,19 +126,27 @@ cmd_prepare() {
     prepare_shared_tmp "$id"
 
     if ! packages_ready "$id"; then
-        say "[互換表示] TigerVNC / noVNCをUbuntuへ準備しています。"
+        say "[互換表示] TigerVNC / noVNCをDebianへ準備しています。"
         proot-distro login "$id" --shared-tmp -- /bin/bash -lc '
             set -Eeuo pipefail
             export DEBIAN_FRONTEND=noninteractive
             APT="apt-get -o Acquire::Retries=4 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Dpkg::Use-Pty=0"
 
-            if [[ -f /etc/apt/sources.list.d/ubuntu.sources ]]; then
-                sed -Ei "/^Components:/ { /(^|[[:space:]])universe([[:space:]]|$)/! s/$/ universe/; }" \
-                    /etc/apt/sources.list.d/ubuntu.sources
+            # Enable extra components (universe for Ubuntu, contrib for Debian)
+            comp=""
+            if [[ -f /etc/os-release ]]; then
+                grep -q "^ID=ubuntu" /etc/os-release && comp="universe"
+                grep -q "^ID=debian" /etc/os-release && comp="contrib"
             fi
-            if [[ -f /etc/apt/sources.list ]]; then
-                sed -Ei "/^[[:space:]]*deb[[:space:]]/ { /(^|[[:space:]])universe([[:space:]]|$)/! s/$/ universe/; }" \
-                    /etc/apt/sources.list
+            if [[ -n "$comp" ]]; then
+                for f in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
+                    [[ -f "$f" ]] || continue
+                    if [[ "$f" == *.sources ]]; then
+                        sed -Ei "/^Components:/ { /(^|[[:space:]])$comp([[:space:]]|$)/! s/$/ $comp/; }" "$f"
+                    else
+                        sed -Ei "/^[[:space:]]*deb[[:space:]]/ { /(^|[[:space:]])$comp([[:space:]]|$)/! s/$/ $comp/; }" "$f"
+                    fi
+                done
             fi
 
             dpkg --configure -a || true
@@ -157,7 +165,7 @@ cmd_prepare() {
         '
     fi
 
-    packages_ready "$id" || die "TigerVNC / noVNCの依存関係を準備できませんでした。Ubuntuのaptログを確認してください。"
+    packages_ready "$id" || die "TigerVNC / noVNCの依存関係を準備できませんでした。Debianのaptログを確認してください。"
     say "version=$VERSION"
     say "vnc_runtime_ready=1"
     say "display=:$DISPLAY_NUMBER"
@@ -187,12 +195,14 @@ export USER=desktop
 export LOGNAME=desktop
 export DISPLAY=:$DISPLAY_NUMBER
 export XDG_RUNTIME_DIR=/tmp/ldfa-runtime-desktop-vnc
-mkdir -p "$XDG_RUNTIME_DIR" /tmp/.X11-unix "$HOME/.vnc"
-chmod 700 "$XDG_RUNTIME_DIR" "$HOME/.vnc"
+mkdir -p "\$XDG_RUNTIME_DIR" /tmp/.X11-unix "\$HOME/.vnc"
+chmod 700 "\$XDG_RUNTIME_DIR" "\$HOME/.vnc"
 chmod 1777 /tmp/.X11-unix 2>/dev/null || true
 rm -f /tmp/.X${DISPLAY_NUMBER}-lock /tmp/.X11-unix/X${DISPLAY_NUMBER} /tmp/.ldfa-vnc-web-ready
-pkill -f "Xtigervnc :${DISPLAY_NUMBER}" >/dev/null 2>&1 || true
-pkill -f "websockify.*${WEB_PORT}" >/dev/null 2>&1 || true
+
+# cmd_start has already stopped the previous tmux generation before this shell is created.
+# Do not use pkill -f here: bash -lc carries the complete runner source in its own command line,
+# including the later Xtigervnc/websockify commands, so those patterns can terminate this runner.
 
 cleanup() {
     set +e
@@ -333,7 +343,7 @@ cmd_probe() {
         fi
         sleep 0.5
     done
-    die "Ubuntuから互換X11サーバーへ接続できませんでした。"
+    die "Debianから互換X11サーバーへ接続できませんでした。"
 }
 
 cmd_heartbeat() {

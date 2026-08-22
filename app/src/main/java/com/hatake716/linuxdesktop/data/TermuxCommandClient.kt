@@ -12,10 +12,12 @@ import android.os.IBinder
 import android.util.Base64
 import com.termux.app.EmbeddedTermuxRuntime
 import com.termux.app.RunCommandService
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withTimeout
+import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.atomic.AtomicInteger
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 
@@ -30,25 +32,24 @@ internal data class TermuxCommandResult(
 class TermuxCommandException(message: String, cause: Throwable? = null) : Exception(message, cause)
 
 internal object TermuxResultRegistry {
-    private val nextId = AtomicInteger(2000)
-    private val pending = ConcurrentHashMap<Int, CompletableDeferred<TermuxCommandResult>>()
+    private val pending = ConcurrentHashMap<String, CompletableDeferred<TermuxCommandResult>>()
 
-    fun register(): Pair<Int, CompletableDeferred<TermuxCommandResult>> {
-        val id = nextId.incrementAndGet()
+    fun register(): Pair<String, CompletableDeferred<TermuxCommandResult>> {
+        val id = UUID.randomUUID().toString()
         val deferred = CompletableDeferred<TermuxCommandResult>()
         pending[id] = deferred
         return id to deferred
     }
 
-    fun complete(id: Int, result: TermuxCommandResult) {
+    fun complete(id: String, result: TermuxCommandResult) {
         pending.remove(id)?.complete(result)
     }
 
-    fun fail(id: Int, throwable: Throwable) {
+    fun fail(id: String, throwable: Throwable) {
         pending.remove(id)?.completeExceptionally(throwable)
     }
 
-    fun remove(id: Int) {
+    fun remove(id: String) {
         pending.remove(id)?.cancel()
     }
 }
@@ -57,8 +58,8 @@ class TermuxResultService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val executionId = intent?.getIntExtra(EXTRA_EXECUTION_ID, -1) ?: -1
-        if (executionId >= 0) {
+        val executionId = intent?.getStringExtra(EXTRA_EXECUTION_ID)
+        if (executionId != null) {
             val resultBundle = intent?.getBundleExtra(RESULT_BUNDLE)
             if (resultBundle == null) {
                 TermuxResultRegistry.fail(
@@ -214,6 +215,7 @@ class TermuxCommandClient(private val context: Context) {
 
         val (executionId, deferred) = TermuxResultRegistry.register()
         val resultIntent = Intent(context, TermuxResultService::class.java).apply {
+            action = "$RESULT_ACTION_PREFIX.$executionId"
             putExtra(TermuxResultService.EXTRA_EXECUTION_ID, executionId)
         }
         val pendingIntentFlags = PendingIntent.FLAG_ONE_SHOT or
@@ -221,7 +223,7 @@ class TermuxCommandClient(private val context: Context) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0
         val resultPendingIntent = PendingIntent.getService(
             context,
-            executionId,
+            executionId.hashCode(),
             resultIntent,
             pendingIntentFlags,
         )
@@ -234,7 +236,7 @@ class TermuxCommandClient(private val context: Context) {
             putExtra(EXTRA_BACKGROUND, true)
             putExtra(EXTRA_RUNNER, "app-shell")
             putExtra(EXTRA_COMMAND_LABEL, label)
-            putExtra(EXTRA_COMMAND_DESCRIPTION, "アプリ内のUbuntu XFCE環境を管理します。")
+            putExtra(EXTRA_COMMAND_DESCRIPTION, "アプリ内のDebian XFCE環境を管理します。")
             putExtra(EXTRA_PENDING_INTENT, resultPendingIntent)
         }
 
@@ -251,6 +253,15 @@ class TermuxCommandClient(private val context: Context) {
 
         return try {
             withTimeout(timeout) { deferred.await() }
+        } catch (exception: TimeoutCancellationException) {
+            TermuxResultRegistry.remove(executionId)
+            throw TermuxCommandException(
+                "内蔵ターミナルから応答がありません。処理ログを確認してください。",
+                exception,
+            )
+        } catch (exception: CancellationException) {
+            TermuxResultRegistry.remove(executionId)
+            throw exception
         } catch (exception: Exception) {
             TermuxResultRegistry.remove(executionId)
             throw TermuxCommandException(
@@ -286,6 +297,7 @@ class TermuxCommandClient(private val context: Context) {
         private const val EXTRA_COMMAND_LABEL = "com.termux.RUN_COMMAND_COMMAND_LABEL"
         private const val EXTRA_COMMAND_DESCRIPTION = "com.termux.RUN_COMMAND_COMMAND_DESCRIPTION"
         private const val EXTRA_PENDING_INTENT = "com.termux.RUN_COMMAND_PENDING_INTENT"
+        private const val RESULT_ACTION_PREFIX = "com.hatake716.linuxdesktop.TERMUX_RESULT"
         private const val TERMUX_HOME = "/data/data/com.termux/files/home"
         private const val TERMUX_BASH = "/data/data/com.termux/files/usr/bin/bash"
         private const val INSTALLED_HOST_SCRIPT =
@@ -302,9 +314,14 @@ class TermuxCommandClient(private val context: Context) {
             NAME="${'$'}1"
             ENCODED="${'$'}2"
             shift 2
-            printf '%s' "${'$'}ENCODED" | base64 -d > "${'$'}BASE/bin/${'$'}NAME"
-            chmod 700 "${'$'}BASE/bin/${'$'}NAME"
-            exec "${'$'}BASE/bin/${'$'}NAME" "${'$'}@"
+            TARGET="${'$'}BASE/bin/${'$'}NAME"
+            TEMP="${'$'}BASE/bin/.${'$'}NAME.tmp.${'$'}${'$'}"
+            trap 'rm -f "${'$'}TEMP"' EXIT HUP INT TERM
+            printf '%s' "${'$'}ENCODED" | base64 -d > "${'$'}TEMP"
+            chmod 700 "${'$'}TEMP"
+            mv -f "${'$'}TEMP" "${'$'}TARGET"
+            trap - EXIT HUP INT TERM
+            exec "${'$'}TARGET" "${'$'}@"
         """.trimIndent()
     }
 }

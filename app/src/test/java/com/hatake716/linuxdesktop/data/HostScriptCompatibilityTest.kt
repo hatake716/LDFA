@@ -24,7 +24,7 @@ class HostScriptCompatibilityTest {
 
         val normalized = HostScriptCompatibility.normalize(legacy)
 
-        assertTrue(normalized.contains("VERSION=\"0.5.0\""))
+        assertTrue(normalized.contains("VERSION=\"0.9.0\""))
         assertFalse(normalized.contains("update-locale LANG=ja_JP.UTF-8 LANGUAGE=ja_JP:ja"))
         assertFalse(normalized.contains("dbus-uuidgen --ensure=/etc/machine-id"))
         assertTrue(normalized.contains("/etc/default/locale"))
@@ -36,10 +36,10 @@ class HostScriptCompatibilityTest {
 
     @Test
     fun upgradesEveryPreviousHostVersion() {
-        for (version in listOf("0.3.1", "0.3.2", "0.3.3", "0.3.4", "0.4.0")) {
+        for (version in listOf("0.3.1", "0.3.2", "0.3.3", "0.3.4", "0.4.0", "0.5.0")) {
             val previous = "VERSION=\"$version\"\ncmd_list() { :; }\n"
             val normalized = HostScriptCompatibility.normalize(previous)
-            assertTrue(normalized.contains("VERSION=\"0.5.0\""))
+            assertTrue(normalized.contains("VERSION=\"0.9.0\""))
             assertFalse(normalized.contains("VERSION=\"$version\""))
         }
     }
@@ -58,7 +58,7 @@ class HostScriptCompatibilityTest {
                     printf '[%s] warning: X11 socket was not visible; attempting session start\n' "${'$'}(date -Iseconds)"
                 fi
 
-                set_status "${'$'}id" running 100 "Ubuntu XFCEを実行中"
+                set_status "${'$'}id" running 100 "Debian 12 XFCEを実行中"
                 while [[ ! -f "${'$'}(stop_file "${'$'}id")" ]]; do
                     proot-distro login "${'$'}id" --shared-tmp --user desktop -- /usr/local/bin/ldfa-session
                     rc=${'$'}?
@@ -108,7 +108,8 @@ class HostScriptCompatibilityTest {
             worker_run() {
                 local id="${'$'}1" shared log rc=0 wait_count=0
                 validate_id "${'$'}id"
-                set_status "${'$'}id" running 100 "Ubuntu XFCEを実行中"
+                set_status "${'$'}id" running 100 "Debian 12 XFCEを実行中"
+                env -u LD_PRELOAD -u LD_LIBRARY_PATH /usr/local/bin/ldfa-session
             }
         """.trimIndent()
 
@@ -121,6 +122,11 @@ class HostScriptCompatibilityTest {
         assertTrue(normalized.contains("LDFA_DISPLAY_NUMBER=\"${'$'}display_number\""))
         assertTrue(normalized.contains("DISPLAY_NUMBER=\"${'$'}display_number\""))
         assertTrue(normalized.contains("X11_SOCKET=\"${'$'}PREFIX/tmp/.X11-unix/X${'$'}{DISPLAY_NUMBER}\""))
+        val workerHeader = normalized.substringAfter("worker_run() {").substringBefore("set_status")
+        assertTrue(workerHeader.contains("write_meta \"${'$'}id\" display \"${'$'}DISPLAY_NUMBER\""))
+        assertFalse(workerHeader.contains("write_meta \"${'$'}id\" display \"${'$'}DEFAULT_DISPLAY_NUMBER\""))
+        assertTrue(normalized.contains("DISPLAY=\":${'$'}DISPLAY_NUMBER\""))
+        assertTrue(normalized.contains("GTK_IM_MODULE=fcitx"))
         assertEquals(normalized, HostScriptCompatibility.normalize(normalized))
     }
 }

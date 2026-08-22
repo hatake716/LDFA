@@ -50,6 +50,7 @@ jobs:
           yes | "$SDKMANAGER" --licenses >/dev/null || true
           "$SDKMANAGER" \
             "platforms;android-36" \
+            "build-tools;35.0.0" \
             "build-tools;36.0.0" \
             "ndk;29.0.14206865" \
             "cmake;3.22.1"
@@ -67,7 +68,7 @@ jobs:
           grep -qx 'distributionSha256Sum=20f1b1176237254a6fc204d8434196fa11a4cfb387567519c61556e8710aed78' \
             gradle/wrapper/gradle-wrapper.properties
 
-      - name: Validate Ubuntu and display controllers
+      - name: Validate Debian and display controllers
         shell: bash
         run: |
           set -euo pipefail
@@ -80,6 +81,7 @@ jobs:
         run: |
           set -o pipefail
           bash ./gradlew --no-daemon \
+            clean \
             testDebugUnitTest \
             :app:lintDebug \
             :termux-runtime:lintDebug \
@@ -104,29 +106,73 @@ jobs:
             exit 1
           fi
 
+          VERIFY_DIR="$(mktemp -d)"
+          trap 'rm -rf "$VERIFY_DIR"' EXIT
+
+          # Materialize command output before matching.  With pipefail, streaming into
+          # grep -q can turn a successful match into SIGPIPE 141 (and can invert a
+          # negative assertion), so every grep below reads a regular file.
+          unzip -Z1 "$APK" > "$VERIFY_DIR/entries.txt"
+          unzip -p "$APK" 'classes*.dex' | strings > "$VERIFY_DIR/dex-strings.txt"
+          unzip -p "$APK" assets/ldfa-x11.sh > "$VERIFY_DIR/ldfa-x11.sh"
+          "$APKANALYZER" manifest print "$APK" > "$VERIFY_DIR/manifest.xml"
+          "$APKANALYZER" manifest application-id "$APK" > "$VERIFY_DIR/application-id.txt"
+          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$APK" > "$VERIFY_DIR/badging.txt"
+
           # Native X11 is an Android-owned :x11 foreground service using libXlorie.
-          unzip -l "$APK" | grep -q 'libXlorie.so'
-          unzip -l "$APK" | grep -q 'assets/ldfa-x11.sh'
-          unzip -p "$APK" 'classes*.dex' | strings | grep -q 'EmbeddedX11ServerService'
-          unzip -p "$APK" 'classes*.dex' | strings | grep -q 'EmbeddedX11ServiceController'
-          "$APKANALYZER" manifest print "$APK" | grep -q 'com.hatake716.linuxdesktop.x11.EmbeddedX11ServerService'
-          "$APKANALYZER" manifest print "$APK" | grep -q 'android:process=":x11"'
+          READELF="$ANDROID_HOME/ndk/29.0.14206865/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
+          test -x "$READELF"
+          REQUIRED_SYMBOLS=(
+            JNI_OnLoad
+            Java_com_termux_x11_CmdEntryPoint_start
+            Java_com_termux_x11_CmdEntryPoint_getXConnection
+            Java_com_termux_x11_CmdEntryPoint_connected
+            Java_com_termux_x11_EmbeddedX11ServerBridge_start
+            Java_com_termux_x11_EmbeddedX11ServerBridge_getXConnection
+            Java_com_termux_x11_EmbeddedX11ServerBridge_connected
+            Java_com_termux_x11_EmbeddedX11Display_nativeSuccessfulPresentSerial
+            Java_com_termux_x11_EmbeddedX11Display_nativeRendererReady
+          )
+          for ABI in arm64-v8a armeabi-v7a x86 x86_64; do
+            grep -Fqx "lib/$ABI/libXlorie.so" "$VERIFY_DIR/entries.txt"
+            PACKAGED_LIB="$VERIFY_DIR/libXlorie-$ABI.so"
+            STRIPPED_LIB="app/build/intermediates/stripped_native_libs/debug/stripDebugDebugSymbols/out/lib/$ABI/libXlorie.so"
+            SYMBOLS="$VERIFY_DIR/libXlorie-$ABI.symbols.txt"
+            unzip -p "$APK" "lib/$ABI/libXlorie.so" > "$PACKAGED_LIB"
+            test -s "$PACKAGED_LIB"
+            test -f "$STRIPPED_LIB"
+            test "$(sha256sum "$PACKAGED_LIB" | awk '{print $1}')" = \
+              "$(sha256sum "$STRIPPED_LIB" | awk '{print $1}')"
+            "$READELF" --dyn-syms --wide "$PACKAGED_LIB" | awk 'NF >= 8 { print $8 }' > "$SYMBOLS"
+            for SYMBOL in "${REQUIRED_SYMBOLS[@]}"; do
+              grep -Fxq "$SYMBOL" "$SYMBOLS"
+            done
+          done
+          grep -Fqx 'assets/ldfa-x11.sh' "$VERIFY_DIR/entries.txt"
+          grep -Fq 'EmbeddedX11ServerService' "$VERIFY_DIR/dex-strings.txt"
+          grep -Fq 'EmbeddedX11ServiceController' "$VERIFY_DIR/dex-strings.txt"
+          grep -Fq 'com.hatake716.linuxdesktop.x11.EmbeddedX11ServerService' "$VERIFY_DIR/manifest.xml"
+          grep -Fq 'android:process=":x11"' "$VERIFY_DIR/manifest.xml"
 
           # The obsolete app_process/loader and shell-owned Android lifecycle must not return.
-          ! unzip -l "$APK" | grep -q 'assets/x11-loader.apk'
-          ! unzip -p "$APK" assets/ldfa-x11.sh | grep -q '/system/bin/app_process'
-          ! unzip -p "$APK" assets/ldfa-x11.sh | grep -q 'com.termux.x11.Loader'
-          ! unzip -p "$APK" assets/ldfa-x11.sh | grep -q 'start-foreground-service'
-          ! unzip -p "$APK" assets/ldfa-x11.sh | grep -q 'am start'
+          ! grep -Fq 'assets/x11-loader.apk' "$VERIFY_DIR/entries.txt"
+          ! grep -Fq '/system/bin/app_process' "$VERIFY_DIR/ldfa-x11.sh"
+          ! grep -Fq 'com.termux.x11.Loader' "$VERIFY_DIR/ldfa-x11.sh"
+          ! grep -Fq 'start-foreground-service' "$VERIFY_DIR/ldfa-x11.sh"
+          ! grep -Fq 'am start' "$VERIFY_DIR/ldfa-x11.sh"
 
           # Compatibility display remains packaged as the last-resort recovery backend.
-          unzip -l "$APK" | grep -q 'assets/ldfa-vnc.sh'
-          unzip -p "$APK" 'classes*.dex' | strings | grep -q 'VncFallbackActivity'
+          grep -Fqx 'assets/ldfa-vnc.sh' "$VERIFY_DIR/entries.txt"
+          grep -Fq 'VncFallbackActivity' "$VERIFY_DIR/dex-strings.txt"
 
           # LDFA branding and Material 3 tools are included.
-          "$APKANALYZER" manifest application-id "$APK" | grep -qx 'com.termux'
-          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$APK" | grep -Fq "application-label:'LDFA'"
-          unzip -p "$APK" 'classes*.dex' | strings | grep -q 'ToolsScreen'
+          grep -Fxq 'com.termux' "$VERIFY_DIR/application-id.txt"
+          grep -Fq "versionCode='16' versionName='0.9.0'" "$VERIFY_DIR/badging.txt"
+          grep -Fq "application-label:'LDFA'" "$VERIFY_DIR/badging.txt"
+          grep -Fq 'ToolsScreen' "$VERIFY_DIR/dex-strings.txt"
+
+          "$ANDROID_HOME/build-tools/36.0.0/zipalign" -c -P 16 4 "$APK"
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify "$APK"
 
           cp "$APK" app/build/outputs/apk/debug/LDFA-v0.9.0-debug.apk
 

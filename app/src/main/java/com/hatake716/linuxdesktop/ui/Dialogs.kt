@@ -21,12 +21,12 @@ internal fun CreateContainerDialog(
     onDismiss: () -> Unit,
     onCreate: (String) -> Unit,
 ) {
-    var name by rememberSaveable { mutableStateOf("Ubuntu XFCE") }
+    var name by rememberSaveable { mutableStateOf("Debian XFCE") }
 
     AlertDialog(
         onDismissRequest = { if (!busy) onDismiss() },
         icon = { Icon(Icons.Rounded.Computer, contentDescription = null) },
-        title = { Text("新しいUbuntu XFCE") },
+        title = { Text("新しいDebian XFCE") },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 Surface(
@@ -45,9 +45,9 @@ internal fun CreateContainerDialog(
                         )
                         Spacer(Modifier.width(10.dp))
                         Column {
-                            Text("Ubuntu + XFCE", fontWeight = FontWeight.SemiBold)
+                            Text("Debian + XFCE", fontWeight = FontWeight.SemiBold)
                             Text(
-                                "日本語表示、Fcitx5/Mozc、sudoを自動設定します。",
+                                "日本語表示、Fcitx5/Mozc、Google Chrome、sudoを自動設定します。",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -79,7 +79,7 @@ internal fun CreateContainerDialog(
                     )
                     Spacer(Modifier.width(8.dp))
                     Text(
-                        "3〜5GB以上の空き容量を推奨します。Android共有ファイルはUbuntu環境の外側へ保存されます。",
+                        "3〜5GB以上の空き容量を推奨します。Android共有ファイルはDebian環境の外側へ保存されます。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -114,7 +114,7 @@ internal fun DeleteContainerDialog(
         title = { Text("${container.name}を削除") },
         text = {
             Column {
-                Text("Ubuntu環境内のアプリと設定は完全に削除され、元に戻せません。")
+                Text("Debian環境内のアプリと設定は完全に削除され、元に戻せません。")
                 Spacer(Modifier.height(12.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Checkbox(checked = deleteSharedFiles, onCheckedChange = { deleteSharedFiles = it })
@@ -171,7 +171,7 @@ internal fun LogsDialog(title: String, logs: String, onDismiss: () -> Unit) {
 }
 
 @Composable
-internal fun OperationOverlay() {
+internal fun OperationOverlay(desktopStarting: Boolean) {
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -180,12 +180,27 @@ internal fun OperationOverlay() {
     ) {
         Surface(shape = RoundedCornerShape(22.dp), shadowElevation = 10.dp) {
             Row(
-                modifier = Modifier.padding(horizontal = 22.dp, vertical = 18.dp),
+                modifier = Modifier
+                    .widthIn(max = 340.dp)
+                    .padding(horizontal = 22.dp, vertical = 18.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 3.dp)
                 Spacer(Modifier.width(14.dp))
-                Text("処理しています", fontWeight = FontWeight.Medium)
+                Column {
+                    Text(
+                        if (desktopStarting) "デスクトップを起動しています" else "処理しています",
+                        fontWeight = FontWeight.Medium,
+                    )
+                    if (desktopStarting) {
+                        Spacer(Modifier.height(5.dp))
+                        Text(
+                            "デスクトップが表示されるまで少し時間がかかります。初回や更新直後は数分かかる場合があります。そのままお待ちください。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
             }
         }
     }

@@ -8,4 +8,8 @@
 .externalNativeBuild/
 .cxx/
 app/build/
+/embedded-x11/build/
+/termux-runtime/build/
+__pycache__/
+*.py[cod]
 gradle/wrapper/gradle-wrapper.jar

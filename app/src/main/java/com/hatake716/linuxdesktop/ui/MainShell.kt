@@ -113,7 +113,6 @@ internal fun MainShell(
                 state = state,
                 modifier = Modifier.padding(padding),
                 onOpenTerminal = onOpenTerminal,
-                onOpenDisplay = onOpenDisplay,
                 onBatterySettings = onBatterySettings,
                 onAppSettings = onAppSettings,
                 onRepair = onRepair,

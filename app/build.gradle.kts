@@ -18,7 +18,7 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
-        buildConfigField("String", "HOST_SCRIPT_VERSION", "\"0.5.0\"")
+        buildConfigField("String", "HOST_SCRIPT_VERSION", "\"0.9.0\"")
     }
 
     buildTypes {

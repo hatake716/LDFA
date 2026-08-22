@@ -64,7 +64,7 @@ fun LinuxDesktopRoot(
         }
 
         if (state.operationInProgress) {
-            OperationOverlay()
+            OperationOverlay(desktopStarting = state.desktopStartInProgress)
         }
 
         SnackbarHost(

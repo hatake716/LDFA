@@ -1,9 +1,9 @@
 #!/data/data/com.termux/files/usr/bin/bash
-# Linux Desktop for Android X11 diagnostics / Ubuntu connectivity controller
+# Linux Desktop for Android X11 diagnostics / Debian connectivity controller
 # SPDX-License-Identifier: GPL-3.0-only
 set -Eeuo pipefail
 
-VERSION="0.8.0"
+VERSION="0.9.0"
 DISPLAY_NUMBER=1
 PACKAGE_ID="com.termux"
 BASE="${XDG_DATA_HOME:-$HOME/.local/share}/linux-desktop-for-android"
@@ -88,6 +88,7 @@ dump_failure() {
         printf '\n===== LDFA embedded X11 diagnostics =====\n'
         printf 'reason=%s\n' "$reason"
         printf 'time=%s\n' "$(date -Iseconds)"
+        printf 'kernel=%s\n' "$(uname -a)"
         printf 'android_sdk=%s\n' "$(getprop ro.build.version.sdk 2>/dev/null || true)"
         printf 'service_pid=%s\n' "$(service_pid || true)"
         printf 'service_alive=%s\n' "$(service_alive && echo 1 || echo 0)"
@@ -117,8 +118,8 @@ cmd_probe() {
     local id="${1:-}" attempt
     validate_id "$id"
     has proot-distro || die "proot-distroが見つかりません。"
-    service_alive || { dump_failure "X11 service missing before Ubuntu probe"; die "X11サービスが停止しています。"; }
-    socket_alive || { dump_failure "X11 socket missing before Ubuntu probe"; die "X11ソケットがありません。"; }
+    service_alive || { dump_failure "X11 service missing before Debian probe"; die "X11サービスが停止しています。"; }
+    socket_alive || { dump_failure "X11 socket missing before Debian probe"; die "X11ソケットがありません。"; }
 
     for attempt in $(seq 1 40); do
         if proot-distro login "$id" --shared-tmp --user desktop -- \
@@ -132,8 +133,24 @@ cmd_probe() {
         sleep 0.5
     done
 
-    dump_failure "Ubuntu xset probe failed"
-    die "Ubuntuから内蔵X11サービスへ接続できませんでした。"
+    dump_failure "Debian xset probe failed"
+    die "Debianから内蔵X11サービスへ接続できませんでした。"
+}
+
+# This must run only after Binder, Surface and EGL are ready. xrefresh maps a
+# temporary window and forces visible clients to repaint; unlike xsetroot it is
+# not hidden behind xfdesktop after XFCE starts.
+cmd_draw_probe() {
+    local id="${1:-}"
+    cmd_probe "$id" >/dev/null
+    if ! proot-distro login "$id" --shared-tmp --user desktop -- \
+        /usr/bin/env DISPLAY=":$DISPLAY_NUMBER" XAUTHORITY=/dev/null \
+        /usr/bin/xrefresh -solid '#303030' >/dev/null 2>&1; then
+        dump_failure "Debian draw probe failed"
+        die "DebianからX11描画プローブを実行できませんでした。"
+    fi
+    say "x11_draw_probe=1"
+    say "display=:$DISPLAY_NUMBER"
 }
 
 cmd_heartbeat() {
@@ -172,6 +189,7 @@ Usage: ldfa-x11 <command> [arguments]
 Commands:
   prepare
   probe <container-id>
+  draw-probe <container-id>
   heartbeat <container-id>
   status
   logs [lines]
@@ -187,6 +205,7 @@ main() {
     case "$command" in
         prepare) cmd_prepare "$@" ;;
         probe) cmd_probe "$@" ;;
+        draw-probe) cmd_draw_probe "$@" ;;
         heartbeat) cmd_heartbeat "$@" ;;
         status) cmd_status "$@" ;;
         logs) cmd_logs "$@" ;;

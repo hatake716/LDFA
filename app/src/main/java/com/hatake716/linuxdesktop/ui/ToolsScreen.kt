@@ -12,7 +12,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
@@ -130,7 +129,7 @@ internal fun ToolsScreen(
                     StatusRow(
                         icon = Icons.Rounded.Build,
                         title = "Linux実行基盤",
-                        description = "Ubuntu・PRoot・XFCEの管理機能",
+                        description = "Debian・PRoot・XFCEの管理機能",
                         ready = state.setup.hostReady,
                     )
                 }

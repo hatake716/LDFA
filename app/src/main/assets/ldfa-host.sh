@@ -1,19 +1,22 @@
 #!/data/data/com.termux/files/usr/bin/bash
-# Linux Desktop for Android unified host controller
+# Linux Desktop for Android unified host controller (Robust Debian Edition)
 # SPDX-License-Identifier: GPL-3.0-only
 set -Eeuo pipefail
 
-VERSION="0.3.1"
-UBUNTU_IMAGE="ubuntu:24.04"
+VERSION="0.9.0"
+LINUX_IMAGE="debian:12"
 BASE="${XDG_DATA_HOME:-$HOME/.local/share}/linux-desktop-for-android"
 BIN_DIR="$BASE/bin"
 META_ROOT="$BASE/containers"
 LOG_ROOT="$BASE/logs"
 RUN_ROOT="$BASE/run"
+CONTROLLER_LOCK_DIR="$RUN_ROOT/host-controller.lock"
+CONTROLLER_LOCK_PID="$CONTROLLER_LOCK_DIR/pid"
 SHARED_ROOT="$HOME/storage/shared/LinuxDesktop"
 SELF="$BIN_DIR/ldfa-host"
 BOOTSTRAP_LOG="$LOG_ROOT/bootstrap.log"
-DISPLAY_NUMBER=1
+DEFAULT_DISPLAY_NUMBER=1
+DISPLAY_NUMBER="${LDFA_DISPLAY_NUMBER:-$DEFAULT_DISPLAY_NUMBER}"
 X11_SOCKET="$PREFIX/tmp/.X11-unix/X${DISPLAY_NUMBER}"
 
 mkdir -p "$BIN_DIR" "$META_ROOT" "$LOG_ROOT" "$RUN_ROOT"
@@ -22,8 +25,42 @@ say() { printf '%s\n' "$*"; }
 die() { printf 'エラー: %s\n' "$*" >&2; exit 1; }
 has() { command -v "$1" >/dev/null 2>&1; }
 
+acquire_controller_lock() {
+    local attempt owner=""
+    for attempt in $(seq 1 300); do
+        if mkdir "$CONTROLLER_LOCK_DIR" 2>/dev/null; then
+            printf '%s\n' "$$" > "$CONTROLLER_LOCK_PID"
+            return 0
+        fi
+        owner="$(cat "$CONTROLLER_LOCK_PID" 2>/dev/null || true)"
+        if [[ "$owner" =~ ^[0-9]+$ ]] && ! kill -0 "$owner" 2>/dev/null; then
+            rm -rf "$CONTROLLER_LOCK_DIR"
+            continue
+        fi
+        # Allow the winning process time to write its pid before considering an
+        # ownerless directory stale.
+        if (( attempt > 20 )) && [[ -z "$owner" ]]; then
+            rmdir "$CONTROLLER_LOCK_DIR" 2>/dev/null || true
+        fi
+        sleep 0.1
+    done
+    die "別のLinuxデスクトップ制御処理が完了しません。"
+}
+
+release_controller_lock() {
+    local owner=""
+    owner="$(cat "$CONTROLLER_LOCK_PID" 2>/dev/null || true)"
+    if [[ "$owner" == "$$" ]]; then
+        rm -rf "$CONTROLLER_LOCK_DIR"
+    fi
+}
+
 validate_id() {
     [[ "${1:-}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] || die "不正なコンテナIDです。"
+}
+
+validate_display_number() {
+    [[ "${1:-}" =~ ^[1-9][0-9]?$ ]] || die "不正なDISPLAY番号です: ${1:-empty}"
 }
 
 meta_dir() { printf '%s/%s' "$META_ROOT" "$1"; }
@@ -48,6 +85,20 @@ read_meta() {
     local file
     file="$(meta_file "$1" "$2")"
     if [[ -f "$file" ]]; then cat "$file"; else printf '%s' "${3-}"; fi
+}
+
+detect_active_display() {
+    local id="$1" x1=0 x2=0 remembered
+    [[ -S "$PREFIX/tmp/.X11-unix/X1" ]] && x1=1
+    [[ -S "$PREFIX/tmp/.X11-unix/X2" ]] && x2=1
+    if [[ "$x1" == 1 && "$x2" == 1 ]]; then
+        die "DISPLAY :1 と :2 が同時に使用されています。表示サーバーを安全に切り替えられません。"
+    fi
+    if [[ "$x2" == 1 ]]; then printf '2'; return 0; fi
+    if [[ "$x1" == 1 ]]; then printf '1'; return 0; fi
+    remembered="$(read_meta "$id" display "$DEFAULT_DISPLAY_NUMBER")"
+    validate_display_number "$remembered"
+    printf '%s' "$remembered"
 }
 
 set_status() {
@@ -81,15 +132,12 @@ container_exists() {
 
 ensure_storage() {
     mkdir -p "$HOME/storage"
-
     if [[ ! -d "$HOME/storage/shared" ]]; then
         termux-setup-storage >/dev/null 2>&1 || true
     fi
-
     if [[ ! -e "$HOME/storage/shared" ]] && [[ -d /storage/emulated/0 ]]; then
         ln -s /storage/emulated/0 "$HOME/storage/shared" 2>/dev/null || true
     fi
-
     [[ -d "$HOME/storage/shared" ]] || \
         die "Android共有ストレージへアクセスできません。アプリのストレージ権限を確認してください。"
     mkdir -p "$SHARED_ROOT"
@@ -109,13 +157,110 @@ retry_command() {
     return "$rc"
 }
 
+google_chrome_ready() {
+    local id="$1"
+    proot-distro login "$id" -- /bin/bash -c \
+        'test -x /usr/bin/google-chrome-stable &&
+         test -x /usr/local/bin/google-chrome-ldfa &&
+         test -f /home/desktop/.local/share/applications/google-chrome.desktop' \
+        >/dev/null 2>&1
+}
+
+ensure_google_chrome() {
+    local id="$1"
+    validate_id "$id"
+    if google_chrome_ready "$id"; then
+        say "Google Chromeはインストール済みです。"
+        return 0
+    fi
+
+    # Google currently publishes stable Linux packages for both 64-bit Debian
+    # architectures used by LDFA. Download the matching official package at
+    # provisioning time so Chrome remains independently updateable and the APK
+    # does not vendor a stale browser binary.
+    unset PROOT_NO_SECCOMP
+    proot-distro login "$id" -- /bin/bash -s <<'CHROME_SETUP'
+set -Eeuo pipefail
+export DEBIAN_FRONTEND=noninteractive
+export LC_ALL=C.UTF-8
+APT=(apt-get -o Acquire::Retries=3 -o Dpkg::Use-Pty=0)
+
+architecture="$(dpkg --print-architecture)"
+case "$architecture" in
+    amd64|arm64) ;;
+    *)
+        printf 'Google Chromeの公式Linuxパッケージは%sへ対応していません。Debian XFCEの設定は継続します。\n' \
+            "$architecture" >&2
+        exit 0
+        ;;
+esac
+
+if [[ ! -x /usr/bin/google-chrome-stable ]]; then
+    printf '\n[%s] Google Chrome stable (%s)を準備しています\n' "$(date -Iseconds)" "$architecture"
+    "${APT[@]}" update
+    "${APT[@]}" install -y --no-install-recommends ca-certificates wget
+
+    chrome_package="$(mktemp /tmp/google-chrome-stable.XXXXXX.deb)"
+    cleanup_chrome_package() { rm -f "$chrome_package"; }
+    trap cleanup_chrome_package EXIT INT TERM
+    wget --https-only --tries=3 --timeout=30 --progress=dot:giga \
+        -O "$chrome_package" \
+        "https://dl.google.com/linux/direct/google-chrome-stable_current_${architecture}.deb"
+
+    [[ "$(dpkg-deb --field "$chrome_package" Package)" == google-chrome-stable ]]
+    [[ "$(dpkg-deb --field "$chrome_package" Architecture)" == "$architecture" ]]
+    "${APT[@]}" install -y --no-install-recommends "$chrome_package"
+    rm -f "$chrome_package"
+    trap - EXIT INT TERM
+fi
+
+install -d -m 0755 /usr/local/bin
+cat > /usr/local/bin/google-chrome-ldfa <<'CHROME_LAUNCHER'
+#!/bin/sh
+# Chromium's namespace/setuid sandbox cannot establish its normal privilege
+# boundary inside Android PRoot. Run Chrome as the unprivileged desktop user
+# with the PRoot-compatible flags required by this environment.
+exec /usr/bin/google-chrome-stable \
+    --no-sandbox \
+    --disable-dev-shm-usage \
+    --ozone-platform=x11 \
+    --password-store=basic \
+    "$@"
+CHROME_LAUNCHER
+chmod 0755 /usr/local/bin/google-chrome-ldfa
+ln -sfn google-chrome-ldfa /usr/local/bin/google-chrome
+ln -sfn google-chrome-ldfa /usr/local/bin/google-chrome-stable
+
+install -d -m 0755 -o desktop -g desktop /home/desktop/.local/share/applications
+cat > /home/desktop/.local/share/applications/google-chrome.desktop <<'CHROME_DESKTOP'
+[Desktop Entry]
+Version=1.0
+Name=Google Chrome
+Comment=Googleのウェブブラウザ
+Exec=/usr/local/bin/google-chrome-ldfa %U
+Terminal=false
+Type=Application
+Icon=google-chrome
+Categories=Network;WebBrowser;
+MimeType=text/html;text/xml;application/xhtml+xml;x-scheme-handler/http;x-scheme-handler/https;
+StartupNotify=true
+StartupWMClass=Google-chrome
+CHROME_DESKTOP
+chown desktop:desktop /home/desktop/.local/share/applications/google-chrome.desktop
+
+/usr/bin/google-chrome-stable --version
+apt-get clean
+rm -rf /var/lib/apt/lists/*
+CHROME_SETUP
+}
+
 stop_one() {
     local id="$1" session active=""
     validate_id "$id"
     [[ -d "$(meta_dir "$id")" ]] || return 0
 
     session="$(run_session "$id")"
-    set_status "$id" stopping 100 "Ubuntu XFCEを停止しています…"
+    set_status "$id" stopping 100 "Linuxデスクトップを停止しています…"
     touch "$(stop_file "$id")"
 
     if tmux_alive "$session"; then
@@ -132,7 +277,7 @@ stop_one() {
         rm -f "$(active_file)"
     fi
 
-    set_status "$id" ready 100 "Ubuntu XFCEを起動できます"
+    set_status "$id" ready 100 "Linuxデスクトップを起動できます"
 }
 
 stop_other_desktops() {
@@ -205,7 +350,7 @@ cmd_list() {
         state="$(read_meta "$id" state unknown)"
         progress="$(read_meta "$id" progress 0)"
         message="$(read_meta "$id" message '')"
-        display="$(read_meta "$id" display "$DISPLAY_NUMBER")"
+        display="$(read_meta "$id" display "$DEFAULT_DISPLAY_NUMBER")"
         created="$(read_meta "$id" created_at 0)"
         alive=0
         if tmux_alive "$(install_session "$id")" || tmux_alive "$(run_session "$id")"; then
@@ -228,7 +373,7 @@ start_install_worker() {
 }
 
 cmd_create() {
-    local id="${1:-}" name="${2:-Ubuntu XFCE}" dir
+    local id="${1:-}" name="${2:-Linux Desktop}" dir
     validate_id "$id"
     has tmux || die "Linux基盤が未準備です。先にセットアップを実行してください。"
     has proot-distro || die "proot-distroが未インストールです。"
@@ -240,12 +385,12 @@ cmd_create() {
     mkdir -p "$dir" "$(shared_path "$id")"
     write_meta "$id" name "$name"
     write_meta "$id" desktop "xfce"
-    write_meta "$id" distribution "ubuntu"
-    write_meta "$id" image "$UBUNTU_IMAGE"
-    write_meta "$id" display "$DISPLAY_NUMBER"
+    write_meta "$id" distribution "debian"
+    write_meta "$id" image "$LINUX_IMAGE"
+    write_meta "$id" display "$DEFAULT_DISPLAY_NUMBER"
     write_meta "$id" created_at "$(date +%s)"
     write_meta "$id" installed 0
-    set_status "$id" queued 1 "Ubuntu 24.04 XFCEのインストールを開始します…"
+    set_status "$id" queued 1 "Debian XFCEのインストールを開始します…"
     : > "$(log_file "$id")"
     start_install_worker "$id"
     say "$id"
@@ -263,17 +408,20 @@ worker_failed() {
     exit "$rc"
 }
 
-install_ubuntu_container() {
-    local id="$1" attempt
+install_container() {
+    local id="$1" attempt image="$LINUX_IMAGE" legacy_distro="${LINUX_IMAGE%%:*}" install_help
+    install_help="$(proot-distro install --help 2>&1 || true)"
     for attempt in 1 2 3; do
         printf '[%s] Installing %s as %s (attempt %s/3)\n' \
-            "$(date -Iseconds)" "$UBUNTU_IMAGE" "$id" "$attempt"
-        if proot-distro install --help 2>&1 | grep -q -- '--name'; then
-            if proot-distro install --name "$id" "$UBUNTU_IMAGE"; then
+            "$(date -Iseconds)" "$image" "$id" "$attempt"
+        # PRoot-Distro 5 accepts OCI image references directly. Keep the old
+        # plugin name only for the legacy CLI, where tags are not supported.
+        if [[ "$install_help" == *"--name"* ]]; then
+            if proot-distro install --name "$id" "$image"; then
                 return 0
             fi
         else
-            if proot-distro install ubuntu --override-alias "$id"; then
+            if proot-distro install "$legacy_distro" --override-alias "$id"; then
                 return 0
             fi
         fi
@@ -288,7 +436,7 @@ worker_install() {
     validate_id "$id"
     shared="$(shared_path "$id")"
     log="$(log_file "$id")"
-    expected_image="$UBUNTU_IMAGE"
+    expected_image="$LINUX_IMAGE"
     current_image="$(read_meta "$id" image '')"
     mkdir -p "$shared"
 
@@ -297,25 +445,26 @@ worker_install() {
     trap 'worker_failed "$id" 130 "$LINENO"' INT
     trap 'worker_failed "$id" 143 "$LINENO"' TERM
 
-    printf '\n[%s] Ubuntu XFCE installation worker started: %s\n' "$(date -Iseconds)" "$id"
+    printf '\n[%s] Linux Desktop installation worker started: %s\n' "$(date -Iseconds)" "$id"
     printf '[%s] target image: %s\n' "$(date -Iseconds)" "$expected_image"
     termux-wake-lock >/dev/null 2>&1 || true
 
-    if container_exists "$id" && [[ "$(read_meta "$id" installed 0)" != 1 ]] && [[ "$current_image" != "$expected_image" ]]; then
-        set_status "$id" installing 3 "以前の未完了Ubuntu環境を24.04として作り直しています…"
-        printf '[%s] Removing incomplete container created from unpinned image: %s\n' \
-            "$(date -Iseconds)" "${current_image:-unknown}"
+    if container_exists "$id" && [[ "$(read_meta "$id" installed 0)" != 1 ]]; then
+        set_status "$id" installing 3 "以前の未完了環境を削除しています…"
         proot-distro remove "$id" >/dev/null 2>&1 || true
     fi
 
     if ! container_exists "$id"; then
-        set_status "$id" installing 5 "Ubuntu 24.04 LTSをダウンロードしています…"
-        install_ubuntu_container "$id" || die "Ubuntu 24.04 LTSの取得に3回失敗しました。ネットワーク接続を確認してください。"
+        set_status "$id" installing 5 "Debianをダウンロードしています…"
+        install_container "$id" || die "Debianの取得に失敗しました。ネットワーク接続を確認してください。"
         write_meta "$id" image "$expected_image"
     fi
 
-    set_status "$id" installing 18 "Ubuntu 24.04のパッケージ一覧を更新しています…"
-    proot-distro login "$id" --shared-tmp --bind "$shared:/mnt/android" -- \
+    set_status "$id" installing 18 "パッケージ一覧を更新しています…"
+    # Keep PRoot's syscall-trace acceleration enabled in Android app processes.
+    # Forcing it off exposes guest syscalls to the app seccomp policy as ENOSYS.
+    unset PROOT_NO_SECCOMP
+    proot-distro login "$id" --bind "$shared:/mnt/android" -- \
         /bin/bash -s <<'CONTAINER_SETUP'
 set -Eeuo pipefail
 export DEBIAN_FRONTEND=noninteractive
@@ -324,20 +473,10 @@ APT=(apt-get -o Acquire::Retries=3 -o Dpkg::Use-Pty=0)
 
 step() { printf '\n[%s] %s\n' "$(date -Iseconds)" "$*"; }
 
-step "Ubuntuパッケージソースを確認しています"
-if [[ -f /etc/apt/sources.list.d/ubuntu.sources ]]; then
-    sed -i -E 's/^Components:.*/Components: main restricted universe multiverse/' \
-        /etc/apt/sources.list.d/ubuntu.sources
-fi
-if [[ -f /etc/apt/sources.list ]]; then
-    sed -i -E '/^[[:space:]]*deb /{ / universe([[:space:]]|$)/! s/[[:space:]]+main([[:space:]]|$)/ main universe /; }' \
-        /etc/apt/sources.list || true
-fi
+step "パッケージソースを確認しています"
+sed -i 's/deb\.debian\.org/ftp.jp.debian.org/g' /etc/apt/sources.list || true
 
-step "中断されたdpkg処理を修復しています"
-dpkg --configure -a || true
-
-step "Ubuntuパッケージ一覧を更新しています"
+step "パッケージ一覧を更新しています"
 "${APT[@]}" update
 
 step "基本パッケージをインストールしています"
@@ -349,6 +488,7 @@ step "基本パッケージをインストールしています"
     procps \
     psmisc \
     xdg-user-dirs \
+    x11-utils \
     x11-xserver-utils \
     mesa-utils \
     libgl1-mesa-dri
@@ -371,6 +511,10 @@ step "日本語フォントとFcitx5/Mozcをインストールしています"
     fcitx5-mozc \
     fcitx5-config-qt \
     im-config
+
+command -v xset >/dev/null
+command -v xrefresh >/dev/null
+command -v xprop >/dev/null
 
 step "APTキャッシュを整理しています"
 apt-get clean
@@ -402,14 +546,18 @@ printf 'desktop ALL=(ALL:ALL) NOPASSWD:ALL\n' > /etc/sudoers.d/90-linux-desktop
 chmod 0440 /etc/sudoers.d/90-linux-desktop
 visudo -cf /etc/sudoers.d/90-linux-desktop
 
-printf 'ubuntu\n' > /etc/ldfa-distribution
-printf '24.04\n' > /etc/ldfa-distribution-version
-printf 'xfce\n' > /etc/ldfa-desktop-environment
-
 install -d -m 0755 /usr/local/bin
 cat > /usr/local/bin/ldfa-session <<'SESSION'
 #!/bin/bash
+# Hardened LDFA Session Script
 set -Eeuo pipefail
+
+# 1. Clear environment from Android/Termux leakage
+unset LD_PRELOAD
+unset LD_LIBRARY_PATH
+unset SESSION_MANAGER
+
+# 2. Setup robust environment
 export LANG=ja_JP.UTF-8
 export LANGUAGE=ja_JP:ja
 export LC_ALL=ja_JP.UTF-8
@@ -423,31 +571,57 @@ export QT_QPA_PLATFORM=xcb
 export GTK_IM_MODULE=fcitx
 export QT_IM_MODULE=fcitx
 export XMODIFIERS=@im=fcitx
+export PULSE_SERVER=127.0.0.1
+
+# 3. Disable SHM to avoid futex/sync errors on older kernels
+export _MITSHM=0
+export QT_X11_NO_MITSHM=1
+export GDK_RENDERING=image
 export LIBGL_ALWAYS_SOFTWARE=1
 export GALLIUM_DRIVER=llvmpipe
-export NO_AT_BRIDGE=1
-export PULSE_SERVER="${PULSE_SERVER:-127.0.0.1}"
-export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp/runtime-desktop}"
 
+# 4. GLib/DBus stability
+export G_SLICE=always-malloc
+export MALLOC_CHECK_=0
+export NO_AT_BRIDGE=1
+
+export XDG_RUNTIME_DIR="/tmp/runtime-desktop"
 mkdir -p "$XDG_RUNTIME_DIR" "$HOME/Desktop" "$HOME/.cache" "$HOME/.config"
 chmod 700 "$XDG_RUNTIME_DIR"
-unset SESSION_MANAGER DBUS_SESSION_BUS_ADDRESS
-setxkbmap -layout jp >/dev/null 2>&1 || true
 
-exec dbus-run-session -- bash -lc '
-    fcitx5 -d --replace >"$HOME/.cache/fcitx5.log" 2>&1 || true
-    xfconf-query -c xsettings -p /Net/ThemeName -s Adwaita 2>/dev/null || true
-    xfconf-query -c keyboard-layout -p /Default/XkbLayout -s jp 2>/dev/null || true
-    if startxfce4; then
-        exit 0
-    fi
-    echo "startxfce4 failed; starting fallback XFCE components" >&2
-    xfwm4 --replace &
-    wm_pid=$!
+# 5. Start DBus manually (Hardened for PRoot)
+DBUS_PID_FILE="$XDG_RUNTIME_DIR/dbus.pid"
+DBUS_SOCK="$XDG_RUNTIME_DIR/bus"
+if [[ -f "$DBUS_PID_FILE" ]]; then
+    pid=$(cat "$DBUS_PID_FILE")
+    kill -0 "$pid" 2>/dev/null || rm -f "$DBUS_PID_FILE" "$DBUS_SOCK"
+fi
+
+if [[ ! -f "$DBUS_PID_FILE" ]]; then
+    dbus-daemon --session --fork --print-address 5 --print-pid 6 \
+        --address="unix:path=$DBUS_SOCK" \
+        5> "$XDG_RUNTIME_DIR/dbus_address" 6> "$DBUS_PID_FILE"
+    # Give DBus a moment to stabilize on some kernels
+    sleep 1
+fi
+export DBUS_SESSION_BUS_ADDRESS=$(cat "$XDG_RUNTIME_DIR/dbus_address")
+
+# 6. Apply UI tweaks
+setxkbmap -layout jp >/dev/null 2>&1 || true
+xfconf-query -c xsettings -p /Net/ThemeName -s Adwaita 2>/dev/null || true
+xfconf-query -c xfwm4 -p /general/use_compositing -s false 2>/dev/null || true
+xfconf-query -c xfwm4 -p /general/sync_to_vblank -s false 2>/dev/null || true
+
+# 7. Start session components with recovery
+fcitx5 -d --replace >/dev/null 2>&1 || true
+
+exec startxfce4 || {
+    echo "startxfce4 failed; starting minimal desktop" >&2
+    xfwm4 --compositor=off --replace &
     xfce4-panel &
     xfdesktop &
-    wait "$wm_pid"
-'
+    wait
+}
 SESSION
 chmod 0755 /usr/local/bin/ldfa-session
 
@@ -480,53 +654,89 @@ export XMODIFIERS=@im=fcitx
 PROFILE
 cp /home/desktop/.profile /home/desktop/.xprofile
 printf 'run_im fcitx5\n' > /home/desktop/.xinputrc
-mkdir -p /home/desktop/Desktop /home/desktop/.config
+install -d -m 0755 /home/desktop/Desktop /home/desktop/.config
 printf 'ja_JP\n' > /home/desktop/.config/user-dirs.locale
 ln -sfn /mnt/android '/home/desktop/Desktop/Android共有'
-chown -R desktop:desktop /home/desktop
 
-step "Ubuntu 24.04 XFCEの設定が完了しました"
+chown -R desktop:desktop /home/desktop
+step "Debian XFCEの設定が完了しました"
 CONTAINER_SETUP
 
-    set_status "$id" installing 92 "Ubuntu XFCEの初回設定を仕上げています…"
+    set_status "$id" installing 86 "Google Chromeをインストールしています…"
+    ensure_google_chrome "$id"
+    if google_chrome_ready "$id"; then
+        write_meta "$id" google_chrome 1
+    else
+        write_meta "$id" google_chrome 0
+    fi
+    set_status "$id" installing 92 "Linuxデスクトップの初回設定を仕上げています…"
     write_meta "$id" installed 1
     write_meta "$id" desktop "xfce"
-    write_meta "$id" distribution "ubuntu"
+    write_meta "$id" distribution "debian"
     write_meta "$id" image "$expected_image"
-    set_status "$id" ready 100 "Ubuntu 24.04 XFCEを起動できます"
-    printf '[%s] Ubuntu 24.04 XFCE installation completed\n' "$(date -Iseconds)"
+    set_status "$id" ready 100 "Debian XFCEを起動できます"
+    printf '[%s] Linux Desktop installation completed\n' "$(date -Iseconds)"
     termux-wake-unlock >/dev/null 2>&1 || true
 }
 
 start_run_worker() {
-    local id="$1" session
+    local id="$1" display_number="${2:-$(read_meta "$1" display "$DEFAULT_DISPLAY_NUMBER")}" session
     validate_id "$id"
+    validate_display_number "$display_number"
     session="$(run_session "$id")"
     tmux_alive "$session" && return 0
     rm -f "$(stop_file "$id")"
-    tmux new-session -d -s "$session" "$SELF" worker-run "$id"
+    tmux new-session -d -s "$session" \
+        env LDFA_DISPLAY_NUMBER="$display_number" "$SELF" worker-run "$id" "$display_number"
 }
 
 cmd_start() {
-    local id="${1:-}" state
+    local id="${1:-}" state display_number
     validate_id "$id"
-    [[ -d "$(meta_dir "$id")" ]] || die "Ubuntu環境が見つかりません。"
+    [[ -d "$(meta_dir "$id")" ]] || die "環境が見つかりません。"
     state="$(read_meta "$id" state unknown)"
     [[ "$(read_meta "$id" installed 0)" == 1 ]] || \
-        die "このUbuntu環境のインストールは完了していません。"
+        die "この環境のインストールは完了していません。"
     [[ "$state" == ready || "$state" == running || "$state" == starting ]] || \
         die "この環境はまだ起動できません（現在: $state）。"
 
+    display_number="$(detect_active_display "$id")"
+    write_meta "$id" display "$display_number"
     stop_other_desktops "$id"
     write_file "$(active_file)" "$id"
     set_status "$id" starting 100 "内蔵X11へ接続しています…"
-    start_run_worker "$id"
+    start_run_worker "$id" "$display_number"
     say "$id"
 }
 
-worker_run() {
-    local id="$1" shared log rc=0 wait_count=0
+cmd_ensure_apps() {
+    local id="${1:-}"
     validate_id "$id"
+    [[ -d "$(meta_dir "$id")" ]] || die "環境が見つかりません。"
+    container_exists "$id" || die "Debian環境が見つかりません。"
+    [[ "$(read_meta "$id" installed 0)" == 1 ]] || \
+        die "この環境のインストールは完了していません。"
+
+    if ! ensure_google_chrome "$id" >> "$(log_file "$id")" 2>&1; then
+        tail -n 60 "$(log_file "$id")" >&2 || true
+        die "Google ChromeをDebianへインストールできませんでした。ネットワーク接続とログを確認してください。"
+    fi
+    if google_chrome_ready "$id"; then
+        write_meta "$id" google_chrome 1
+        say "google_chrome=1"
+    else
+        write_meta "$id" google_chrome 0
+        say "google_chrome=unsupported"
+    fi
+}
+
+worker_run() {
+    local id="$1" display_number="${2:-${LDFA_DISPLAY_NUMBER:-$(read_meta "$1" display "$DEFAULT_DISPLAY_NUMBER")}}" shared log rc=0 wait_count=0 xset_attempt xset_ready=0
+    validate_id "$id"
+    validate_display_number "$display_number"
+    DISPLAY_NUMBER="$display_number"
+    X11_SOCKET="$PREFIX/tmp/.X11-unix/X${DISPLAY_NUMBER}"
+    write_meta "$id" display "$DISPLAY_NUMBER"
     shared="$(shared_path "$id")"
     log="$(log_file "$id")"
     mkdir -p "$shared"
@@ -536,7 +746,7 @@ worker_run() {
         local exit_code=$?
         set +e
         if [[ -f "$(stop_file "$id")" ]]; then
-            set_status "$id" ready 100 "Ubuntu XFCEを起動できます"
+            set_status "$id" ready 100 "Linuxデスクトップを起動できます"
         else
             set_status "$id" starting 100 "監視サービスによる自動復旧を待っています…"
         fi
@@ -547,46 +757,57 @@ worker_run() {
     }
     trap cleanup_run_worker EXIT
 
-    printf '\n[%s] Ubuntu XFCE worker started: %s\n' "$(date -Iseconds)" "$id"
+    printf '\n[%s] Linux Desktop worker started: %s display=:%s\n' "$(date -Iseconds)" "$id" "$DISPLAY_NUMBER"
     termux-wake-lock >/dev/null 2>&1 || true
     rm -f "$(stop_file "$id")"
     pulseaudio --start --exit-idle-time=-1 >/dev/null 2>&1 || true
 
-    while [[ ! -e "$X11_SOCKET" ]] && (( wait_count < 40 )); do
+    while [[ ! -S "$X11_SOCKET" ]] && (( wait_count < 40 )); do
         [[ -f "$(stop_file "$id")" ]] && exit 0
         set_status "$id" starting 100 "内蔵X11表示サーバーを待っています…"
         sleep 0.5
         wait_count=$((wait_count + 1))
     done
 
-    if [[ ! -e "$X11_SOCKET" ]]; then
-        printf '[%s] warning: X11 socket was not visible; attempting session start\n' "$(date -Iseconds)"
-    fi
+    [[ -S "$X11_SOCKET" ]] || die "X11 socket is unavailable; refusing to start XFCE"
+    for xset_attempt in $(seq 1 20); do
+        [[ -f "$(stop_file "$id")" ]] && exit 0
+        if proot-distro login "$id" --shared-tmp --user desktop -- \
+            /usr/bin/env DISPLAY=":$DISPLAY_NUMBER" XAUTHORITY=/dev/null \
+            /usr/bin/xset q >/dev/null 2>&1; then
+            xset_ready=1
+            break
+        fi
+        sleep 0.25
+    done
+    [[ "$xset_ready" == 1 ]] || die "display preflight xset failed; refusing to start XFCE"
 
-    set_status "$id" running 100 "Ubuntu XFCEを実行中"
+    set_status "$id" running 100 "Linuxデスクトップを実行中"
     while [[ ! -f "$(stop_file "$id")" ]]; do
-        printf '[%s] launching Ubuntu XFCE session\n' "$(date -Iseconds)"
+        printf '[%s] launching Linux session\n' "$(date -Iseconds)"
         set +e
+        # Clean environment before entering PRoot
+        unset LD_PRELOAD
+        unset LD_LIBRARY_PATH
+        unset PROOT_NO_SECCOMP
+
+        # Use env -u to ensure child processes within PRoot don't inherit Termux preloads
         proot-distro login "$id" --shared-tmp --bind "$shared:/mnt/android" --user desktop -- \
-            env DISPLAY=":$DISPLAY_NUMBER" \
-            LANG=ja_JP.UTF-8 \
-            LANGUAGE=ja_JP:ja \
-            GTK_IM_MODULE=fcitx \
-            QT_IM_MODULE=fcitx \
-            XMODIFIERS=@im=fcitx \
-            PULSE_SERVER=127.0.0.1 \
-            /usr/local/bin/ldfa-session
+            /usr/bin/env -u LD_PRELOAD -u LD_LIBRARY_PATH \
+                DISPLAY=":$DISPLAY_NUMBER" GTK_IM_MODULE=fcitx QT_IM_MODULE=fcitx \
+                XMODIFIERS=@im=fcitx PULSE_SERVER=127.0.0.1 \
+                /usr/local/bin/ldfa-session
         rc=$?
         set -e
 
         [[ -f "$(stop_file "$id")" ]] && break
-        printf '[%s] XFCE exited (%s); restarting in 4 seconds\n' "$(date -Iseconds)" "$rc"
-        set_status "$id" starting 100 "XFCEセッションを自動復旧しています…"
+        printf '[%s] session exited (%s); restarting in 4 seconds\n' "$(date -Iseconds)" "$rc"
+        set_status "$id" starting 100 "セッションを自動復旧しています…"
         sleep 4
-        set_status "$id" running 100 "Ubuntu XFCEを実行中"
+        set_status "$id" running 100 "Linuxデスクトップを実行中"
     done
 
-    set_status "$id" ready 100 "Ubuntu XFCEを起動できます"
+    set_status "$id" ready 100 "Linuxデスクトップを起動できます"
     termux-wake-unlock >/dev/null 2>&1 || true
     if [[ -f "$(active_file)" ]] && [[ "$(cat "$(active_file)" 2>/dev/null)" == "$id" ]]; then
         rm -f "$(active_file)"
@@ -602,7 +823,7 @@ cmd_stop() {
 cmd_delete() {
     local id="${1:-}" purge_shared="${2:-0}"
     validate_id "$id"
-    [[ -d "$(meta_dir "$id")" ]] || die "Ubuntu環境が見つかりません。"
+    [[ -d "$(meta_dir "$id")" ]] || die "環境が見つかりません。"
 
     stop_one "$id"
     if tmux_alive "$(install_session "$id")"; then
@@ -616,6 +837,27 @@ cmd_delete() {
     if [[ "$purge_shared" == 1 ]]; then
         rm -rf "$(shared_path "$id")"
     fi
+}
+
+cmd_probe() {
+    local id="${1:-}" display attempt
+    validate_id "$id"
+    display="$(read_meta "$id" display "$DEFAULT_DISPLAY_NUMBER")"
+    validate_display_number "$display"
+    tmux_alive "$(run_session "$id")" || die "Linuxデスクトップworkerが停止しています。"
+
+    for attempt in $(seq 1 80); do
+        if proot-distro login "$id" --shared-tmp --user desktop -- \
+            /usr/bin/env DISPLAY=":$display" XAUTHORITY=/dev/null \
+            /bin/bash -c '/usr/bin/xset q >/dev/null 2>&1 && /usr/bin/pgrep -x xfce4-session >/dev/null 2>&1 && /usr/bin/pgrep -x xfwm4 >/dev/null 2>&1 && /usr/bin/xprop -root _NET_SUPPORTING_WM_CHECK 2>/dev/null | /bin/grep -q "window id"'; then
+            say "desktop_ready=1"
+            say "display=:$display"
+            return 0
+        fi
+        tmux_alive "$(run_session "$id")" || break
+        sleep 0.25
+    done
+    die "XFCE window managerがDISPLAY=:$displayで起動完了しませんでした。"
 }
 
 cmd_logs() {
@@ -640,7 +882,7 @@ cmd_heartbeat() {
                 busy=1
                 if ! tmux_alive "$(install_session "$id")"; then
                     set_status "$id" queued "$(read_meta "$id" progress 1)" \
-                        "中断されたUbuntuインストールを再開しています…"
+                        "中断されたインストールを再開しています…"
                     start_install_worker "$id"
                 fi
                 ;;
@@ -648,7 +890,7 @@ cmd_heartbeat() {
                 busy=1
                 if [[ -z "$requested" || "$requested" == "$id" ]]; then
                     if ! tmux_alive "$(run_session "$id")"; then
-                        set_status "$id" starting 100 "中断されたXFCEを復旧しています…"
+                        set_status "$id" starting 100 "中断されたセッションを復旧しています…"
                         write_file "$(active_file)" "$id"
                         start_run_worker "$id"
                     fi
@@ -669,10 +911,10 @@ cmd_repair() {
         state="$(read_meta "$id" state unknown)"
         if [[ "$state" == failed ]] && ! tmux_alive "$(run_session "$id")"; then
             if [[ "$(read_meta "$id" installed 0)" == 1 ]]; then
-                set_status "$id" ready 100 "Ubuntu XFCEを起動できます"
+                set_status "$id" ready 100 "Linuxデスクトップを起動できます"
             else
                 set_status "$id" queued "$(read_meta "$id" progress 1)" \
-                    "失敗したUbuntu 24.04インストールを再開しています…"
+                    "失敗したインストールを再開しています…"
                 start_install_worker "$id"
             fi
         fi
@@ -684,30 +926,42 @@ cmd_repair() {
 usage() {
     cat <<USAGE
 Usage: ldfa-host <command> [arguments]
-Commands: doctor bootstrap list create start stop delete logs heartbeat repair
-create arguments: <id> <display-name>
+Commands: doctor bootstrap list create ensure-apps start stop delete probe logs heartbeat repair
 USAGE
 }
 
 main() {
-    local command="${1:-}"
+    local command="${1:-}" locked=0
     [[ -n "$command" ]] || { usage; exit 2; }
     shift || true
+    case "$command" in
+        bootstrap|create|ensure-apps|start|stop|delete|heartbeat|repair)
+            acquire_controller_lock
+            locked=1
+            trap release_controller_lock EXIT INT TERM
+            ;;
+    esac
     case "$command" in
         doctor) cmd_doctor "$@" ;;
         bootstrap) cmd_bootstrap "$@" ;;
         list) cmd_list "$@" ;;
         create) cmd_create "$@" ;;
         worker-install) worker_install "$@" ;;
+        ensure-apps) cmd_ensure_apps "$@" ;;
         start) cmd_start "$@" ;;
         worker-run) worker_run "$@" ;;
         stop) cmd_stop "$@" ;;
         delete) cmd_delete "$@" ;;
+        probe) cmd_probe "$@" ;;
         logs) cmd_logs "$@" ;;
         heartbeat) cmd_heartbeat "$@" ;;
         repair) cmd_repair "$@" ;;
         *) usage; die "未知の操作: $command" ;;
     esac
+    if [[ "$locked" == 1 ]]; then
+        release_controller_lock
+        trap - EXIT INT TERM
+    fi
 }
 
 main "$@"

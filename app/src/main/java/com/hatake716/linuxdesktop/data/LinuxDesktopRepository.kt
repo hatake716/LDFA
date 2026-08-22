@@ -1,16 +1,23 @@
 package com.hatake716.linuxdesktop.data
 
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.ServiceConnection
 import android.net.Uri
 import android.os.Build
+import android.os.IBinder
 import android.provider.Settings
+import android.util.Log
 import com.hatake716.linuxdesktop.BuildConfig
 import com.hatake716.linuxdesktop.display.VncFallbackActivity
 import com.hatake716.linuxdesktop.x11.EmbeddedX11ServiceController
 import com.termux.app.EmbeddedTermuxRuntime
+import com.termux.app.TermuxService
 import com.termux.x11.EmbeddedX11Display
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -39,6 +46,7 @@ class LinuxDesktopRepository(private val context: Context) {
     private val commandClient = TermuxCommandClient(context)
     private val preferences = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
     private val x11LifecycleMutex = GLOBAL_DISPLAY_LIFECYCLE_MUTEX
+    private var termuxServiceLease: ServiceConnection? = null
     private val hostScript: String by lazy {
         val bundled = context.assets.open("ldfa-host.sh").bufferedReader().use { it.readText() }
         HostScriptCompatibility.normalize(bundled)
@@ -113,19 +121,45 @@ class LinuxDesktopRepository(private val context: Context) {
 
     suspend fun startContainer(id: String): DesktopDisplayBackend = withContext(Dispatchers.IO) {
         x11LifecycleMutex.withLock {
+            holdTermuxServiceLifetime()
             clearActiveSession()
-            stopAllDisplayServers()
-            closeAllDisplaysAndWait()
-
-            val backend = selectAndStartDisplayBackend(id)
-
             try {
-                commandClient.runBundledHostScript(
-                    script = hostScript,
-                    action = "start",
-                    arguments = listOf(id),
-                    timeout = 45.seconds,
-                )
+                // A previous run can still own a worker with DISPLAY=:2. Stop it before selecting
+                // a new backend so start_run_worker cannot reuse the stale tmux generation.
+                try {
+                    commandClient.runInstalledHost(
+                        action = "stop",
+                        arguments = listOf(id),
+                        timeout = 30.seconds,
+                    )
+                } catch (exception: CancellationException) {
+                    throw exception
+                } catch (_: Throwable) {
+                }
+                closeAllDisplaysAndWait()
+                stopAllDisplayServers()
+                ensureBundledDesktopApps(id)
+
+                var backend = selectAndStartDisplayBackend(id)
+                startAndProbeHost(id)
+
+                if (backend == DesktopDisplayBackend.NATIVE_X11) {
+                    val desktopPresentationFailure = verifyNativeDesktopPresentation(id)
+                    if (desktopPresentationFailure != null) {
+                        // The blank-root probe succeeded but XFCE could not be presented. Tear down
+                        // this exact pipeline before starting :2; never leave both displays alive.
+                        commandClient.runInstalledHost(
+                            action = "stop",
+                            arguments = listOf(id),
+                            timeout = 30.seconds,
+                        )
+                        closeNativeDisplayAndWait()
+                        EmbeddedX11ServiceController.stopAndWait(context)
+                        startAndVerifyCompatibilityDisplay(id, desktopPresentationFailure)
+                        backend = DesktopDisplayBackend.COMPATIBILITY_VNC
+                        startAndProbeHost(id)
+                    }
+                }
 
                 if (backend == DesktopDisplayBackend.COMPATIBILITY_VNC) {
                     delay(COMPATIBILITY_VIEWER_OPEN_DELAY_MILLIS)
@@ -137,16 +171,30 @@ class LinuxDesktopRepository(private val context: Context) {
                 setActiveSession(id, backend)
                 backend
             } catch (throwable: Throwable) {
-                clearActiveSession()
-                runCatching {
-                    commandClient.runInstalledHost(
-                        action = "stop",
-                        arguments = listOf(id),
-                        timeout = 30.seconds,
-                    )
+                Log.e(LIFECYCLE_LOG_TAG, "startContainer failed id=$id", throwable)
+                withContext(NonCancellable) {
+                    clearActiveSession()
+                    runCatching {
+                        commandClient.runInstalledHost(
+                            action = "stop",
+                            arguments = listOf(id),
+                            timeout = 30.seconds,
+                        )
+                    }
+                    val displayCleanup = runCatching {
+                        closeAllDisplaysAndWait()
+                        stopAllDisplayServers()
+                    }
+                    if (displayCleanup.isSuccess) {
+                        releaseTermuxServiceLifetime()
+                    } else {
+                        Log.e(
+                            LIFECYCLE_LOG_TAG,
+                            "display cleanup failed; retaining Termux service lease id=$id",
+                            displayCleanup.exceptionOrNull(),
+                        )
+                    }
                 }
-                stopAllDisplayServers()
-                closeAllDisplaysAndWait()
                 throw throwable
             }
         }
@@ -154,15 +202,41 @@ class LinuxDesktopRepository(private val context: Context) {
 
     suspend fun stopContainer(id: String) = withContext(Dispatchers.IO) {
         x11LifecycleMutex.withLock {
-            commandClient.runBundledHostScript(
-                script = hostScript,
-                action = "stop",
-                arguments = listOf(id),
-                timeout = 45.seconds,
-            )
-            stopAllDisplayServers()
-            if (activeContainerId() == id) clearActiveSession()
-            closeAllDisplaysAndWait()
+            val ownsDisplay = activeContainerId() == id
+            var failure: Throwable? = null
+            var displayCleanupComplete = false
+            if (ownsDisplay) {
+                holdTermuxServiceLifetime()
+                clearActiveSession()
+                EmbeddedX11ServiceController.cancelPendingDisplayOpen()
+            }
+            try {
+                commandClient.runBundledHostScript(
+                    script = hostScript,
+                    action = "stop",
+                    arguments = listOf(id),
+                    timeout = 45.seconds,
+                )
+            } catch (throwable: Throwable) {
+                failure = throwable
+            } finally {
+                if (ownsDisplay) {
+                    withContext(NonCancellable) {
+                        try {
+                            // Viewer teardown is the acknowledgement barrier.  Do not stop its
+                            // server first, even when the host command was cancelled or failed.
+                            closeAllDisplaysAndWait()
+                            stopAllDisplayServers()
+                            displayCleanupComplete = true
+                        } catch (cleanupFailure: Throwable) {
+                            if (failure == null) failure = cleanupFailure
+                            else failure?.addSuppressed(cleanupFailure)
+                        }
+                        if (displayCleanupComplete) releaseTermuxServiceLifetime()
+                    }
+                }
+            }
+            failure?.let { throw it }
         }
     }
 
@@ -170,9 +244,11 @@ class LinuxDesktopRepository(private val context: Context) {
         x11LifecycleMutex.withLock {
             val wasActive = activeContainerId() == id
             if (wasActive) {
-                stopAllDisplayServers()
-                closeAllDisplaysAndWait()
+                holdTermuxServiceLifetime()
                 clearActiveSession()
+                closeAllDisplaysAndWait()
+                stopAllDisplayServers()
+                releaseTermuxServiceLifetime()
             }
             commandClient.runBundledHostScript(
                 script = hostScript,
@@ -208,7 +284,7 @@ class LinuxDesktopRepository(private val context: Context) {
         }.getOrDefault("")
 
         buildString {
-            append("===== Ubuntu / XFCE =====\n")
+            append("===== Debian / XFCE =====\n")
             append(desktopLogs.ifBlank { "ログはありません。" })
             append("\n\n===== Native Termux:X11 =====\n")
             append(x11Logs.ifBlank { "ネイティブX11ログはありません。" })
@@ -235,23 +311,28 @@ class LinuxDesktopRepository(private val context: Context) {
     }
 
     suspend fun heartbeat(id: String?): Boolean = withContext(Dispatchers.IO) {
-        val displayBusy = if (id == null) {
-            false
-        } else {
-            x11LifecycleMutex.withLock {
-                heartbeatDisplay(id)
+        x11LifecycleMutex.withLock {
+            val currentId = activeContainerId()
+            // A cancelled/stale KeepAlive job may resume after a newer container acquired this
+            // mutex.  It must never probe, clear or replace that newer session's display.
+            if (id != null && currentId != id) return@withLock currentId != null
+            val effectiveId = currentId ?: id
+            if (effectiveId != null) holdTermuxServiceLifetime()
+            val displayBusy = effectiveId?.let { heartbeatDisplay(it) } ?: false
+
+            if (effectiveId != null && activeContainerId() != effectiveId) {
+                return@withLock activeContainerId() != null
             }
+            val desktopBusy = runCatching {
+                commandClient.runInstalledHost(
+                    action = "heartbeat",
+                    arguments = listOfNotNull(effectiveId),
+                    timeout = 25.seconds,
+                ).lineSequence().any { it.trim() == "busy=1" }
+            }.getOrDefault(false)
+
+            displayBusy || desktopBusy
         }
-
-        val desktopBusy = runCatching {
-            commandClient.runInstalledHost(
-                action = "heartbeat",
-                arguments = listOfNotNull(id),
-                timeout = 25.seconds,
-            ).lineSequence().any { it.trim() == "busy=1" }
-        }.getOrDefault(false)
-
-        displayBusy || desktopBusy
     }
 
     fun activeContainerId(): String? = preferences.getString(KEY_ACTIVE_CONTAINER, null)
@@ -292,8 +373,9 @@ class LinuxDesktopRepository(private val context: Context) {
             startAndVerifyNativeX11(id)
             DesktopDisplayBackend.NATIVE_X11
         } catch (nativeFailure: Throwable) {
-            EmbeddedX11ServiceController.stopAndWait(context)
+            if (nativeFailure is CancellationException) throw nativeFailure
             closeNativeDisplayAndWait()
+            EmbeddedX11ServiceController.stopAndWait(context)
             startAndVerifyCompatibilityDisplay(id, nativeFailure)
             DesktopDisplayBackend.COMPATIBILITY_VNC
         }
@@ -302,53 +384,93 @@ class LinuxDesktopRepository(private val context: Context) {
     private suspend fun startAndVerifyNativeX11(id: String) {
         var lastFailure: Throwable? = null
         var lastLogs = ""
+        val attemptedModes = mutableListOf<String>()
 
         for ((index, mode) in NATIVE_X11_RENDER_MODES.withIndex()) {
+            var legacyRetryUseful = true
+            attemptedModes += mode
             try {
                 runCatching { commandClient.runInstalledVnc("stop", timeout = 15.seconds) }
                 EmbeddedX11ServiceController.restartAndWait(
                     context = context,
                     legacyDrawing = mode == NATIVE_X11_MODE_LEGACY,
                 )
+                Log.i(LIFECYCLE_LOG_TAG, "native service ready mode=$mode")
                 commandClient.runBundledX11Script(
                     script = x11Script,
                     action = "probe",
                     arguments = listOf(id),
                     timeout = 35.seconds,
                 )
+                Log.i(LIFECYCLE_LOG_TAG, "native Debian probe ready mode=$mode")
 
-                withContext(Dispatchers.Main.immediate) {
+                val viewerBound = withContext(Dispatchers.Main.immediate) {
                     EmbeddedX11ServiceController.openDisplay(context)
                 }
-                if (!waitForNativeDisplayConnection()) {
+                Log.i(LIFECYCLE_LOG_TAG, "native viewer bind requested mode=$mode bound=$viewerBound")
+                if (!viewerBound) {
                     throw TermuxCommandException(
-                        "ネイティブX11表示は$mode描画でXサーバーへ接続しましたが、Android Surfaceへ実フレームを描画できませんでした。",
+                        "内蔵X11 viewerを現在のサービス世代へbindできませんでした。",
+                    )
+                }
+                if (!waitForNativeViewerReady()) {
+                    // Legacy drawing changes Xorg buffer transport; it cannot repair a missing
+                    // Activity, Surface, Binder or EGL context. Avoid opening the same broken
+                    // viewer a second time before falling back to the isolated VNC path.
+                    legacyRetryUseful = false
+                    val launchFailure =
+                        EmbeddedX11ServiceController.consumeDisplayOpenFailure()
+                    throw TermuxCommandException(
+                        buildString {
+                            append("ネイティブX11表示は${mode}描画でXサーバーへ接続しましたが、Android表示Activity、SurfaceまたはEGL rendererを準備できませんでした。")
+                            launchFailure?.message?.takeIf { it.isNotBlank() }?.let {
+                                append("\n\nViewer launch:\n")
+                                append(it.takeLast(2000))
+                            }
+                        },
+                        launchFailure,
                     )
                 }
 
-                delay(NATIVE_X11_POST_ACTIVITY_STABILIZE_MILLIS)
+                val presentationBaseline = withContext(Dispatchers.Main.immediate) {
+                    EmbeddedX11Display.successfulPresentSerial()
+                }
                 commandClient.runInstalledX11(
-                    action = "probe",
+                    action = "draw-probe",
                     arguments = listOf(id),
                     timeout = 35.seconds,
                 )
+                if (!waitForNativePresentationAfter(presentationBaseline)) {
+                    throw TermuxCommandException(
+                        "ネイティブX11は接続済みですが、描画プローブをAndroid Surfaceへpresentできませんでした。",
+                    )
+                }
+                delay(NATIVE_X11_POST_ACTIVITY_STABILIZE_MILLIS)
                 return
             } catch (throwable: Throwable) {
+                if (throwable is CancellationException) throw throwable
+                Log.w(LIFECYCLE_LOG_TAG, "native mode failed mode=$mode", throwable)
                 lastFailure = throwable
                 lastLogs = runCatching {
                     commandClient.runInstalledX11("logs", listOf("350"), 15.seconds)
                 }.getOrDefault("")
-                EmbeddedX11ServiceController.stopAndWait(context)
                 closeNativeDisplayAndWait()
-                if (index + 1 < NATIVE_X11_RENDER_MODES.size) {
+                EmbeddedX11ServiceController.stopAndWait(context)
+                if (legacyRetryUseful && index + 1 < NATIVE_X11_RENDER_MODES.size) {
                     delay(NATIVE_X11_RETRY_DELAY_MILLIS)
+                } else {
+                    break
                 }
             }
         }
 
         throw TermuxCommandException(
             buildString {
-                append("ネイティブTermux:X11を通常描画・legacy描画の両方で安定起動できませんでした。互換表示へ切り替えます。")
+                if (attemptedModes.size == NATIVE_X11_RENDER_MODES.size) {
+                    append("ネイティブTermux:X11を通常描画・legacy描画の両方で安定起動できませんでした。互換表示へ切り替えます。")
+                } else {
+                    append("Android表示Activity、SurfaceまたはEGL rendererを準備できませんでした。legacy描画では改善しないため互換表示へ切り替えます。")
+                }
                 lastFailure?.message?.takeIf { it.isNotBlank() }?.let {
                     append("\n\nNative failure:\n")
                     append(it.takeLast(3000))
@@ -364,6 +486,7 @@ class LinuxDesktopRepository(private val context: Context) {
 
     private suspend fun startAndVerifyCompatibilityDisplay(id: String, nativeFailure: Throwable?) {
         try {
+            Log.i(LIFECYCLE_LOG_TAG, "compatibility display start id=$id")
             commandClient.runBundledVncScript(
                 script = vncScript,
                 action = "start",
@@ -376,7 +499,10 @@ class LinuxDesktopRepository(private val context: Context) {
                 arguments = listOf(id),
                 timeout = 45.seconds,
             )
+            Log.i(LIFECYCLE_LOG_TAG, "compatibility display probe ready id=$id")
         } catch (compatibilityFailure: Throwable) {
+            if (compatibilityFailure is CancellationException) throw compatibilityFailure
+            Log.e(LIFECYCLE_LOG_TAG, "compatibility display failed id=$id", compatibilityFailure)
             val compatibilityLogs = runCatching {
                 commandClient.runInstalledVnc("logs", listOf("350"), 20.seconds)
             }.getOrDefault("")
@@ -421,16 +547,30 @@ class LinuxDesktopRepository(private val context: Context) {
                 timeout = 60.seconds,
             )
             true
-        } catch (_: Throwable) {
-            runCatching { commandClient.runInstalledVnc("stop", timeout = 20.seconds) }
+        } catch (heartbeatFailure: Throwable) {
+            if (heartbeatFailure is CancellationException) throw heartbeatFailure
             try {
+                // A dead VNC server also terminates its X clients. Recreate the worker after the
+                // replacement :2 endpoint is ready instead of reusing a stale tmux session.
+                commandClient.runInstalledHost(
+                    action = "stop",
+                    arguments = listOf(id),
+                    timeout = 30.seconds,
+                )
+                closeCompatibilityDisplayAndWait()
+                commandClient.runInstalledVnc("stop", timeout = 20.seconds)
                 startAndVerifyCompatibilityDisplay(id, null)
+                startAndProbeHost(id)
                 setActiveSession(id, DesktopDisplayBackend.COMPATIBILITY_VNC)
                 withContext(Dispatchers.Main.immediate) {
                     VncFallbackActivity.open(context)
                 }
                 true
-            } catch (_: Throwable) {
+            } catch (recoveryFailure: Throwable) {
+                if (recoveryFailure is CancellationException) {
+                    cleanupCancelledRecovery(id)
+                    throw recoveryFailure
+                }
                 handleUnrecoverableDisplayFailure(id)
                 false
             }
@@ -443,42 +583,108 @@ class LinuxDesktopRepository(private val context: Context) {
         }
 
         return try {
-            if (!EmbeddedX11ServiceController.isSocketReady()) {
-                throw TermuxCommandException("X11サービスのUnix socketがありません。")
+            if (!EmbeddedX11ServiceController.isServiceReady(context)) {
+                throw TermuxCommandException("X11サービスのprocess世代、PIDまたはUnix socketが一致しません。")
             }
             commandClient.runInstalledX11(
                 action = "probe",
                 arguments = listOf(id),
                 timeout = 35.seconds,
             )
-            if (viewerWasOpen && !waitForNativeDisplayConnection(NATIVE_X11_HEARTBEAT_VIEWER_ATTEMPTS)) {
-                throw TermuxCommandException("X11サーバーは応答していますがAndroid表示Surfaceへの描画が停止しています。")
+            var verifyViewerPresentation = viewerWasOpen && isNativeViewerForeground()
+            if (
+                verifyViewerPresentation &&
+                !waitForNativeViewerReady(NATIVE_X11_HEARTBEAT_VIEWER_ATTEMPTS)
+            ) {
+                // Home/Recents can detach the Surface while this bounded wait is running. That is
+                // not a renderer failure; the Xorg/XFCE probes above remain authoritative while
+                // the viewer is backgrounded.
+                verifyViewerPresentation = isNativeViewerForeground()
+                if (verifyViewerPresentation) {
+                    throw TermuxCommandException(
+                        "X11サーバーは応答していますがAndroid表示SurfaceまたはEGL rendererが利用できません。",
+                    )
+                }
+            }
+            verifyViewerPresentation = verifyViewerPresentation && isNativeViewerForeground()
+            if (verifyViewerPresentation) {
+                val baseline = withContext(Dispatchers.Main.immediate) {
+                    EmbeddedX11Display.successfulPresentSerial()
+                }
+                commandClient.runInstalledX11(
+                    action = "draw-probe",
+                    arguments = listOf(id),
+                    timeout = 35.seconds,
+                )
+                if (
+                    !waitForNativePresentationAfter(baseline) &&
+                    isNativeViewerForeground()
+                ) {
+                    throw TermuxCommandException(
+                        "X11サービスは応答していますがAndroid Surfaceへのpresentが停止しています。",
+                    )
+                }
+            } else if (viewerWasOpen) {
+                Log.i(
+                    LIFECYCLE_LOG_TAG,
+                    "native heartbeat kept Xorg/XFCE alive while viewer is backgrounded",
+                )
             }
             true
         } catch (nativeFailure: Throwable) {
-            EmbeddedX11ServiceController.stopAndWait(context)
-            closeNativeDisplayAndWait()
-
-            val nativeRecovered = runCatching {
+            if (nativeFailure is CancellationException) throw nativeFailure
+            val nativeRecoveryFailure = try {
+                // Once Xorg dies its XFCE clients cannot be assumed to survive. Stop the old worker
+                // before replacing the display and start it again only after the endpoint is ready.
+                commandClient.runInstalledHost(
+                    action = "stop",
+                    arguments = listOf(id),
+                    timeout = 30.seconds,
+                )
+                closeNativeDisplayAndWait()
+                EmbeddedX11ServiceController.stopAndWait(context)
                 if (viewerWasOpen) {
                     startAndVerifyNativeX11(id)
                 } else {
                     restartNativeServerWithoutViewer(id)
                 }
-            }.isSuccess
+                startAndProbeHost(id)
+                if (viewerWasOpen) {
+                    verifyNativeDesktopPresentation(id)?.let { throw it }
+                }
+                null
+            } catch (recoveryFailure: Throwable) {
+                if (recoveryFailure is CancellationException) {
+                    cleanupCancelledRecovery(id)
+                    throw recoveryFailure
+                }
+                recoveryFailure
+            }
 
-            if (nativeRecovered) {
+            if (nativeRecoveryFailure == null) {
                 setActiveSession(id, DesktopDisplayBackend.NATIVE_X11)
                 true
             } else {
                 try {
-                    startAndVerifyCompatibilityDisplay(id, nativeFailure)
+                    commandClient.runInstalledHost(
+                        action = "stop",
+                        arguments = listOf(id),
+                        timeout = 30.seconds,
+                    )
+                    closeNativeDisplayAndWait()
+                    EmbeddedX11ServiceController.stopAndWait(context)
+                    startAndVerifyCompatibilityDisplay(id, nativeRecoveryFailure)
+                    startAndProbeHost(id)
                     setActiveSession(id, DesktopDisplayBackend.COMPATIBILITY_VNC)
                     withContext(Dispatchers.Main.immediate) {
                         VncFallbackActivity.open(context)
                     }
                     true
-                } catch (_: Throwable) {
+                } catch (fallbackFailure: Throwable) {
+                    if (fallbackFailure is CancellationException) {
+                        cleanupCancelledRecovery(id)
+                        throw fallbackFailure
+                    }
                     handleUnrecoverableDisplayFailure(id)
                     false
                 }
@@ -501,6 +707,7 @@ class LinuxDesktopRepository(private val context: Context) {
                 )
                 return
             } catch (throwable: Throwable) {
+                if (throwable is CancellationException) throw throwable
                 lastFailure = throwable
                 EmbeddedX11ServiceController.stopAndWait(context)
                 if (index + 1 < NATIVE_X11_RENDER_MODES.size) {
@@ -515,6 +722,7 @@ class LinuxDesktopRepository(private val context: Context) {
     }
 
     private suspend fun handleUnrecoverableDisplayFailure(id: String) {
+        if (activeContainerId() != id) return
         clearActiveSession()
         runCatching {
             commandClient.runInstalledHost(
@@ -523,8 +731,78 @@ class LinuxDesktopRepository(private val context: Context) {
                 timeout = 30.seconds,
             )
         }
-        stopAllDisplayServers()
-        closeAllDisplaysAndWait()
+        val displayCleanup = runCatching {
+            closeAllDisplaysAndWait()
+            stopAllDisplayServers()
+        }
+        if (displayCleanup.isSuccess) releaseTermuxServiceLifetime()
+        else Log.e(
+            LIFECYCLE_LOG_TAG,
+            "unrecoverable display cleanup failed; retaining Termux service lease id=$id",
+            displayCleanup.exceptionOrNull(),
+        )
+    }
+
+    private suspend fun cleanupCancelledRecovery(id: String) {
+        withContext(NonCancellable) {
+            handleUnrecoverableDisplayFailure(id)
+        }
+    }
+
+    private suspend fun startAndProbeHost(id: String) {
+        Log.i(LIFECYCLE_LOG_TAG, "host worker start id=$id")
+        commandClient.runBundledHostScript(
+            script = hostScript,
+            action = "start",
+            arguments = listOf(id),
+            timeout = 45.seconds,
+        )
+        Log.i(LIFECYCLE_LOG_TAG, "host worker command accepted id=$id")
+        commandClient.runInstalledHost(
+            action = "probe",
+            arguments = listOf(id),
+            timeout = 45.seconds,
+        )
+        Log.i(LIFECYCLE_LOG_TAG, "host desktop probe ready id=$id")
+    }
+
+    private suspend fun ensureBundledDesktopApps(id: String) {
+        Log.i(LIFECYCLE_LOG_TAG, "bundled desktop app provisioning start id=$id")
+        commandClient.runBundledHostScript(
+            script = hostScript,
+            action = "ensure-apps",
+            arguments = listOf(id),
+            timeout = 10.minutes,
+        )
+        Log.i(LIFECYCLE_LOG_TAG, "bundled desktop app provisioning ready id=$id")
+    }
+
+    /** Returns null only when the ready XFCE/WM desktop reaches the Android Surface. */
+    private suspend fun verifyNativeDesktopPresentation(id: String): Throwable? {
+        return try {
+            if (!waitForNativeViewerReady(NATIVE_X11_HEARTBEAT_VIEWER_ATTEMPTS)) {
+                throw TermuxCommandException(
+                    "XFCE起動後にAndroid SurfaceまたはEGL rendererが失われました。",
+                )
+            }
+            val baseline = withContext(Dispatchers.Main.immediate) {
+                EmbeddedX11Display.successfulPresentSerial()
+            }
+            commandClient.runInstalledX11(
+                action = "draw-probe",
+                arguments = listOf(id),
+                timeout = 35.seconds,
+            )
+            if (!waitForNativePresentationAfter(baseline)) {
+                throw TermuxCommandException(
+                    "XFCEとウィンドウマネージャーは起動しましたが、デスクトップをAndroid Surfaceへpresentできませんでした。",
+                )
+            }
+            null
+        } catch (throwable: Throwable) {
+            if (throwable is CancellationException) throw throwable
+            throwable
+        }
     }
 
     private suspend fun stopAllDisplayServers() {
@@ -532,44 +810,132 @@ class LinuxDesktopRepository(private val context: Context) {
         runCatching { commandClient.runInstalledVnc("stop", timeout = 20.seconds) }
     }
 
-    private suspend fun waitForNativeDisplayConnection(
+    /**
+     * Upstream TermuxService clears the complete Termux TMPDIR from onDestroy(). Native X11 and
+     * the compatibility server deliberately publish their sockets there so PRoot --shared-tmp can
+     * expose them to Debian. Keep the service bound for the complete desktop lifetime; releasing
+     * it is safe only after every viewer and display server has acknowledged shutdown.
+     */
+    private suspend fun holdTermuxServiceLifetime() = withContext(Dispatchers.Main.immediate) {
+        if (termuxServiceLease != null) return@withContext
+
+        val connection = object : ServiceConnection {
+            override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
+                Log.i(LIFECYCLE_LOG_TAG, "Termux service lifetime lease connected")
+            }
+
+            override fun onServiceDisconnected(name: ComponentName?) {
+                Log.w(LIFECYCLE_LOG_TAG, "Termux service lifetime lease disconnected")
+            }
+        }
+        if (!context.bindService(
+                Intent(context, TermuxService::class.java),
+                connection,
+                Context.BIND_AUTO_CREATE,
+            )
+        ) {
+            throw TermuxCommandException(
+                "内蔵ターミナルの一時領域をLinuxデスクトップの実行中に保持できませんでした。",
+            )
+        }
+        termuxServiceLease = connection
+        Log.i(LIFECYCLE_LOG_TAG, "Termux service lifetime lease acquired")
+    }
+
+    private suspend fun releaseTermuxServiceLifetime() = withContext(Dispatchers.Main.immediate) {
+        val connection = termuxServiceLease ?: return@withContext
+        termuxServiceLease = null
+        runCatching { context.unbindService(connection) }
+            .onFailure { Log.w(LIFECYCLE_LOG_TAG, "Termux service lease release failed", it) }
+        Log.i(LIFECYCLE_LOG_TAG, "Termux service lifetime lease released")
+    }
+
+    private suspend fun waitForNativeViewerReady(
         attempts: Int = NATIVE_X11_ACTIVITY_WAIT_ATTEMPTS,
     ): Boolean {
         repeat(attempts) {
-            val connected = withContext(Dispatchers.Main.immediate) {
-                EmbeddedX11Display.isConnected()
+            if (EmbeddedX11ServiceController.hasDisplayOpenFailure()) return false
+            val ready = withContext(Dispatchers.Main.immediate) {
+                EmbeddedX11Display.isViewerReady()
             }
-            if (connected) return true
+            if (ready) return true
+            delay(NATIVE_X11_ACTIVITY_POLL_MILLIS)
+        }
+        return false
+    }
+
+    private suspend fun isNativeViewerForeground(): Boolean =
+        withContext(Dispatchers.Main.immediate) {
+            EmbeddedX11Display.isViewerForeground()
+        }
+
+    private suspend fun waitForNativePresentationAfter(baseline: Long): Boolean {
+        repeat(NATIVE_X11_ACTIVITY_WAIT_ATTEMPTS) {
+            val status = withContext(Dispatchers.Main.immediate) {
+                EmbeddedX11Display.isViewerReady() to
+                    EmbeddedX11Display.successfulPresentSerial()
+            }
+            if (!status.first || status.second < baseline) return false
+            if (status.second > baseline) return true
             delay(NATIVE_X11_ACTIVITY_POLL_MILLIS)
         }
         return false
     }
 
     private suspend fun closeNativeDisplayAndWait() {
+        EmbeddedX11ServiceController.cancelPendingDisplayOpen()
         withContext(Dispatchers.Main.immediate) {
             EmbeddedX11Display.close(context)
         }
+        var stableClosedPolls = 0
         repeat(NATIVE_X11_ACTIVITY_CLOSE_ATTEMPTS) {
             val open = withContext(Dispatchers.Main.immediate) {
                 EmbeddedX11Display.isOpen()
             }
-            if (!open) return
+            if (open) {
+                stableClosedPolls = 0
+                withContext(Dispatchers.Main.immediate) {
+                    EmbeddedX11Display.close(context)
+                }
+            } else {
+                stableClosedPolls++
+                if (stableClosedPolls >= DISPLAY_CLOSE_STABLE_POLLS) return
+            }
             delay(NATIVE_X11_ACTIVITY_CLOSE_POLL_MILLIS)
         }
+        throw TermuxCommandException(
+            "内蔵X11 viewerのrendererを安全に終了できませんでした。表示サーバーの切り替えを中止します。",
+        )
     }
 
     private suspend fun closeAllDisplaysAndWait() {
         closeNativeDisplayAndWait()
+        closeCompatibilityDisplayAndWait()
+    }
+
+    private suspend fun closeCompatibilityDisplayAndWait() {
         withContext(Dispatchers.Main.immediate) {
             VncFallbackActivity.close()
         }
+        var stableClosedPolls = 0
         repeat(COMPATIBILITY_ACTIVITY_CLOSE_ATTEMPTS) {
             val open = withContext(Dispatchers.Main.immediate) {
                 VncFallbackActivity.isOpen()
             }
-            if (!open) return
+            if (open) {
+                stableClosedPolls = 0
+                withContext(Dispatchers.Main.immediate) {
+                    VncFallbackActivity.close()
+                }
+            } else {
+                stableClosedPolls++
+                if (stableClosedPolls >= DISPLAY_CLOSE_STABLE_POLLS) return
+            }
             delay(COMPATIBILITY_ACTIVITY_CLOSE_POLL_MILLIS)
         }
+        throw TermuxCommandException(
+            "互換VNC viewerを安全に終了できませんでした。表示サーバーの切り替えを中止します。",
+        )
     }
 
     private fun setActiveSession(id: String, backend: DesktopDisplayBackend) {
@@ -591,7 +957,7 @@ class LinuxDesktopRepository(private val context: Context) {
             .replace(Regex("[^a-z0-9]+"), "-")
             .trim('-')
             .take(16)
-            .ifBlank { "ubuntu-xfce" }
+            .ifBlank { "debian-xfce" }
         val suffix = UUID.randomUUID().toString().replace("-", "").take(8)
         return "$asciiPrefix-$suffix"
     }
@@ -608,15 +974,17 @@ class LinuxDesktopRepository(private val context: Context) {
         private val NATIVE_X11_RENDER_MODES = listOf(NATIVE_X11_MODE_NORMAL, NATIVE_X11_MODE_LEGACY)
         private const val NATIVE_X11_ACTIVITY_POLL_MILLIS = 250L
         private const val NATIVE_X11_ACTIVITY_WAIT_ATTEMPTS = 60
-        private const val NATIVE_X11_HEARTBEAT_VIEWER_ATTEMPTS = 12
+        private const val NATIVE_X11_HEARTBEAT_VIEWER_ATTEMPTS = 20
         private const val NATIVE_X11_ACTIVITY_CLOSE_POLL_MILLIS = 100L
-        private const val NATIVE_X11_ACTIVITY_CLOSE_ATTEMPTS = 30
-        private const val NATIVE_X11_POST_ACTIVITY_STABILIZE_MILLIS = 750L
-        private const val NATIVE_X11_RETRY_DELAY_MILLIS = 800L
+        private const val NATIVE_X11_ACTIVITY_CLOSE_ATTEMPTS = 50
+        private const val NATIVE_X11_POST_ACTIVITY_STABILIZE_MILLIS = 1000L
+        private const val NATIVE_X11_RETRY_DELAY_MILLIS = 1000L
 
         private const val COMPATIBILITY_START_TIMEOUT_MINUTES = 12
         private const val COMPATIBILITY_VIEWER_OPEN_DELAY_MILLIS = 700L
         private const val COMPATIBILITY_ACTIVITY_CLOSE_POLL_MILLIS = 100L
-        private const val COMPATIBILITY_ACTIVITY_CLOSE_ATTEMPTS = 20
+        private const val COMPATIBILITY_ACTIVITY_CLOSE_ATTEMPTS = 50
+        private const val DISPLAY_CLOSE_STABLE_POLLS = 10
+        private const val LIFECYCLE_LOG_TAG = "LDFA-Lifecycle"
     }
 }

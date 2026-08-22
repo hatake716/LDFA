@@ -10,6 +10,7 @@ import com.hatake716.linuxdesktop.data.DoctorReport
 import com.hatake716.linuxdesktop.data.LinuxDesktopRepository
 import com.hatake716.linuxdesktop.data.RuntimeStatus
 import com.hatake716.linuxdesktop.service.DesktopKeepAliveService
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -38,6 +39,7 @@ data class MainUiState(
     val refreshing: Boolean = false,
     val bootstrapping: Boolean = false,
     val operationInProgress: Boolean = false,
+    val desktopStartInProgress: Boolean = false,
     val setup: SetupSnapshot = SetupSnapshot(),
     val containers: List<ContainerInfo> = emptyList(),
     val liveInstallationLogs: Map<String, String> = emptyMap(),
@@ -49,8 +51,9 @@ data class MainUiState(
 )
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
+    private val linuxDesktopApplication = application as LinuxDesktopApplication
     private val repository: LinuxDesktopRepository =
-        (application as LinuxDesktopApplication).repository
+        linuxDesktopApplication.repository
     private val _state = MutableStateFlow(MainUiState())
     val state: StateFlow<MainUiState> = _state.asStateFlow()
     private var pollingJob: Job? = null
@@ -109,7 +112,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         it.copy(
                             bootstrapping = false,
                             setup = it.setup.copy(doctor = doctor),
-                            noticeMessage = "Ubuntu XFCEの実行基盤を準備しました。",
+                            noticeMessage = "Debian XFCEの実行基盤を準備しました。",
                         )
                     }
                     refreshContainers()
@@ -121,7 +124,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun createContainer(name: String) {
         if (name.isBlank()) return
         viewModelScope.launch {
-            _state.update { it.copy(operationInProgress = true, errorMessage = null) }
+            _state.update {
+                it.copy(
+                    operationInProgress = true,
+                    desktopStartInProgress = false,
+                    errorMessage = null,
+                )
+            }
             runCatching {
                 repository.createContainer(name)
                 DesktopKeepAliveService.start(getApplication())
@@ -129,7 +138,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _state.update {
                     it.copy(
                         operationInProgress = false,
-                        noticeMessage = "「${name.trim()}」のUbuntu XFCEインストールを開始しました。",
+                        desktopStartInProgress = false,
+                        noticeMessage = "「${name.trim()}」のDebian XFCEインストールを開始しました。",
                     )
                 }
                 refreshContainers()
@@ -139,30 +149,46 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun startContainer(container: ContainerInfo) {
         viewModelScope.launch {
-            _state.update { it.copy(operationInProgress = true, errorMessage = null) }
-            runCatching {
-                repository.startContainer(container.id)
-                DesktopKeepAliveService.start(getApplication(), container.id)
-            }.onSuccess {
+            _state.update {
+                it.copy(
+                    operationInProgress = true,
+                    desktopStartInProgress = true,
+                    errorMessage = null,
+                )
+            }
+            try {
+                linuxDesktopApplication.startDesktopSession(container.id).await()
                 _state.update {
                     it.copy(
                         operationInProgress = false,
+                        desktopStartInProgress = false,
                         noticeMessage = "${container.name}を起動しました。",
                     )
                 }
                 refreshContainers()
-            }.onFailure(::showError)
+            } catch (exception: CancellationException) {
+                throw exception
+            } catch (exception: Throwable) {
+                showError(exception)
+            }
         }
     }
 
     fun stopContainer(container: ContainerInfo) {
         viewModelScope.launch {
-            _state.update { it.copy(operationInProgress = true, errorMessage = null) }
+            _state.update {
+                it.copy(
+                    operationInProgress = true,
+                    desktopStartInProgress = false,
+                    errorMessage = null,
+                )
+            }
             runCatching { repository.stopContainer(container.id) }
                 .onSuccess {
                     _state.update {
                         it.copy(
                             operationInProgress = false,
+                            desktopStartInProgress = false,
                             noticeMessage = "${container.name}を停止しました。",
                         )
                     }
@@ -174,12 +200,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun deleteContainer(container: ContainerInfo, deleteSharedFiles: Boolean) {
         viewModelScope.launch {
-            _state.update { it.copy(operationInProgress = true, errorMessage = null) }
+            _state.update {
+                it.copy(
+                    operationInProgress = true,
+                    desktopStartInProgress = false,
+                    errorMessage = null,
+                )
+            }
             runCatching { repository.deleteContainer(container.id, deleteSharedFiles) }
                 .onSuccess {
                     _state.update {
                         it.copy(
                             operationInProgress = false,
+                            desktopStartInProgress = false,
                             noticeMessage = "${container.name}を削除しました。",
                         )
                     }
@@ -191,13 +224,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun repairInterruptedWork() {
         viewModelScope.launch {
-            _state.update { it.copy(operationInProgress = true, errorMessage = null) }
+            _state.update {
+                it.copy(
+                    operationInProgress = true,
+                    desktopStartInProgress = false,
+                    errorMessage = null,
+                )
+            }
             runCatching { repository.repairInterruptedWork() }
                 .onSuccess {
                     _state.update {
                         it.copy(
                             operationInProgress = false,
-                            noticeMessage = "中断されたUbuntu処理を再開しました。",
+                            desktopStartInProgress = false,
+                            noticeMessage = "中断されたDebian処理を再開しました。",
                         )
                     }
                     refreshContainers()
@@ -208,12 +248,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun loadLogs(container: ContainerInfo) {
         viewModelScope.launch {
-            _state.update { it.copy(operationInProgress = true, errorMessage = null) }
+            _state.update {
+                it.copy(
+                    operationInProgress = true,
+                    desktopStartInProgress = false,
+                    errorMessage = null,
+                )
+            }
             runCatching { repository.logs(container.id) }
                 .onSuccess { logs ->
                     _state.update {
                         it.copy(
                             operationInProgress = false,
+                            desktopStartInProgress = false,
                             logsTitle = "${container.name} のログ",
                             logsContent = logs.ifBlank { "ログはまだありません。" },
                         )
@@ -316,6 +363,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 refreshing = false,
                 bootstrapping = false,
                 operationInProgress = false,
+                desktopStartInProgress = false,
                 errorMessage = throwable.message ?: "処理に失敗しました。",
             )
         }

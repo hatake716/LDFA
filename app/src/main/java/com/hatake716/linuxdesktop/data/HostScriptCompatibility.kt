@@ -1,7 +1,7 @@
 package com.hatake716.linuxdesktop.data
 
 /**
- * Applies runtime compatibility and safety fixes to the bundled Ubuntu/XFCE host controller before
+ * Applies runtime compatibility and safety fixes to the bundled Debian/XFCE host controller before
  * it is installed into the embedded Termux environment.
  *
  * X11 server lifecycle itself is owned by Android. This layer keeps old host-controller assets and
@@ -9,7 +9,7 @@ package com.hatake716.linuxdesktop.data
  * X11 probe, and the worker follows the display number selected by the active backend.
  */
 internal object HostScriptCompatibility {
-    private const val CURRENT_VERSION = "VERSION=\"0.5.0\""
+    private const val CURRENT_VERSION = "VERSION=\"0.9.0\""
     private const val LEGACY_LOCALE_COMMAND =
         "update-locale LANG=ja_JP.UTF-8 LANGUAGE=ja_JP:ja"
     private const val LEGACY_MACHINE_ID_COMMAND =
@@ -22,8 +22,10 @@ internal object HostScriptCompatibility {
         "DISPLAY_NUMBER=1\nX11_SOCKET=\"${'$'}PREFIX/tmp/.X11-unix/X${'$'}{DISPLAY_NUMBER}\""
     private const val DYNAMIC_DISPLAY_GLOBALS =
         "DEFAULT_DISPLAY_NUMBER=1\nDISPLAY_NUMBER=\"${'$'}{LDFA_DISPLAY_NUMBER:-${'$'}DEFAULT_DISPLAY_NUMBER}\"\nX11_SOCKET=\"${'$'}PREFIX/tmp/.X11-unix/X${'$'}{DISPLAY_NUMBER}\""
-    private const val RUNNING_STATUS_LINE =
-        "    set_status \"${'$'}id\" running 100 \"Ubuntu XFCEを実行中\""
+    private val runningStatusLines = listOf(
+        "    set_status \"${'$'}id\" running 100 \"Linuxデスクトップを実行中\"",
+        "    set_status \"${'$'}id\" running 100 \"Debian 12 XFCEを実行中\"",
+    )
     private const val STOP_BREAK =
         "[[ -f \"${'$'}(stop_file \"${'$'}id\")\" ]] && break"
 
@@ -35,7 +37,7 @@ internal object HostScriptCompatibility {
 
     fun normalize(script: String): String {
         var normalized = script
-        for (version in listOf("0.3.1", "0.3.2", "0.3.3", "0.3.4", "0.4.0")) {
+        for (version in listOf("0.3.1", "0.3.2", "0.3.3", "0.3.4", "0.4.0", "0.5.0")) {
             normalized = normalized.replaceFirst("VERSION=\"$version\"", CURRENT_VERSION)
         }
 
@@ -94,22 +96,20 @@ internal object HostScriptCompatibility {
         }
 
         normalized = normalized.replace(
-            "display=\"${'$'}(read_meta \"${'$'}id\" display \"${'$'}DISPLAY_NUMBER\")\"",
-            "display=\"${'$'}(read_meta \"${'$'}id\" display \"${'$'}DEFAULT_DISPLAY_NUMBER\")\"",
-        )
-        normalized = normalized.replace(
-            "write_meta \"${'$'}id\" display \"${'$'}DISPLAY_NUMBER\"",
-            "write_meta \"${'$'}id\" display \"${'$'}DEFAULT_DISPLAY_NUMBER\"",
+            "env -u LD_PRELOAD -u LD_LIBRARY_PATH /usr/local/bin/ldfa-session",
+            "env -u LD_PRELOAD -u LD_LIBRARY_PATH DISPLAY=\":${'$'}DISPLAY_NUMBER\" " +
+                "GTK_IM_MODULE=fcitx QT_IM_MODULE=fcitx XMODIFIERS=@im=fcitx " +
+                "/usr/local/bin/ldfa-session",
         )
 
-        if (
-            normalized.contains(RUNNING_STATUS_LINE) &&
-            !normalized.contains("display preflight xset failed")
-        ) {
-            normalized = normalized.replaceFirst(
-                RUNNING_STATUS_LINE,
-                "$strictDisplayPreflight\n\n$RUNNING_STATUS_LINE",
-            )
+        if (!normalized.contains("display preflight xset failed")) {
+            val runningStatusLine = runningStatusLines.firstOrNull(normalized::contains)
+            if (runningStatusLine != null) {
+                normalized = normalized.replaceFirst(
+                    runningStatusLine,
+                    "$strictDisplayPreflight\n\n$runningStatusLine",
+                )
+            }
         }
 
         if (

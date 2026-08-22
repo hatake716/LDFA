@@ -18,10 +18,10 @@ android {
 
     sourceSets {
         main {
-            // v0.6+: use the pinned upstream Termux:X11 Java implementation unchanged.
-            // In particular CmdEntryPoint's native loader is no longer rewritten locally.
+            // Generate a reproducible embedded variant instead of relying on a dirty submodule.
+            // This normalizes JNI annotations and removes the obsolete TCP reconnect path.
             java.srcDirs = [
-                '../vendor/termux-x11/lorie/src/main/java',
+                'build/generated/upstream-java',
                 'src/main/java',
                 'build/generated/java'
             ]
@@ -134,4 +134,13 @@ tasks.register('generatePrefs') {
     }
 }
 
-preBuild.dependsOn tasks.named('generatePrefs')
+def prepareEmbeddedJava = tasks.register('prepareEmbeddedJava', Exec) {
+    def upstreamJava = file('../vendor/termux-x11/lorie/src/main/java')
+    def generatedJava = file('build/generated/upstream-java')
+    inputs.dir(upstreamJava)
+    inputs.file('scripts/prepare_embedded_java.py')
+    outputs.dir(generatedJava)
+    commandLine 'python3', file('scripts/prepare_embedded_java.py'), upstreamJava, generatedJava
+}
+
+preBuild.dependsOn tasks.named('generatePrefs'), prepareEmbeddedJava

@@ -2,10 +2,11 @@
 setlocal EnableExtensions
 set "APP_HOME=%~dp0"
 set "GRADLE_VERSION=8.13"
+set "GRADLE_GIT_TAG=v8.13.0"
 set "WRAPPER_DIR=%APP_HOME%gradle\wrapper"
 set "WRAPPER_JAR=%WRAPPER_DIR%\gradle-wrapper.jar"
 set "WRAPPER_CHECKSUM=%WRAPPER_DIR%\gradle-wrapper-%GRADLE_VERSION%.jar.sha256"
-set "WRAPPER_URL=https://raw.githubusercontent.com/gradle/gradle/v%GRADLE_VERSION%/gradle/wrapper/gradle-wrapper.jar"
+set "WRAPPER_URL=https://raw.githubusercontent.com/gradle/gradle/%GRADLE_GIT_TAG%/gradle/wrapper/gradle-wrapper.jar"
 set "CHECKSUM_URL=https://services.gradle.org/distributions/gradle-%GRADLE_VERSION%-wrapper.jar.sha256"
 
 if not exist "%WRAPPER_DIR%" mkdir "%WRAPPER_DIR%"

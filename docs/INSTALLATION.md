@@ -2,123 +2,100 @@
 
 ## 1. 事前確認
 
-統合APKは公式Termuxの固定プレフィックスを使用するため、Android上のアプリIDは`com.termux`です。端末に公式Termuxがインストールされている場合、署名が異なるため同時にインストールできません。
+LDFAはTermuxの固定プレフィックスを使うためapplication IDが`com.termux`です。署名が異なる公式Termuxとは同時にインストールできません。既存Termuxに必要なデータがある場合は、共有ストレージへバックアップしてからLDFAをインストールしてください。外部Termux:X11と外部VNCクライアントは通常不要です。
 
-公式Termuxを使用中の場合は、必要なファイルを`/sdcard`などの共有ストレージへ退避したうえでアンインストールします。公式Termuxの内部データ、既存PRoot環境、旧版Linux Desktopが作成したコンテナは、新しい統合APKへ自動移行されません。
+Debian環境1つにつき3〜5GB以上の空き容量と、初回セットアップ時のインターネット接続を推奨します。
 
-外部のTermux:X11も不要です。混同を避けるため削除を推奨します。
+## 2. APKを用意
 
-## 2. APKをインストール
-
-GitHub Actionsの`linux-desktop-ubuntu-xfce-unified-debug-apk`成果物、またはローカルビルドしたAPKをインストールします。
+GitHub Actionsの`LDFA-v0.9.0-debug-apk`成果物、またはローカルビルドしたAPKを使用します。
 
 ```bash
-git clone --recurse-submodules https://github.com/hatake716/Linux-Desktop-for-Android.git
-cd Linux-Desktop-for-Android
+git clone --recurse-submodules https://github.com/hatake716/LDFA.git
+cd LDFA
 bash ./gradlew assembleDebug
 ```
 
-生成先:
-
-```text
-app/build/outputs/apk/debug/app-debug.apk
-```
-
-ADBからインストールする場合:
+生成先は`app/build/outputs/apk/debug/app-debug.apk`です。ADBからインストールする場合:
 
 ```bash
-adb install -r app-debug.apk
+adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
 ## 3. 初回セットアップ
 
-アプリの案内に従い、次の3段階を実行します。
+アプリの案内に従って次を準備します。
 
-1. **内蔵ターミナルを展開**
-   - 公式Termuxブートストラップをアプリ内部へ展開します。
-2. **共有ストレージを許可**
-   - Android側ファイルをUbuntuの`/mnt/android`から利用できるようにします。
-3. **Ubuntu実行基盤を自動準備**
-   - tmux、PRoot Distro、PulseAudioなどを導入します。
-   - X11 repositoryと`xkeyboard-config`を準備します。
-   - `/system/bin/app_process`とインストール済みAPKを確認します。
+1. 内蔵Termux runtimeを展開
+2. 内蔵X11機能を確認
+3. Android共有ストレージへのアクセスを許可
+4. tmux、proot-distroなどDebian実行基盤を準備
 
 外部アプリへの切り替えや手動コマンド貼り付けは不要です。
 
-## 4. Ubuntu XFCE環境を作成
+## 4. Debian XFCE環境を作成
 
-1. デスクトップ画面右下の`+`を選択
-2. 環境名を入力
-3. `インストール`を選択
+ホーム画面の追加ボタンから環境名を入力します。proot-distroのDebian 12（Bookworm）rootfs、XFCE、日本語locale、Noto CJK、Fcitx5/Mozc、公式Google Chrome stable、sudo、X11診断ツールを自動設定します。rootfsはPRoot互換性と再現性のため`debian:12`へ固定しています。インストールはtmux内で継続し、画面にはリアルタイムログを表示します。
 
-Ubuntu 24.04、XFCE、日本語環境、Fcitx5/Mozc、sudo、X11接続確認用`xset`を自動設定します。3〜5GB以上の空き容量を推奨します。
+Google ChromeはGoogle公式の`amd64`／`arm64`パッケージを環境作成時に取得します。既存環境では、アプリ更新後の最初のデスクトップ起動前に未導入かどうかを確認し、必要な場合だけ追加します。そのため初回起動や更新直後はデスクトップ表示まで数分かかることがあります。
 
-インストール処理はtmux内で継続し、進捗バーの下にリアルタイムログが表示されます。
+Chrome本体と依存パッケージの追加使用量は約460MBです。
 
-## 5. Ubuntu XFCEを起動
+## 5. Debian XFCEを起動
 
-環境カードの`起動`を選択します。
+環境カードの「Debian XFCEを開く」を選びます。LDFAは次を順に確認します。
 
-v0.4.0では次の順番で起動します。
+起動中は「デスクトップが表示されるまで少し時間がかかる」旨を管理画面に表示します。表示Activityへ切り替わるまで画面を閉じずに待ってください。
 
-1. `ldfa-x11`がX11依存関係を確認
-2. `/system/bin/app_process`から`com.termux.x11.CmdEntryPoint`を起動
-3. `libXlorie`がX server`:1`を開始
-4. X11表示Activityを開いてBinder接続を確認
-5. Ubuntuを`proot-distro --shared-tmp`で接続
-6. Ubuntu内部から`DISPLAY=:1 xset q`を実行
-7. 接続成功後にXFCEを起動
+1. `com.termux:x11` Foreground Serviceと世代UUID
+2. Xorg PID、`:1` Unix socket、`xset q`
+3. 表示Activityへのdirect Binder接続とX connection FD
+4. Android SurfaceとEGL rendererのREADY状態
+5. `xrefresh`後のsuccessful presentation serial増分
+6. Debian worker、`xfce4-session`、`xfwm4`、EWMH root property
+7. XFCE起動後の2回目のpresentation serial増分
 
-ソケットファイルが存在するだけでは成功扱いしません。
+native通常描画が利用できない場合はlegacy描画を試し、対応可能なnative経路がなければ`DISPLAY=:2`のloopback VNCへ自動で切り替えます。
 
-## 6. 日本語環境
+Google ChromeはAndroid PRootの制約に合わせ、一般ユーザー`desktop`から`--no-sandbox`付きの専用ランチャーで起動します。PRootとChromeを強いセキュリティ境界として扱わないでください。初回起動時にはGoogleの利用規約確認が表示されます。
 
-Ubuntu XFCEへ次を自動設定します。
+## 6. 日本語入力とsudo
+
+Debian側では次を自動設定します。
 
 - `ja_JP.UTF-8`
 - Noto CJK / Noto Color Emoji
-- Fcitx5
-- Mozc
-- 日本語キーボードレイアウト
-- GTK／Qt向けFcitx環境変数
+- Fcitx5 + Mozc
+- `GTK_IM_MODULE=fcitx`
+- `QT_IM_MODULE=fcitx`
+- `XMODIFIERS=@im=fcitx`
+- 日本語キーボードlayout
+- `desktop`ユーザーのパスワードなしsudo
 
-入力切替はFcitx5の設定とAndroidのIME・物理キーボード構成に依存します。
-
-## 7. sudo
-
-`sudo`を標準インストールし、既定の`desktop`ユーザーへパスワードなしのsudo権限を設定します。
+Linuxパッケージを追加する例:
 
 ```bash
 sudo apt update
 sudo apt install <package>
 ```
 
-## 8. Android共有フォルダ
+## 7. Android共有フォルダ
 
 ```text
 Android: /sdcard/LinuxDesktop/<environment-id>
-Ubuntu:  /mnt/android
+Debian:  /mnt/android
 XFCE:    /home/desktop/Desktop/Android共有
 ```
 
-環境を削除するときは、Android共有フォルダを残すか同時に削除するかを選択できます。
+環境削除時に、Android共有フォルダを残すか同時に削除するかを選択できます。
 
-## 9. ログ確認
+## 8. ログと復旧
 
-アプリの環境メニューからログを開くと、Ubuntu/XFCEログとX11ログの両方を確認できます。
-
-X11専用ログ:
-
-```text
-~/.local/share/linux-desktop-for-android/logs/x11-server.log
-```
-
-ADBからAndroid側を確認する場合:
+環境メニューからDebian/XFCEログと表示serverログを確認できます。ADBでは次が有用です。
 
 ```bash
-adb logcat -s CmdEntryPoint LorieNative MainActivity LorieBroadcastReceiver
+adb shell pidof com.termux:x11
+adb logcat -s LorieNative gles-renderer MainActivity
 ```
 
-## 10. 安定動作
-
-Androidのアプリ設定で、Linux Desktopのバッテリー使用を`制限なし`に設定することを推奨します。処理が中断した場合は、設定画面の`中断した処理を修復`を選択し、環境カードのメニューからログを確認します。
+Androidのバッテリー設定は「制限なし」を推奨します。処理が中断した場合は設定またはツール画面の自動修復を実行してください。保存済み共有ファイルは自動修復では削除しません。

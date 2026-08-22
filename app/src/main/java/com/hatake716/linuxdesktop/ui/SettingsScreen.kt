@@ -13,7 +13,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -51,7 +50,6 @@ internal fun SettingsScreen(
     state: MainUiState,
     modifier: Modifier,
     onOpenTerminal: () -> Unit,
-    onOpenDisplay: () -> Unit,
     onBatterySettings: () -> Unit,
     onAppSettings: () -> Unit,
     onRepair: () -> Unit,
@@ -106,7 +104,7 @@ internal fun SettingsScreen(
                 HorizontalDivider(Modifier.padding(start = 58.dp))
                 StatusSettingsRow(
                     icon = Icons.Rounded.CloudDone,
-                    title = "Ubuntu実行基盤",
+                    title = "Debian実行基盤",
                     ready = state.setup.hostReady,
                     readyText = "XFCEと日本語環境を構築済み",
                     pendingText = "セットアップが必要です",
@@ -119,15 +117,8 @@ internal fun SettingsScreen(
                 SettingsRow(
                     icon = Icons.Rounded.Terminal,
                     title = "ターミナルを開く",
-                    subtitle = "Ubuntuの保守やコマンド操作に使用",
+                    subtitle = "Debianの保守やコマンド操作に使用",
                     onClick = if (state.setup.terminalReady) onOpenTerminal else null,
-                )
-                HorizontalDivider(Modifier.padding(start = 58.dp))
-                SettingsRow(
-                    icon = Icons.Rounded.Computer,
-                    title = "X11ディスプレイを開く",
-                    subtitle = "現在のLinuxデスクトップ画面を表示",
-                    onClick = if (state.setup.x11Ready) onOpenDisplay else null,
                 )
                 HorizontalDivider(Modifier.padding(start = 58.dp))
                 SettingsRow(
@@ -163,7 +154,7 @@ internal fun SettingsScreen(
                 SettingsRow(
                     icon = Icons.Rounded.Refresh,
                     title = "中断した処理を修復",
-                    subtitle = "UbuntuインストールやXFCE監視を再開",
+                    subtitle = "DebianインストールやXFCE監視を再開",
                     onClick = onRepair,
                 )
             }
@@ -189,7 +180,7 @@ internal fun SettingsScreen(
                     )
                     Spacer(Modifier.size(6.dp))
                     Text(
-                        "ターミナルとX11サーバーを同じAPKへ統合し、Ubuntu + XFCE、日本語表示、Fcitx5/Mozc、sudoを1つのアプリから構築します。複数のUbuntu環境を保存できますが、画面表示は1環境ずつです。",
+                        "ターミナルとX11サーバーを同じAPKへ統合し、Debian + XFCE、日本語表示、Fcitx5/Mozc、Google Chrome、sudoを1つのアプリから構築します。複数のDebian環境を保存できますが、画面表示は1環境ずつです。",
                         style = MaterialTheme.typography.bodyMedium,
                     )
                 }

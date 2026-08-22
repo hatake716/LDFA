@@ -57,7 +57,7 @@
             android:foregroundServiceType="specialUse">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="Hosts the embedded local X11 server for the Ubuntu desktop session." />
+                android:value="Hosts the embedded local X11 server for the Debian XFCE desktop session." />
         </service>
 
         <service
@@ -66,7 +66,7 @@
             android:foregroundServiceType="specialUse">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="Maintains the embedded Ubuntu XFCE session, terminal runtime and X11 server." />
+                android:value="Maintains the embedded Debian XFCE session, terminal runtime and X11 server." />
         </service>
     </application>
 </manifest>

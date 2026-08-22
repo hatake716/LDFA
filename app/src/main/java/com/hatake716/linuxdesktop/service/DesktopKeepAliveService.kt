@@ -6,6 +6,7 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
@@ -14,6 +15,7 @@ import androidx.core.content.ContextCompat
 import com.hatake716.linuxdesktop.LinuxDesktopApplication
 import com.hatake716.linuxdesktop.MainActivity
 import com.hatake716.linuxdesktop.R
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -22,6 +24,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class DesktopKeepAliveService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -39,7 +42,10 @@ class DesktopKeepAliveService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-            ACTION_STOP_SESSION -> stopActiveSession()
+            ACTION_STOP_SESSION -> stopActiveSession(
+                intent.getStringExtra(EXTRA_CONTAINER_ID),
+                startId,
+            )
             else -> startMonitoring(intent?.getStringExtra(EXTRA_CONTAINER_ID))
         }
         return START_STICKY
@@ -54,12 +60,17 @@ class DesktopKeepAliveService : Service() {
 
     private fun startMonitoring(requestedId: String?) {
         val containerId = requestedId ?: repository.activeContainerId()
-        startForeground(NOTIFICATION_ID, buildNotification(containerId))
+        val notification = buildNotification(containerId)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+        } else {
+            startForeground(NOTIFICATION_ID, notification)
+        }
         heartbeatJob?.cancel()
         heartbeatJob = scope.launch {
             var idleCycles = 0
             while (isActive) {
-                val activeId = containerId ?: repository.activeContainerId()
+                val activeId = repository.activeContainerId() ?: containerId
                 val busy = repository.heartbeat(activeId)
                 if (!busy && repository.activeContainerId() == null) {
                     idleCycles += 1
@@ -76,12 +87,34 @@ class DesktopKeepAliveService : Service() {
         }
     }
 
-    private fun stopActiveSession() {
-        val id = repository.activeContainerId()
+    private fun stopActiveSession(requestedId: String?, stopStartId: Int) {
+        val activeId = repository.activeContainerId()
+        if (requestedId != null && activeId != null && requestedId != activeId) return
+        val id = requestedId ?: activeId
         scope.launch {
-            if (id != null) runCatching { repository.stopContainer(id) }
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf()
+            if (id != null) {
+                try {
+                    repository.stopContainer(id)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Throwable) {
+                    // stopContainer performs its owned viewer/server cleanup before
+                    // reporting a host failure. Reconcile service ownership below.
+                }
+            }
+            withContext(Dispatchers.Main.immediate) {
+                // The stop command may have waited behind a newer session start.
+                // Never let an old notification remove that new session's monitor.
+                val remainingId = repository.activeContainerId()
+                if (remainingId != null) {
+                    startMonitoring(remainingId)
+                } else if (stopSelfResult(stopStartId)) {
+                    // Remove the foreground notification only when this STOP is
+                    // still the newest service start. A newer START keeps both
+                    // the service and its notification intact.
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                }
+            }
         }
     }
 

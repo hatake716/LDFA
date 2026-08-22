@@ -15,7 +15,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -196,7 +195,7 @@ internal fun SetupScreen(
             SetupStepCard(
                 number = 1,
                 title = "内蔵ターミナル",
-                description = "Ubuntuを動かすTermuxランタイムを、LDFAの内部領域へ展開します。",
+                description = "Debianを動かすTermuxランタイムを、LDFAの内部領域へ展開します。",
                 complete = state.setup.terminalReady,
                 icon = Icons.Rounded.Terminal,
             )
@@ -216,7 +215,7 @@ internal fun SetupScreen(
             SetupStepCard(
                 number = 3,
                 title = "Android共有ストレージ",
-                description = "Android側のファイルをUbuntuの /mnt/android から読み書きできるようにします。",
+                description = "Android側のファイルをDebianの /mnt/android から読み書きできるようにします。",
                 complete = state.setup.storageReady,
                 icon = Icons.Rounded.Folder,
             )
@@ -225,8 +224,8 @@ internal fun SetupScreen(
         item {
             SetupStepCard(
                 number = 4,
-                title = "Ubuntu XFCEと日本語環境",
-                description = "Ubuntu、XFCE、Fcitx5、Mozc、日本語フォント、sudoをまとめて構築します。",
+                title = "Debian XFCEと日本語環境",
+                description = "Debian、XFCE、Fcitx5、Mozc、日本語フォント、sudoをまとめて構築します。",
                 complete = state.setup.hostReady,
                 icon = Icons.Rounded.CloudDownload,
                 showProgress = state.bootstrapping,
@@ -247,7 +246,7 @@ internal fun SetupScreen(
                     )
                     Spacer(Modifier.width(12.dp))
                     Text(
-                        "セットアップ後はUbuntu環境を追加し、「Ubuntu XFCEを開く」を押すだけでLinuxデスクトップを起動できます。1環境につき3〜5GB以上の空き容量を推奨します。",
+                        "セットアップ後はDebian環境を追加し、「Debian XFCEを開く」を押すだけでLinuxデスクトップを起動できます。1環境につき3〜5GB以上の空き容量を推奨します。",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -266,11 +265,11 @@ private fun SetupPrimaryAction(
     onBootstrap: () -> Unit,
 ) {
     val actionLabel = when {
-        state.bootstrapping -> "Ubuntu環境をインストール中"
+        state.bootstrapping -> "Debian環境をインストール中"
         !state.setup.terminalReady -> "セットアップを開始"
         !state.setup.x11Ready -> "内蔵X11を再確認"
         !state.setup.storageReady -> "ストレージアクセスを許可"
-        !state.setup.hostReady -> "Ubuntu環境をインストール"
+        !state.setup.hostReady -> "Debian環境をインストール"
         else -> "セットアップ完了"
     }
     val supportingText = when {

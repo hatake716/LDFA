@@ -11,17 +11,25 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.ComponentActivity
 import com.hatake716.linuxdesktop.BuildConfig
+import java.lang.ref.WeakReference
+import java.util.UUID
 
 /**
- * Local-only noVNC viewer used when the device cannot keep Termux:X11's app_process X server alive.
+ * Local-only noVNC viewer used when the embedded native X11 renderer cannot present reliably.
  * The backing TigerVNC server and websockify process both listen only on 127.0.0.1.
  */
 class VncFallbackActivity : ComponentActivity() {
     private var webView: WebView? = null
+    private var launchAccepted = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        instance = this
+        launchAccepted = isLaunchAllowed(intent)
+        if (!launchAccepted) {
+            finish()
+            return
+        }
+        instance = WeakReference(this)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         if (BuildConfig.DEBUG) {
@@ -53,7 +61,8 @@ class VncFallbackActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        instance = this
+        if (!launchAccepted) return
+        instance = WeakReference(this)
         webView?.onResume()
         webView?.requestFocus()
     }
@@ -63,8 +72,17 @@ class VncFallbackActivity : ComponentActivity() {
         super.onPause()
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        launchAccepted = isLaunchAllowed(intent)
+        if (!launchAccepted) {
+            finish()
+            return
+        }
+        setIntent(intent)
+    }
+
     override fun onDestroy() {
-        if (instance === this) instance = null
         webView?.apply {
             stopLoading()
             loadUrl("about:blank")
@@ -74,30 +92,57 @@ class VncFallbackActivity : ComponentActivity() {
         }
         webView = null
         super.onDestroy()
+        // The repository treats instance disappearance as the teardown ack, so
+        // publish it only after WebView/WebSocket destruction has completed.
+        synchronized(launchLock) {
+            if (instance?.get() === this) instance = null
+            if (intent.getStringExtra(EXTRA_LAUNCH_GENERATION) == allowedLaunchGeneration) {
+                allowedLaunchGeneration = null
+            }
+        }
     }
 
     companion object {
         private const val VNC_URL =
             "http://127.0.0.1:6080/vnc.html?autoconnect=1&resize=scale&reconnect=1&shared=1&view_only=0"
+        private const val EXTRA_LAUNCH_GENERATION =
+            "com.hatake716.linuxdesktop.extra.VNC_VIEWER_GENERATION"
+        private val launchLock = Any()
 
         @Volatile
-        private var instance: VncFallbackActivity? = null
+        private var instance: WeakReference<VncFallbackActivity>? = null
+        private var allowedLaunchGeneration: String? = null
 
         fun open(context: Context) {
+            val generation = UUID.randomUUID().toString()
+            synchronized(launchLock) {
+                allowedLaunchGeneration = generation
+            }
             context.startActivity(
                 Intent(context, VncFallbackActivity::class.java).apply {
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                    putExtra(EXTRA_LAUNCH_GENERATION, generation)
                 },
             )
         }
 
         fun close() {
-            val activity = instance ?: return
+            val activity = synchronized(launchLock) {
+                allowedLaunchGeneration = null
+                instance?.get()
+            } ?: return
             activity.runOnUiThread {
                 if (!activity.isFinishing) activity.finish()
             }
         }
 
-        fun isOpen(): Boolean = instance?.let { !it.isFinishing && !it.isDestroyed } == true
+        fun isOpen(): Boolean = instance?.get() != null
+
+        private fun isLaunchAllowed(intent: Intent?): Boolean {
+            val generation = intent?.getStringExtra(EXTRA_LAUNCH_GENERATION)
+            return synchronized(launchLock) {
+                generation != null && generation == allowedLaunchGeneration
+            }
+        }
     }
 }

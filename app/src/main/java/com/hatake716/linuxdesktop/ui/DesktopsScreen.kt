@@ -16,7 +16,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -129,7 +128,7 @@ private fun LargeTitleRow(refreshing: Boolean, onRefresh: () -> Unit) {
                 fontWeight = FontWeight.Bold,
             )
             Text(
-                "Ubuntu XFCE デスクトップ",
+                "Debian XFCE デスクトップ",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.bodyLarge,
             )
@@ -229,13 +228,13 @@ private fun EmptyDesktopCard(onAdd: () -> Unit) {
             }
             Spacer(Modifier.height(18.dp))
             Text(
-                "最初のUbuntu環境を作成",
+                "最初のDebian環境を作成",
                 fontWeight = FontWeight.SemiBold,
                 style = MaterialTheme.typography.titleLarge,
             )
             Spacer(Modifier.height(7.dp))
             Text(
-                "日本語入力とsudoを設定済みのUbuntu XFCEを、LDFAが自動でインストールします。",
+                "日本語入力、Google Chrome、sudoを設定済みのDebian XFCEを、LDFAが自動でインストールします。",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.bodyMedium,
                 textAlign = TextAlign.Center,
@@ -248,7 +247,7 @@ private fun EmptyDesktopCard(onAdd: () -> Unit) {
             ) {
                 Icon(Icons.Rounded.Add, contentDescription = null)
                 Spacer(Modifier.width(8.dp))
-                Text("Ubuntu環境を作成")
+                Text("Debian環境を作成")
             }
         }
     }
@@ -302,7 +301,7 @@ private fun ContainerCard(
                         Box(Modifier.size(8.dp).clip(CircleShape).background(accent))
                         Spacer(Modifier.width(7.dp))
                         Text(
-                            "Ubuntu · XFCE · ${stateLabel(container.state)}",
+                            "Debian · XFCE · ${stateLabel(container.state)}",
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             style = MaterialTheme.typography.bodySmall,
                         )
@@ -399,7 +398,7 @@ private fun ContainerCard(
                 ) {
                     Icon(Icons.Rounded.PlayArrow, null)
                     Spacer(Modifier.width(8.dp))
-                    Text("Ubuntu XFCEを開く")
+                    Text("Debian XFCEを開く")
                 }
                 container.state == ContainerState.FAILED -> OutlinedButton(
                     onClick = onRepair,
@@ -492,12 +491,12 @@ private fun stateLabel(state: ContainerState): String = when (state) {
 }
 
 private fun defaultStateMessage(container: ContainerInfo): String = when (container.state) {
-    ContainerState.QUEUED -> "Ubuntuのインストール開始を待っています"
-    ContainerState.INSTALLING -> "日本語Ubuntu XFCE環境を準備しています"
+    ContainerState.QUEUED -> "Debianのインストール開始を待っています"
+    ContainerState.INSTALLING -> "日本語Debian XFCE環境を準備しています"
     ContainerState.READY -> "ボタンを押すとLinuxデスクトップが開きます"
     ContainerState.STARTING -> "内蔵X11表示サーバーへ接続しています"
     ContainerState.RUNNING -> "LDFAがLinuxデスクトップを維持しています"
-    ContainerState.STOPPING -> "Ubuntu XFCEを安全に停止しています"
+    ContainerState.STOPPING -> "Debian XFCEを安全に停止しています"
     ContainerState.FAILED -> "ログを確認するか、インストールを再開してください"
     ContainerState.UNKNOWN -> "状態を更新してください"
 }

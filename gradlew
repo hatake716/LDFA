@@ -5,10 +5,11 @@ set -eu
 
 APP_HOME=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 GRADLE_VERSION="8.13"
+GRADLE_GIT_TAG="v8.13.0"
 WRAPPER_DIR="$APP_HOME/gradle/wrapper"
 WRAPPER_JAR="$WRAPPER_DIR/gradle-wrapper.jar"
 WRAPPER_CHECKSUM="$WRAPPER_DIR/gradle-wrapper-${GRADLE_VERSION}.jar.sha256"
-WRAPPER_URL="https://raw.githubusercontent.com/gradle/gradle/v${GRADLE_VERSION}/gradle/wrapper/gradle-wrapper.jar"
+WRAPPER_URL="https://raw.githubusercontent.com/gradle/gradle/${GRADLE_GIT_TAG}/gradle/wrapper/gradle-wrapper.jar"
 CHECKSUM_URL="https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-wrapper.jar.sha256"
 
 checksum() {
