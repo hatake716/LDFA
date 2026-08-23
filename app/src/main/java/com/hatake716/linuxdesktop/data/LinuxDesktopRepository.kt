@@ -22,6 +22,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import java.io.File
 import java.util.Locale
 import java.util.UUID
 import kotlin.time.Duration.Companion.minutes
@@ -284,7 +285,9 @@ class LinuxDesktopRepository(private val context: Context) {
         }.getOrDefault("")
 
         buildString {
-            append("===== Debian / XFCE =====\n")
+            append("===== Android process / memory =====\n")
+            append(ProcessExitDiagnostics.report(context))
+            append("\n\n===== Debian / XFCE =====\n")
             append(desktopLogs.ifBlank { "ログはありません。" })
             append("\n\n===== Native Termux:X11 =====\n")
             append(x11Logs.ifBlank { "ネイティブX11ログはありません。" })
@@ -318,20 +321,208 @@ class LinuxDesktopRepository(private val context: Context) {
             if (id != null && currentId != id) return@withLock currentId != null
             val effectiveId = currentId ?: id
             if (effectiveId != null) holdTermuxServiceLifetime()
+            val effectiveBackend = activeDisplayBackend()
+
+            // Chrome + the complete XFCE desktop already use most of Android's default
+            // phantom-process allowance. While the native viewer Activity still owns a
+            // verified X11 service, the event-driven in-session supervisor repairs trimmed
+            // XFCE components without polling. Avoid adding transient Termux/PRoot probes
+            // every 30 seconds; Activity resume first uses a zero-process procfs check and
+            // escalates to the installed controller only when a required process is missing.
+            if (
+                effectiveId != null &&
+                effectiveBackend == DesktopDisplayBackend.NATIVE_X11 &&
+                withContext(Dispatchers.Main.immediate) { EmbeddedX11Display.isOpen() } &&
+                EmbeddedX11ServiceController.isServiceReady(context)
+            ) {
+                return@withLock true
+            }
+
             val displayBusy = effectiveId?.let { heartbeatDisplay(it) } ?: false
 
             if (effectiveId != null && activeContainerId() != effectiveId) {
                 return@withLock activeContainerId() != null
             }
-            val desktopBusy = runCatching {
-                commandClient.runInstalledHost(
-                    action = "heartbeat",
-                    arguments = listOfNotNull(effectiveId),
-                    timeout = 25.seconds,
-                ).lineSequence().any { it.trim() == "busy=1" }
-            }.getOrDefault(false)
+            val desktopBusy = if (
+                effectiveBackend == DesktopDisplayBackend.NATIVE_X11 && displayBusy
+            ) {
+                // heartbeatNativeDisplay already validates and repairs the complete XFCE
+                // session. Avoid creating a second transient PRoot probe every 30 seconds.
+                true
+            } else {
+                runCatching {
+                    commandClient.runInstalledHost(
+                        action = "heartbeat",
+                        arguments = listOfNotNull(effectiveId),
+                        timeout = 45.seconds,
+                    ).lineSequence().any { it.trim() == "busy=1" }
+                }.getOrDefault(false)
+            }
 
             displayBusy || desktopBusy
+        }
+    }
+
+    /**
+     * Runs immediately when the native viewer returns from Gmail, Recents or the lock screen.
+     * The normal 30-second watchdog remains the backstop, but a visible blank desktop must not
+     * wait for its next interval. Controller and Debian runtime migrations are completed before
+     * the viewer opens; resume deliberately uses the installed controller to avoid transient
+     * script-deployment and provisioning processes beside Chrome.
+     */
+    suspend fun recoverActiveDesktopAfterViewerResume(): Boolean = withContext(Dispatchers.IO) {
+        x11LifecycleMutex.withLock {
+            val id = activeContainerId() ?: return@withLock false
+            if (activeDisplayBackend() != DesktopDisplayBackend.NATIVE_X11) {
+                return@withLock false
+            }
+            holdTermuxServiceLifetime()
+
+            try {
+                if (!EmbeddedX11ServiceController.isServiceReady(context)) {
+                    throw TermuxCommandException(
+                        "復帰時にX11サービスのprocess世代、PIDまたはUnix socketが一致しません。",
+                    )
+                }
+
+                // Do not launch RunCommand/PRoot beside a healthy Chrome desktop. On Pixel-class
+                // devices those transient shells can be the processes that cross Android's
+                // phantom-child cap. Reading this UID's /proc entries creates no Linux child.
+                when (desktopResumeProcessState(id)) {
+                    DesktopResumeProcessState.READY -> {
+                        Log.i(
+                            LIFECYCLE_LOG_TAG,
+                            "viewer resume used zero-process fast path id=$id",
+                        )
+                        return@withLock true
+                    }
+                    DesktopResumeProcessState.IN_SESSION_REPAIR -> {
+                        // The event-driven supervisor is already replacing one or more direct
+                        // children. Poll procfs only; a strict X11/PRoot probe here can race the
+                        // replacement windows and tear down a desktop that has just reappeared.
+                        repeat(RESUME_IN_SESSION_REPAIR_ATTEMPTS) {
+                            delay(RESUME_IN_SESSION_REPAIR_POLL_MILLIS)
+                            if (desktopResumeProcessState(id) == DesktopResumeProcessState.READY) {
+                                Log.i(
+                                    LIFECYCLE_LOG_TAG,
+                                    "viewer resume observed in-session repair id=$id",
+                                )
+                                return@withLock true
+                            }
+                        }
+                    }
+                    DesktopResumeProcessState.EXTERNAL_RECOVERY -> Unit
+                }
+
+                val result = commandClient.runInstalledHost(
+                    action = "resume",
+                    arguments = listOf(id),
+                    timeout = 90.seconds,
+                )
+                if (activeContainerId() != id) return@withLock activeContainerId() != null
+                Log.i(
+                    LIFECYCLE_LOG_TAG,
+                    "viewer resume health ready id=$id result=${result.replace('\n', ' ')}",
+                )
+
+                // surfaceChanged/onResume already request a full X11 redraw. Add an X damage
+                // event when the transport is ready, without treating a still-rebinding Binder
+                // as another Linux-session failure.
+                val viewerReady = withContext(Dispatchers.Main.immediate) {
+                    EmbeddedX11Display.isViewerReady()
+                }
+                if (viewerReady && isNativeViewerForeground()) {
+                    try {
+                        commandClient.runInstalledX11(
+                            action = "draw-probe",
+                            arguments = listOf(id),
+                            timeout = 15.seconds,
+                        )
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (redrawFailure: Throwable) {
+                        Log.w(
+                            LIFECYCLE_LOG_TAG,
+                            "resume redraw probe failed id=$id",
+                            redrawFailure,
+                        )
+                    }
+                }
+                true
+            } catch (resumeFailure: Throwable) {
+                if (resumeFailure is CancellationException) throw resumeFailure
+                Log.w(
+                    LIFECYCLE_LOG_TAG,
+                    "viewer resume health failed; recovering complete native pipeline id=$id",
+                    resumeFailure,
+                )
+                if (activeContainerId() != id) return@withLock activeContainerId() != null
+                heartbeatNativeDisplay(id)
+            }
+        }
+    }
+
+    /**
+     * Returns true only when the existing in-session supervisor can finish resume without a new
+     * Termux command. A Chrome crash marker with no real browser process intentionally fails this
+     * check so the installed controller can wake the supervisor and restore the previous session.
+     */
+    private fun desktopResumeProcessState(id: String): DesktopResumeProcessState {
+        val processes = File("/proc").listFiles()
+            ?.asSequence()
+            ?.filter { entry -> entry.name.all(Char::isDigit) }
+            ?.mapNotNull { entry ->
+                runCatching {
+                    val status = ProcessExitDiagnostics.parseProcStatus(
+                        File(entry, "status").readText(),
+                        android.os.Process.myUid(),
+                    ) ?: return@runCatching null
+                    val arguments = File(entry, "cmdline").readBytes()
+                        .toString(Charsets.UTF_8)
+                        .split('\u0000')
+                        .filter(String::isNotBlank)
+                    DesktopChildProcess(
+                        name = status.name,
+                        pid = status.pid,
+                        parentPid = status.parentPid,
+                        arguments = arguments,
+                    )
+                }.getOrNull()
+            }
+            ?.toList()
+            .orEmpty()
+
+        val processByPid = processes.associateBy(DesktopChildProcess::pid)
+        val containerRootSegment = "/containers/$id/rootfs"
+        val supervisor = processes.firstOrNull { process ->
+            process.arguments.any { it == "/usr/local/bin/ldfa-session" } &&
+                process.belongsToContainer(processByPid, containerRootSegment)
+        }
+            ?: return DesktopResumeProcessState.EXTERNAL_RECOVERY
+        val supervisedChildren = processes.asSequence()
+            .filter { process -> process.parentPid == supervisor.pid }
+            .mapTo(mutableSetOf(), DesktopChildProcess::name)
+        if (!supervisedChildren.containsAll(REQUIRED_DESKTOP_CHILDREN)) {
+            return DesktopResumeProcessState.IN_SESSION_REPAIR
+        }
+
+        val chromeMarker = File(
+            context.filesDir,
+            "usr/var/lib/proot-distro/containers/$id/rootfs/" +
+                "home/desktop/.local/state/ldfa/chrome-running",
+        )
+        if (!chromeMarker.isFile) return DesktopResumeProcessState.READY
+
+        val chromeBrowserAlive = processes.any { process ->
+            // PRoot exposes its guest command line as one space-separated /proc entry on
+            // Android, while native processes use NUL-separated argv. Match both layouts.
+            process.name in CHROME_BROWSER_PROCESS_NAMES &&
+                process.arguments.none { it.contains("--type=") }
+        }
+        return if (chromeBrowserAlive) {
+            DesktopResumeProcessState.READY
+        } else {
+            DesktopResumeProcessState.EXTERNAL_RECOVERY
         }
     }
 
@@ -554,7 +745,7 @@ class LinuxDesktopRepository(private val context: Context) {
                 // replacement :2 endpoint is ready instead of reusing a stale tmux session.
                 commandClient.runInstalledHost(
                     action = "stop",
-                    arguments = listOf(id),
+                    arguments = listOf(id, PRESERVE_CHROME_RESTORE),
                     timeout = 30.seconds,
                 )
                 closeCompatibilityDisplayAndWait()
@@ -590,6 +781,11 @@ class LinuxDesktopRepository(private val context: Context) {
                 action = "probe",
                 arguments = listOf(id),
                 timeout = 35.seconds,
+            )
+            commandClient.runInstalledHost(
+                action = "health",
+                arguments = listOf(id),
+                timeout = 45.seconds,
             )
             var verifyViewerPresentation = viewerWasOpen && isNativeViewerForeground()
             if (
@@ -638,7 +834,7 @@ class LinuxDesktopRepository(private val context: Context) {
                 // before replacing the display and start it again only after the endpoint is ready.
                 commandClient.runInstalledHost(
                     action = "stop",
-                    arguments = listOf(id),
+                    arguments = listOf(id, PRESERVE_CHROME_RESTORE),
                     timeout = 30.seconds,
                 )
                 closeNativeDisplayAndWait()
@@ -668,7 +864,7 @@ class LinuxDesktopRepository(private val context: Context) {
                 try {
                     commandClient.runInstalledHost(
                         action = "stop",
-                        arguments = listOf(id),
+                        arguments = listOf(id, PRESERVE_CHROME_RESTORE),
                         timeout = 30.seconds,
                     )
                     closeNativeDisplayAndWait()
@@ -727,7 +923,7 @@ class LinuxDesktopRepository(private val context: Context) {
         runCatching {
             commandClient.runInstalledHost(
                 action = "stop",
-                arguments = listOf(id),
+                arguments = listOf(id, PRESERVE_CHROME_RESTORE),
                 timeout = 30.seconds,
             )
         }
@@ -963,10 +1159,51 @@ class LinuxDesktopRepository(private val context: Context) {
     }
 
     companion object {
+        private data class DesktopChildProcess(
+            val name: String,
+            val pid: Int,
+            val parentPid: Int,
+            val arguments: List<String>,
+        ) {
+            fun belongsToContainer(
+                processByPid: Map<Int, DesktopChildProcess>,
+                containerRootSegment: String,
+            ): Boolean {
+                var current: DesktopChildProcess? = this
+                repeat(MAX_PROCESS_ANCESTORS) {
+                    val process = current ?: return false
+                    if (process.arguments.any { it.contains(containerRootSegment) }) return true
+                    current = processByPid[process.parentPid]
+                }
+                return false
+            }
+        }
+
+        private enum class DesktopResumeProcessState {
+            READY,
+            IN_SESSION_REPAIR,
+            EXTERNAL_RECOVERY,
+        }
+
         private val GLOBAL_DISPLAY_LIFECYCLE_MUTEX = Mutex()
+        private val REQUIRED_DESKTOP_CHILDREN = setOf(
+            "xfsettingsd",
+            "xfwm4",
+            "xfce4-panel",
+            "xfdesktop",
+        )
+        private val CHROME_BROWSER_PROCESS_NAMES = setOf(
+            "chrome",
+            "google-chrome",
+            "google-chrome-stable",
+        )
+        private const val RESUME_IN_SESSION_REPAIR_POLL_MILLIS = 250L
+        private const val RESUME_IN_SESSION_REPAIR_ATTEMPTS = 12
+        private const val MAX_PROCESS_ANCESTORS = 8
         private const val PREFERENCES = "linux_desktop_preferences"
         private const val KEY_ACTIVE_CONTAINER = "active_container"
         private const val KEY_ACTIVE_BACKEND = "active_display_backend"
+        private const val PRESERVE_CHROME_RESTORE = "1"
         private const val LIVE_LOG_LINE_COUNT = 40
 
         private const val NATIVE_X11_MODE_NORMAL = "normal"

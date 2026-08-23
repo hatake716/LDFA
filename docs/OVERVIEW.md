@@ -12,8 +12,10 @@ Androidスマートフォン／タブレット上に、日本語入力対応のD
 - native通常描画、native legacy描画、loopback VNCの段階的fallback
 - Surface/EGL準備と、成功したpresentationだけを数える単調serialによる実描画検証
 - Android共有ストレージをDebianの`/mnt/android`へ接続
+- app-private Unix socketによるDebian→Android PulseAudio再生出力
 - インストール・XFCE・X11・VNCの分離ログ
 - Foreground Service、WakeLock、heartbeatによる監視と復旧
+- AndroidによるChrome／XFCE子プロセス個別終了を検知する、定期pollingなしのイベント駆動supervisor
 
 ## 単一APK
 
@@ -42,8 +44,8 @@ EmbeddedX11ServerService (:x11)
   -> MainActivity / LorieView / Surface / EGL READY
   -> xrefresh damage
   -> successfulPresentSerial delta
-  -> Debian worker / XFCE / xfwm4
-  -> xset + process + EWMH probe
+  -> Debian worker / xfsettingsd / xfwm4 / Panel / Desktop
+  -> xset + process + visible EWMH window probe
   -> second successfulPresentSerial delta
 ```
 
@@ -62,11 +64,32 @@ proot-distroのDebian 12（Bookworm）rootfsへ次を導入します。rootfsは
 - Mesaソフトウェアrenderer
 - `xset`、`xrefresh`、`xprop`
 - `sudo`
+- `pulseaudio-utils`、ALSA Pulse plugin、XFCE panelの音量／mute UI
 - Google公式Chrome stable（amd64／arm64）とPRoot互換ランチャー
 
 一般ユーザー`desktop`にはパスワードなしsudoを設定します。`.profile`、`.xprofile`、`.xinputrc`へ日本語・Fcitx設定を保存し、`~/Desktop/Android共有`を`/mnt/android`へ接続します。
 
-Google ChromeはDebian環境の作成時にGoogle公式パッケージから導入します。既存環境もデスクトップ起動前に一度だけ不足を補います。PRoot内では通常のChrome sandboxを確立できないため、専用ランチャーが`--no-sandbox`、`--disable-dev-shm-usage`、X11 backendを明示します。
+Google ChromeはDebian環境の作成時にGoogle公式パッケージから導入します。既存環境もデスクトップ起動前にChrome本体とlauncher世代を検査し、不足または古いlauncherを補います。PRoot内では通常のChrome sandboxを確立できないため、専用ランチャーが`--no-sandbox`、`--disable-dev-shm-usage`、X11 backendを明示します。さらにWebコンテンツ用rendererを2個へ制限し、拡張機能、background mode、過剰なglibc arenaを抑えます。Chrome UI用rendererが別に1個動く場合があります。ログイン互換性を損ねるsingle-process modeは使用しません。
+
+音声は表示backendと独立しており、app-privateなbridge socketからTermux側
+PulseAudioのOpenSL ES／AAudio sinkへ送ります。socketは`$PREFIX/var/run/ldfa-pulse-bridge`
+（`0700`）に置き、各guest loginへ明示的な`--bind`でguestの`/tmp/ldfa-pulse/native`へ
+mapします。`--shared-tmp`が共有する`$PREFIX/tmp`のPRoot teardown churnからsocketを
+隔離するためで、匿名TCP listenerは作りません。PRootはSHM／memfdをguest境界越しに
+渡せないため、client／daemon両方でshared memoryを無効化し、再生streamがsocket transportで
+確実にsinkへ届くようにします。Debianの設定は`/etc/pulse/client.conf.d`と
+`/etc/alsa/conf.d`のLDFA専用drop-inへ置き、ユーザー固有のPulse／ALSA設定を上書き
+しません。bridge失敗時は`audio_ready=0`を記録してGUIを無音で継続します。エミュレータ
+（API 35）では実Debian 12環境でDebian→OpenSL ES sinkへの再生streamがRUNNINGになることを
+確認済みです。本体speaker／Bluetoothの可聴出力とpanel操作は実機で最終確認します。
+
+Androidのソフトウェアキーボードを開いたときは、X11画面をキーボード上の可視領域へ一時的にリサイズします。描画viewportだけを切り取る経路で一部GPUが黒いframeを表示する問題を避けるためで、既存インストールにも一度だけ安全側の設定を移行します。キーボードを閉じると元の画面サイズへ戻ります。
+
+別アプリから復帰してAndroid Surfaceが交換された場合は、X11 root pixmap全体へdamageを発行し、新しいSurfaceへ既存画面を再presentします。Androidがmain processだけを回収した場合は、別processのX11 serviceについて世代UUID、PID、Unix socket、lock ownerを再検証し、残っているXorgやChromeを破棄せずviewerのBinder transportを再接続します。
+
+Androidは`system_low_memory=false`でも、同一UID配下のPRoot子プロセスを個別に整理する場合があります。LDFAはPRootで不安定なICE lockを必要とする`xfce4-session`の代わりに、`xfsettingsd`、`xfwm4`、`xfce4-panel`、`xfdesktop`をsupervisorの直接の子として管理します。supervisorはBashのjob終了イベントを待ち、定常時に`ps`、`xset`、`sleep`を生成しません。終了イベントが来たときは4要素を一度に再確認して不足分を並列起動し、Chromeの異常終了markerがあれば前回セッションを復元します。
+
+viewerが前面にある間の定期heartbeatは、確認済みX11 serviceの状態だけを軽量に返し、PRoot commandを増やしません。Activityが履歴や別アプリから復帰した時は、まず同一UIDの`/proc`を子processを作らず検査します。現在のcontainerに属するsupervisor、その直接の子であるXFCE 4要素、Chrome markerとbrowser本体が正常なら即時に終了します。要素の交換中は`/proc`だけで最大3秒待ち、欠落が継続する場合だけinstalled controllerで実際のPanel／Desktop windowとChrome／XFCEを復旧します。Surface再作成はこのprocess検査と独立してX11 root pixmap全体を再描画します。
 
 ## ログと共有フォルダ
 
@@ -97,7 +120,10 @@ bash ./gradlew --no-daemon \
   assembleDebug
 ```
 
-Debug APKは`app/build/outputs/apk/debug/app-debug.apk`に生成され、GitHub Actionsでは`LDFA-v0.9.0-debug-apk`として保存されます。
+Debug APKは`app/build/outputs/apk/debug/app-debug.apk`に生成され、GitHub Actionsでは
+`LDFA-v0.9.0-debug-apk`として保存されます。2026-08-23の音声修正はまだ未commitのため、
+その修正を含むcommitがpushされてCIに成功するまでは、既存の`main` artifactを音声修正版と
+みなさないでください。
 
 ## ライセンス
 

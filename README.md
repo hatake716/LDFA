@@ -16,15 +16,21 @@ Termux互換ランタイム、X11サーバー、X11 viewer、ターミナル、D
 | Linux環境 | Debian 12（Bookworm）+ XFCE |
 | 通常表示 | 内蔵native X11、`DISPLAY=:1` |
 | 最終フォールバック | TigerVNC + noVNC、`DISPLAY=:2` |
-| ローカル／AVD検証 | clean build、155 unit tests、3 module lint、4 ABI APK、API 35 x86_64・4 KB page E2Eが成功 |
-| 実機検証 | 物理ARM64端末で受け入れテスト中。ARM64 16 KB pageは未完了 |
+| ローカル／AVD検証 | 2026-08-23 clean build、158 unit tests（app 13）、3 module lint、4 ABI APK、音声bridgeのstatic／stateful controller／APK asset gateを確認。API 35 x86_64・4 GB RAM・4 KB page AVDではChrome + Gboard、履歴からの通常復帰、Chrome／XFCE強制終了後の自動復旧を確認 |
+| 実機検証 | Pixel 10a（ARM64・8 GB RAM）でnative起動、Chromeログインのパスワード入力まで確認済み。Gmail本人確認から戻る経路は本修正版で再テスト予定。ARM64 16 KB pageは未完了 |
+| 音声受け入れ | 旧版で動画映像の再生と無音を確認。Unix socket修正版APKのtransport／package検査はPASS。Androidの本体speaker／Bluetoothからの可聴出力は、更新後の停止→起動で実機再確認が必要 |
 
-現在の`main`はv0.9.0のソース候補です。実機検証が完了するまでは、日常データを置く唯一のLinux環境としてではなく、バックアップを取ったテスト環境として使用してください。
+2026-08-23時点では、音声修正はローカルworking treeと下記の検証済みAPKにあり、まだ
+`origin/main`へcommit／pushされていません。`main`の既存Actions artifactは旧TCP endpointを
+含むため、この無音修正の確認には使用しないでください。実機検証が完了するまでは、
+日常データを置く唯一のLinux環境としてではなく、バックアップを取ったテスト環境として
+使用してください。
 
 ## 主な機能
 
 - Android上に複数のDebian 12環境を作成、保存、切り替え
 - XFCEデスクトップを内蔵X11 viewerへ直接表示
+- Debian／XFCE／Chromeの音声を内蔵PulseAudio bridgeからAndroidスピーカーへ出力
 - タッチ、マウス、物理キーボード、ソフトウェアキーボードで操作
 - 日本語ロケール、Noto CJK、日本語キーボード、Fcitx5 + Mozcを自動設定
 - Google公式のGoogle Chrome stableを64-bit Debianへ自動導入
@@ -34,7 +40,24 @@ Termux互換ランタイム、X11サーバー、X11 viewer、ターミナル、D
 - 作成、起動、停止、修復、削除とログ表示をMaterial 3 UIへ統合
 - native X11が利用できない場合にlegacy描画、互換VNCへ段階的にフォールバック
 - Foreground Service、WakeLock、heartbeat、世代IDで実行中セッションを監視
-- Surface再作成、バックグラウンド復帰、停止／再起動を考慮したX11 lifecycle
+- Surface再作成時の全画面再描画、main process回収後の安全な再接続、停止／再起動を考慮したX11 lifecycle
+- Chrome／XFCE子プロセスがAndroidに個別終了された場合のイベント駆動型自動復旧
+
+### 音声出力
+
+音声はX11やVNCへ混在させず、Debian clientからTermux互換runtimeのPulseAudioへ
+app-private Unix socketで送ります。Debianでは
+`PULSE_SERVER=unix:/tmp/ldfa-pulse/native`、Android側では
+`$PREFIX/var/run/ldfa-pulse-bridge/native`として同じsocketを共有します。socketは
+`$PREFIX/tmp`の外へ置き、各guest loginへ明示`--bind`でguestの`/tmp/ldfa-pulse`へmapする
+ため、`--shared-tmp`のPRoot tmp churnがsocketを消す競合を回避します。PRootはSHM／memfd
+descriptorをguest境界越しに渡せないため、client／daemon双方でshared memoryを無効化し、
+再生streamがsocket transportで確実にsinkへ届くようにします。匿名TCP portは公開しません。
+
+既存のDebian環境も、更新後の停止→起動時にPulse／ALSA client設定とXFCE panelの
+音量・mute項目を安全に移行します。ユーザーが作成した`~/.config/pulse/client.conf`や
+`~/.asoundrc`は上書きしません。今回の対象は再生出力であり、マイク入力権限は追加して
+いません。
 
 ## 動作要件
 
@@ -72,17 +95,34 @@ Android PRoot内ではChrome本来のnamespace／setuid sandboxを確立でき�
 ```text
 --no-sandbox
 --disable-dev-shm-usage
+--disable-background-mode
+--disable-breakpad
+--disable-crash-reporter
+--disable-extensions
+--disable-component-extensions-with-background-pages
+--disable-gpu
+--no-zygote
 --ozone-platform=x11
 --password-store=basic
+--renderer-process-limit=2
 ```
 
-通常のLinux版ChromeよりWebコンテンツの隔離が弱くなります。信頼できないサイト、拡張機能、ダウンロードファイルを扱う場合は、この制約を前提にしてください。詳細は[SECURITY.md](SECURITY.md)を参照してください。
+Webコンテンツ用rendererの上限は、Googleログインとの互換性を残して2にしています。Chrome自身のUI用rendererが別に1つ動作する場合があるため、`--type=renderer`の総数は通常3になります。拡張機能とbackground pageは停止しています。LDFAのChromeでは拡張機能を利用できません。`--single-process`や強制low-end-device modeは安定性・互換性を損ねるため使用しません。通常のLinux版ChromeよりWebコンテンツの隔離が弱くなります。信頼できないサイトやダウンロードファイルを扱う場合は、この制約を前提にしてください。詳細は[SECURITY.md](SECURITY.md)を参照してください。
 
 ## APKの入手方法
 
 実機受け入れが完了するまでは正式なプレリリースを作成していません。
 
-現在の候補APKは、[LDFA Android CI](https://github.com/hatake716/LDFA/actions/workflows/android.yml)の成功した`main` runから、`LDFA-v0.9.0-debug-apk` artifactとして取得できます。Actions artifactには保存期限があります。
+今回の音声修正を含む検証済みローカルAPKは次です。
+
+```text
+app/build/outputs/apk/debug/LDFA-v0.9.0-audio-fix-debug.apk
+SHA-256: 561907b3ad13158f43c78057061715c16d4ed5ceedb6d5f3044e9228b8132fe2
+```
+
+音声修正をcommit／pushした後は、[LDFA Android CI](https://github.com/hatake716/LDFA/actions/workflows/android.yml)で
+そのcommitの成功した`main` runから`LDFA-v0.9.0-debug-apk` artifactを取得できます。修正前の
+runから取得したartifactは、今回の無音修正を含みません。Actions artifactには保存期限があります。
 
 実機検証完了後は、[GitHub Releases](https://github.com/hatake716/LDFA/releases)へv0.9.0プレリリースとしてAPKと検証情報を掲載する予定です。
 
@@ -129,7 +169,7 @@ X11 service、Unix socket、Binder、Android Surface、EGL renderer、XFCEを順
 3. viewer ActivityとBinder FD接続
 4. Android SurfaceとEGL renderer
 5. 成功したEGL presentationの増分
-6. XFCE sessionとwindow manager
+6. `xfsettingsd`、`xfwm4`、Panel、Desktopと実際のEWMHウィンドウ
 7. XFCE起動後の再描画
 
 画面だけを閉じた場合、同じ環境を再度開くと実行中セッションへ再接続します。環境カードの「停止」を押すと、viewer、X11 server、XFCE、PRootの順で停止します。
@@ -143,7 +183,21 @@ ChromeのDEBをAPKへ固定収録するのではなく、Debian構築時にguest
 
 インストール前にDEBのPackage fieldが`google-chrome-stable`であり、Architecture fieldがguestと一致することを検証します。Chromeが作成する署名済みAPT sourceは保持されるため、Debian側のAPTから更新できます。
 
-既存環境ではデスクトップ起動前に、Chrome本体、LDFA専用launcher、XFCE desktop entryを確認します。すべて揃っていればダウンロードは行いません。
+既存環境ではデスクトップ起動前に、Chrome本体、LDFA専用launcherの世代、XFCE desktop entryを確認します。Chrome本体が導入済みでもlauncherが古ければ、DEBを再取得せずに省メモリ版launcherへ更新します。
+
+専用launcherはWebコンテンツ用renderer processを最大2個に抑え、拡張機能とbackground modeを無効化し、glibc arena数を抑制します。Chrome UI用rendererはこの上限とは別です。1プロセス化やJavaScript heapの極端な固定上限は、Googleログインや一般サイトを壊す可能性があるため設定していません。
+
+Androidソフトウェアキーボード側では、内蔵X11 viewerの`InputConnection`が初期化途中のActivityを固定保持しないようにしています。Gboardのcomposition callbackごとに現在のActivityを取得するため、Googleログイン欄で入力を始めた瞬間のnull参照を回避します。
+
+キーボード表示中は、隠れた下端を描画時だけ切り取らず、X11の画面解像度を実際の可視領域へ一時的に合わせます。これにより一部のAndroid GPUで発生する「マウスポインタだけが残り、デスクトップが黒くなる」状態を避け、同時にキーボード表示中のframebuffer使用量も抑えます。既存インストールにも更新後の最初のviewer起動時に自動適用され、キーボードを閉じると元の解像度へ戻ります。
+
+Gmailなど別アプリから戻ったときにAndroidがviewerのSurfaceを作り直す場合は、既存のX11 root pixmap全体を明示的にdamageし、新しいSurfaceへ直ちに再描画します。X11上で次のウィンドウ更新が起きるまで黒いframeが残り、別レイヤーのマウスポインタだけが見える状態を防ぎます。
+
+メモリ圧迫でAndroidがmain processだけを回収し、専用`:x11` processやChromeが残った場合も、保存された世代だけを信用せず、service PID、Unix socket、X11 lock ownerがすべて一致することを確認してから実行中viewerへ再接続します。
+
+Androidはシステム全体をlow-memoryと判定していない場合でも、同一アプリUID配下のChromeやXFCEの子プロセスだけを個別終了することがあります。LDFAはPRootで不安定なICE lockを必要とする`xfce4-session`を常駐させず、`xfsettingsd`、`xfwm4`、Panel、Desktopを直接監視します。監視は定周期の`ps`や`xset`を生成しないBashのイベント待機で、いずれかが終了した時だけ4要素を再確認・再起動します。Chromeが異常終了していれば最後のセッションも自動復元します。
+
+viewer表示中の定期heartbeatは、既に確認済みのX11 serviceを軽量に監視するだけです。履歴や別アプリから戻った瞬間は、まずAndroidの`/proc`だけを読み、現在のDebianコンテナに属するsupervisor、その直接の子であるXFCE 4要素、Chromeの異常終了markerとbrowser本体を照合します。正常ならRunCommand、PRoot、診断shellを1個も追加せず、そのまま再表示します。欠落がある場合だけ、セッション内supervisorの復旧を最大3秒待つか、controllerによる厳密なウィンドウ検査・段階的復旧へ進みます。実際にAndroid processが終了した場合は、アプリ内ログの`Android process / memory`で`ApplicationExitInfo`の終了理由と同一UIDのRSS／swapを確認できます。
 
 Chrome本体と依存パッケージによる追加使用量はバージョンによって変わります。x86_64の動的検証では、Chrome packageの`Installed-Size`は約431 MiBでした。
 
@@ -238,6 +292,9 @@ sudo apt install <package>
 主なログ:
 
 ```text
+Android process / memory
+ApplicationExitInfoによる前回終了理由、同一UIDのRSS／swap集計
+
 Debian / XFCE
 ~/.local/share/linux-desktop-for-android/logs/<環境ID>.log
 
@@ -258,28 +315,31 @@ adb logcat -s LorieNative gles-renderer MainActivity
 
 ## 現在の検証状況
 
-2026-08-22時点のv0.9.0候補に対する結果です。
+2026-08-23時点のv0.9.0候補に対する結果です。
 
 | 検証項目 | 結果 |
 | --- | --- |
 | host controller static/integration gates | PASS |
 | clean Gradle build | PASS、377 tasks |
-| unit tests | 155 / 155 PASS |
+| unit tests | 全体 158 / 158 PASS（app 13 / 13） |
 | app / termux-runtime / embedded-x11 lint | PASS、error 0 |
 | `arm64-v8a` / `armeabi-v7a` / `x86` / `x86_64` build | PASS |
 | APK v2 signature | PASS、debug certificate |
 | APK zipalign 16 KB check | PASS |
 | arm64-v8a / x86_64 `.so` PT_LOAD alignment | 全対象`0x4000`以上 |
 | API 35 x86_64・4 KB AVDでDebian 12 clean install | PASS |
-| native X11、XFCE、Surface再作成、background復帰 | PASS |
+| native X11、XFCE、Surface再作成、background復帰 | 履歴画面から通常復帰後、約0.25秒でChrome／XFCE全体を再表示してPASS。従来の10回連続試験もPASS |
 | Fcitx5 + Mozc日本語確定 | PASS |
 | Android共有ストレージ往復 | PASS |
 | Google Chromeの起動とHTTPSページ描画 | PASS |
+| app-private PulseAudio Unix bridge | source／生成session／stateful controller／APK内assetの各gate PASS。旧TCP endpointと公開listenerは不在 |
+| Androidからの可聴音声 | **修正版APKで実機再確認待ち**。buildと`pactl`だけではspeaker／Bluetoothの実音を証明しない |
 | native failureからVNC `:2`へのfallback | PASS |
 | stop後のX11/XFCE/PRoot/socket cleanup | PASS |
-| 物理ARM64端末 | **受け入れテスト中** |
+| 物理ARM64端末のnative起動 | PASS |
+| Googleログイン + Androidソフトウェアキーボード | API 35 x86_64・4 GB RAM AVDでGboard表示、`test`のcomposition／候補確定、コンテンツrenderer上限2（UI用を含む総renderer 3）を確認。Gmailへ移動して戻る操作は10 / 10回黒画面なし。Pixel 10aではパスワード入力までPASS、本修正版でGmail本人確認後の復帰を再テスト予定 |
 | ARM64 16 KB page端末 | **未検証** |
-| “Don't keep activities”とlow-memory process recreation | **未完了** |
+| process個別終了からの復旧 | main processだけの再生成と既存`:x11`への再接続にPASS。さらに履歴表示中にChrome全プロセスとXFCE 4要素を同時終了する試験を3回実行し、必要要素は1.24〜2.03秒で再生成、約3〜4秒でChrome内容を自動復元し、永久黒画面なし。`ldfa-session` PIDは全回不変で二度目のsession再構築なし |
 
 APKの16 KB alignment成功は、Debian userlandとXFCEを含むARM64 16 KB実機E2Eの成功を意味しません。この二つは別の受け入れ条件です。
 
@@ -293,11 +353,17 @@ APKの16 KB alignment成功は、Debian userlandとXFCEを含むARM64 16 KB実�
 4. タッチ、スクロール、ソフトウェアキーボード、可能なら物理マウス／キーボードを確認する。
 5. Fcitx5 + Mozcで日本語を入力・確定する。
 6. Google Chromeを起動し、HTTPSページを表示する。
-7. `/mnt/android`でAndroidとのファイル往復を確認する。
-8. 縦横回転、Homeからの復帰、画面消灯復帰を確認する。
-9. 停止、再起動、画面の再表示を複数回行う。
-10. 停止後にデスクトップやChromeのプロセスが残らないことを確認する。
-11. 16 KB page端末の場合は、Debian loginとXFCE表示まで別途確認する。
+7. 既存環境へ更新した場合は一度停止→起動し、修復前の`audio_ready` metadata、host log、socket、module、非`auto_null` sink、guest接続をread-onlyで保存する。その後に`audio-probe`も確認するが、probeは修復とmetadata更新を行うためstartup成功の代用にはしない。
+8. Chromeの音声付き動画または既知のWAVを再生し、再生中にPulseAudioの`sink-input`が現れることを確認する。
+9. XFCE panelの音量項目からmute／unmuteと音量変更を確認する。
+10. Android本体speakerで実際に音を聞き、利用予定ならBluetooth／有線routeへの切替も確認する。
+11. stop→startを3回繰り返し、専用`module-native-protocol-unix`が重複しないことを確認する。
+12. Googleアカウントのログイン画面でAndroidソフトウェアキーボードを開き、入力・composition・確定を行う。本人確認のためGmailへ移動した後、履歴画面からLDFAへ戻り、プロセスが生存している通常復帰では1〜2秒以内にChrome／XFCE全体が再表示されることを複数回確認する。Androidが子プロセスを終了した場合も、マウスポインタだけの永久黒画面にならず自動復旧することを確認する。
+13. `/mnt/android`でAndroidとのファイル往復を確認する。
+14. 縦横回転、Homeからの復帰、画面消灯復帰を確認する。
+15. 停止、再起動、画面の再表示を複数回行う。
+16. 停止後にデスクトップやChromeのプロセスが残らないことを確認する。
+17. 16 KB page端末の場合は、Debian loginとXFCE表示まで別途確認する。
 
 問題が発生した場合は、端末機種、Androidバージョン、ABI、page size、操作手順、画面、LDFAログ、`adb logcat`を添えてください。
 
@@ -315,6 +381,10 @@ APKの16 KB alignment成功は、Debian userlandとXFCEを含むARM64 16 KB実�
 - Git submodules
 
 ### cloneと検証
+
+2026-08-23時点では音声修正は未pushです。次のclone手順は、音声修正commitが
+`main`へ公開された後に使用してください。それまでは本作業ツリーと上記SHA-256の
+ローカルAPKを使用します。
 
 ```bash
 git clone --recurse-submodules https://github.com/hatake716/LDFA.git

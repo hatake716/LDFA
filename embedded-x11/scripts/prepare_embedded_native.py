@@ -104,6 +104,12 @@ header = replace_once(
 )
 header = replace_once(
     header,
+    "    EVENT_GPU_COPY_DONE,\n    EVENT_LOCK_KEYS_STATE,\n",
+    "    EVENT_GPU_COPY_DONE,\n    EVENT_LOCK_KEYS_STATE,\n    EVENT_FULL_REDRAW,\n",
+    "full redraw event type",
+)
+header = replace_once(
+    header,
     '''        if (ret == ETIMEDOUT) {
             if (*lockingPid == getpid() || lorieConnectionAlive())
                 continue;
@@ -248,6 +254,12 @@ xkb_recipe.write_text(xkb_text, encoding="utf-8")
 cmd = cmd_source.read_text(encoding="utf-8")
 cmd = replace_once(
     cmd,
+    "#include <randrstr.h>\n",
+    "#include <randrstr.h>\n#include <pixmapstr.h>\n",
+    "root pixmap damage include",
+)
+cmd = replace_once(
+    cmd,
     """        cpu_set_t mask;
         long num_cpus = sysconf(_SC_NPROCESSORS_ONLN);
 """,
@@ -331,6 +343,35 @@ cmd = replace_once(
     "X connection error handler",
 )
 cmd = replace_once(cmd, "read(conn_fd, data, e.clipboardSend.count);", "read(fd, data, e.clipboardSend.count);", "clipboard fd read")
+cmd = replace_once(
+    cmd,
+    """            case EVENT_TOUCH: {
+""",
+    """            case EVENT_FULL_REDRAW:
+                QueueWorkProc(+[](__unused ClientPtr pClient, __unused void *closure) -> Bool {
+                    // A newly-created Android Surface can initially sample a stale
+                    // AHardwareBuffer texture even though the X root pixmap is intact.
+                    // Damage the complete root on the X-server thread so lorieRedraw()
+                    // performs its required unlock/lock cache synchronization and
+                    // presents the existing desktop without waiting for an X client.
+                    PixmapPtr root = pScreenPtr && pScreenPtr->root
+                        ? pScreenPtr->GetWindowPixmap(pScreenPtr->root)
+                        : nullptr;
+                    if (root && root->drawable.width > 0 && root->drawable.height > 0) {
+                        RegionRec region;
+                        PixmapRegionInit(&region, root);
+                        DamageDamageRegion(&root->drawable, &region);
+                        RegionUninit(&region);
+                        log(DEBUG, "LDFA: requested full root redraw after Surface resume");
+                    }
+                    return TRUE;
+                }, nullptr, nullptr);
+                lorieWakeServer();
+                break;
+            case EVENT_TOUCH: {
+""",
+    "full redraw event handler",
+)
 
 old_get_connection = """extern "C" JNIEXPORT jobject JNICALL
 Java_com_termux_x11_CmdEntryPoint_getXConnection(JNIEnv *env, __unused jobject cls) {
@@ -1463,6 +1504,18 @@ activity = replace_once(
             }},
 ''',
     "JNI connection fd ownership",
+)
+activity = replace_once(
+    activity,
+    '''            {"sendWindowChange", "(JIIILjava/lang/String;)V", (void *) +[](__unused JNIEnv* env, __unused jobject cls, jlong ptr, jint width, jint height, jint framerate, jstring jname) {
+''',
+    '''            {"requestFullRedraw", "(J)V", (void *) +[](__unused JNIEnv* env, __unused jobject thiz, jlong ptr) {
+                auto* r = (LorieViewResources*) ptr;
+                sendEvent(r, .type = EVENT_FULL_REDRAW);
+            }},
+            {"sendWindowChange", "(JIIILjava/lang/String;)V", (void *) +[](__unused JNIEnv* env, __unused jobject cls, jlong ptr, jint width, jint height, jint framerate, jstring jname) {
+''',
+    "full redraw JNI bridge",
 )
 activity = replace_once(
     activity,

@@ -127,6 +127,7 @@ class HostScriptCompatibilityTest {
         assertFalse(workerHeader.contains("write_meta \"${'$'}id\" display \"${'$'}DEFAULT_DISPLAY_NUMBER\""))
         assertTrue(normalized.contains("DISPLAY=\":${'$'}DISPLAY_NUMBER\""))
         assertTrue(normalized.contains("GTK_IM_MODULE=fcitx"))
+        assertTrue(normalized.contains("PULSE_SERVER=unix:/tmp/ldfa-pulse/native"))
         assertEquals(normalized, HostScriptCompatibility.normalize(normalized))
     }
 }

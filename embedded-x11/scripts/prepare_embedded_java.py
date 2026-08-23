@@ -4,7 +4,9 @@
 The upstream viewer uses @CriticalNative for methods whose registered C functions do
 not consistently use the critical-native ABI.  That is undefined on older Android
 releases and can crash as soon as the viewer receives focus.  LDFA also uses a direct
-Binder connection, so the upstream localhost:7892 reconnect path must not run.
+Binder connection, so the upstream localhost:7892 reconnect path must not run.  The
+embedded Activity is published only after initialization, so IME callbacks must never
+capture its singleton while LorieView itself is still being inflated.
 """
 
 from pathlib import Path
@@ -50,9 +52,44 @@ if "CriticalNative" in lorie or "FastNative" in lorie:
 lorie = replace_once(
     lorie,
     "    private long mNativeContext;\n",
-    "    private long mNativeContext;\n    private boolean mNativeShutdown;\n",
+    """    private long mNativeContext;
+    private boolean mNativeShutdown;
+    private final Runnable mDeferredFullRedraw = () -> {
+        long nativeContext = mNativeContext;
+        Surface surface = getHolder().getSurface();
+        if (!mNativeShutdown && nativeContext != 0 && isAttachedToWindow()
+                && surface != null && surface.isValid())
+            requestFullRedraw(nativeContext);
+    };
+""",
     "LorieView native ownership flag",
 )
+
+# MainActivity is intentionally published only after onCreate() has initialized the
+# view, input handler and direct Binder transport.  Upstream captures the singleton in
+# an anonymous InputConnection field while LorieView is inflated, permanently storing
+# null in that ordering.  Gboard calls replaceText() as soon as composition starts and
+# would then dereference the stale field.  Resolve the Activity at callback time and
+# tolerate the narrow startup/teardown windows where it is not published.
+lorie = replace_once(
+    lorie,
+    "        private final MainActivity a = MainActivity.getInstance();\n",
+    "",
+    "IME Activity capture",
+)
+lorie = replace_once(
+    lorie,
+    """            if (a.useTermuxEKBarBehaviour && a.mExtraKeys != null)
+                a.mExtraKeys.unsetSpecialKeys();
+""",
+    """            MainActivity activity = MainActivity.getInstance();
+            if (activity != null && activity.useTermuxEKBarBehaviour && activity.mExtraKeys != null)
+                activity.mExtraKeys.unsetSpecialKeys();
+""",
+    "IME callback Activity lookup",
+)
+if "private final MainActivity a = MainActivity.getInstance()" in lorie:
+    raise SystemExit("Termux:X11 IME still captures an unpublished MainActivity")
 
 # A SurfaceView can detach and later reattach without its Activity being recreated. The
 # SurfaceHolder callback already drops/reinstalls only the native Surface; destroying the
@@ -78,6 +115,7 @@ lorie = replace_once(
         if (mNativeShutdown)
             return;
         mNativeShutdown = true;
+        removeCallbacks(mDeferredFullRedraw);
         long nativeContext = mNativeContext;
         mNativeContext = 0;
         getHolder().removeCallback(mSurfaceCallback);
@@ -90,6 +128,50 @@ lorie = replace_once(
     }
 """,
     "LorieView attach/detach lifecycle",
+)
+lorie = replace_once(
+    lorie,
+    """            Log.d("SurfaceChangedListener", "Surface was changed: " + width + "x" + height);
+            updateViewport();
+""",
+    """            Log.d("SurfaceChangedListener", "Surface was changed: " + width + "x" + height);
+            updateViewport();
+            requestFullRedraw();
+""",
+    "Surface resume redraw",
+)
+lorie = replace_once(
+    lorie,
+    """    public void triggerCallback() {
+        requestFocus();
+        updateViewport();
+    }
+""",
+    """    public void triggerCallback() {
+        requestFocus();
+        updateViewport();
+    }
+
+    /** Re-presents the intact X root pixmap after Android replaces this Surface. */
+    public void requestFullRedraw() {
+        removeCallbacks(mDeferredFullRedraw);
+        mDeferredFullRedraw.run();
+        // EGL/Surface setup is asynchronous and can be delayed under Chrome/Gboard
+        // memory pressure. Retry only during the short resume window.
+        postDelayed(mDeferredFullRedraw, 120);
+        postDelayed(mDeferredFullRedraw, 400);
+    }
+""",
+    "public full redraw request",
+)
+lorie = replace_once(
+    lorie,
+    """    private native void surfaceChanged(long ptr, Surface surface);
+""",
+    """    private native void surfaceChanged(long ptr, Surface surface);
+    private native void requestFullRedraw(long ptr);
+""",
+    "full redraw native declaration",
 )
 lorie_path.write_text(lorie, encoding="utf-8")
 
@@ -167,6 +249,15 @@ activity = replace_once(
     "service field",
 )
 
+activity = replace_once(
+    activity,
+    "    public static Prefs prefs = null;\n",
+    """    public static Prefs prefs = null;
+    private static final String LDFA_IME_RESIZE_MIGRATION = "ldfaImeResizeV1";
+""",
+    "IME resize migration marker",
+)
+
 # Do not publish a half-constructed Activity to EmbeddedX11Display.  In particular,
 # getLorieView() is not valid until after setContentView and the rest of onCreate.
 activity = replace_once(
@@ -197,6 +288,17 @@ activity = replace_once(
         }
 
         prefs = new Prefs(this);
+        // Cropping only the rendered viewport while an IME covers the Surface can
+        // leave some Android GPU drivers presenting a black X11 frame.  Resize the
+        // X screen to the visible area instead.  The one-time marker upgrades
+        // existing installations while preserving the preference as an escape hatch.
+        if (!prefs.get().getBoolean(LDFA_IME_RESIZE_MIGRATION, false)) {
+            prefs.get().edit()
+                    .putBoolean("Reseed", true)
+                    .putBoolean(LDFA_IME_RESIZE_MIGRATION, true)
+                    .commit();
+            Log.i("MainActivity", "LDFA enabled IME-aware X11 resizing");
+        }
 """,
     "viewer launch generation guard",
 )
@@ -244,6 +346,17 @@ activity = replace_once(
         super.onDestroy();
 """,
     "activity teardown",
+)
+activity = replace_once(
+    activity,
+    """        setTerminalToolbarView();
+        getLorieView().requestFocus();
+""",
+    """        setTerminalToolbarView();
+        getLorieView().requestFocus();
+        getLorieView().requestFullRedraw();
+""",
+    "activity resume redraw",
 )
 activity = replace_once(
     activity,
@@ -449,6 +562,7 @@ new_connection = """    private void clearServiceConnection(IBinder expectedBind
                 }
                 finishStartupDraw();
                 view.triggerCallback();
+                view.requestFullRedraw();
                 clientConnectedStateChanged();
                 view.reloadPreferences(prefs);
             } else {

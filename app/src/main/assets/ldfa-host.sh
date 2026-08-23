@@ -15,6 +15,33 @@ CONTROLLER_LOCK_PID="$CONTROLLER_LOCK_DIR/pid"
 SHARED_ROOT="$HOME/storage/shared/LinuxDesktop"
 SELF="$BIN_DIR/ldfa-host"
 BOOTSTRAP_LOG="$LOG_ROOT/bootstrap.log"
+CHROME_LAUNCHER_MARKER="# LDFA_CHROME_LAUNCHER_VERSION=8"
+DESKTOP_RUNTIME_MARKER="# LDFA_SESSION_RUNTIME_VERSION=18"
+AUDIO_CLIENT_MARKER="# LDFA_AUDIO_CLIENT_VERSION=3"
+PULSE_BRIDGE_MARKER="# LDFA_PULSE_BRIDGE_VERSION=1"
+# The bridge socket directory must live OUTSIDE $PREFIX/tmp. proot-distro's
+# --shared-tmp binds the whole $PREFIX/tmp into every guest as /tmp, and proot's
+# per-session housekeeping (link2symlink/kill-on-exit teardown) races with, and
+# intermittently deletes, a socket directory that sits under $PREFIX/tmp — even
+# while the PulseAudio daemon keeps running. Keeping the socket in $PREFIX/var/run
+# and exposing it to the guest through an explicit --bind isolates it from that
+# churn, so the Debian client always finds a live socket.
+PULSE_HOST_DIR="$PREFIX/var/run/ldfa-pulse-bridge"
+# PulseAudio also defaults its own runtime dir to $TMPDIR/pulse-<machine-id>,
+# i.e. inside $PREFIX/tmp. Pin it outside the shared bind for the same reason and
+# so every pulseaudio/pactl invocation below agrees on one daemon.
+PULSE_RUNTIME_PATH="$PREFIX/var/run/ldfa-pulse-rt"
+export PULSE_RUNTIME_PATH
+PULSE_HOST_SOCKET="$PULSE_HOST_DIR/native"
+PULSE_HOST_SERVER="unix:$PULSE_HOST_SOCKET"
+# Guest-visible path is unchanged (clients and the desktop session still use
+# unix:/tmp/ldfa-pulse/native); the explicit bind below maps the host bridge dir
+# onto it independently of --shared-tmp.
+PULSE_GUEST_DIR="/tmp/ldfa-pulse"
+PULSE_GUEST_SERVER="unix:$PULSE_GUEST_DIR/native"
+PULSE_GUEST_BIND="$PULSE_HOST_DIR:$PULSE_GUEST_DIR"
+PULSE_CONFIG_DROP_IN="$PREFIX/etc/pulse/default.pa.d/ldfa-audio.pa"
+PULSE_DAEMON_DROP_IN="$PREFIX/etc/pulse/daemon.conf.d/99-ldfa-noshm.conf"
 DEFAULT_DISPLAY_NUMBER=1
 DISPLAY_NUMBER="${LDFA_DISPLAY_NUMBER:-$DEFAULT_DISPLAY_NUMBER}"
 X11_SOCKET="$PREFIX/tmp/.X11-unix/X${DISPLAY_NUMBER}"
@@ -157,12 +184,820 @@ retry_command() {
     return "$rc"
 }
 
+pulse_module_loaded() {
+    local wanted="$1" index="" name="" arguments="" modules=""
+    modules="$(env -u PULSE_SERVER timeout 1s pactl list short modules 2>/dev/null)" || \
+        return 2
+    while read -r index name arguments; do
+        [[ "$name" == "$wanted" ]] && return 0
+    done <<< "$modules"
+    return 1
+}
+
+pulse_bridge_module_indexes() {
+    local index="" name="" arguments="" modules=""
+    modules="$(env -u PULSE_SERVER timeout 1s pactl list short modules 2>/dev/null)" || \
+        return 2
+    while read -r index name arguments; do
+        [[ "$name" == module-native-protocol-unix ]] || continue
+        [[ "$arguments" == *"socket=$PULSE_HOST_SOCKET"* ]] || continue
+        [[ "$index" =~ ^[0-9]+$ ]] && printf '%s\n' "$index"
+    done <<< "$modules"
+    return 0
+}
+
+pulse_real_sink() {
+    local index="" name="" rest="" sinks=""
+    sinks="$(
+        PULSE_SERVER="$PULSE_HOST_SERVER" timeout 1s pactl list short sinks 2>/dev/null
+    )" || return 2
+    while read -r index name rest; do
+        [[ -n "$name" && "$name" != auto_null ]] || continue
+        printf '%s' "$name"
+        return 0
+    done <<< "$sinks"
+    return 1
+}
+
+ensure_audio_bridge_config() {
+    local config daemon_config
+    mkdir -p "$PULSE_HOST_DIR" "$PULSE_RUNTIME_PATH" \
+        "$(dirname "$PULSE_CONFIG_DROP_IN")" \
+        "$(dirname "$PULSE_DAEMON_DROP_IN")"
+    chmod 700 "$PULSE_HOST_DIR" "$PULSE_RUNTIME_PATH"
+    config="$PULSE_BRIDGE_MARKER
+load-module module-native-protocol-unix socket=$PULSE_HOST_SOCKET auth-anonymous=1
+"
+    if [[ ! -f "$PULSE_CONFIG_DROP_IN" ]] || \
+        [[ "$(cat "$PULSE_CONFIG_DROP_IN" 2>/dev/null || true)"$'\n' != "$config" ]]; then
+        write_file "$PULSE_CONFIG_DROP_IN" "$config"
+    fi
+
+    # PRoot cannot pass SHM/memfd descriptors across the guest boundary, so the
+    # app-owned daemon must never negotiate shared-memory transport with a Debian
+    # client. pulseaudio honours a daemon.conf.d drop-in, which holds even when
+    # "pulseaudio --start" re-execs the daemon without our command-line flags.
+    daemon_config="$PULSE_BRIDGE_MARKER
+enable-shm = no
+enable-memfd = no
+"
+    if [[ ! -f "$PULSE_DAEMON_DROP_IN" ]] || \
+        [[ "$(cat "$PULSE_DAEMON_DROP_IN" 2>/dev/null || true)"$'\n' != "$daemon_config" ]]; then
+        write_file "$PULSE_DAEMON_DROP_IN" "$daemon_config"
+    fi
+}
+
+pulse_process_state() {
+    local rc=0
+    timeout 1s pgrep -x pulseaudio >/dev/null 2>&1 || rc=$?
+    case "$rc" in
+        0) printf 'present' ;;
+        1) printf 'absent' ;;
+        *)
+            printf '[%s] PulseAudio process state is indeterminate: pgrep exit=%s\n' \
+                "$(date -Iseconds)" "$rc" >&2
+            return 2
+            ;;
+    esac
+}
+
+start_or_recover_pulseaudio() {
+    local deadline="${1:-$((SECONDS + 12))}" attempt process_state=""
+
+    # Reuse a healthy daemon before asking PulseAudio to start. TermuxService can
+    # clear $PREFIX/tmp while an old daemon survives; starting first in that state
+    # races a second daemon against the stale process and still does not recreate
+    # its native control socket.
+    env -u PULSE_SERVER timeout 1s pactl info >/dev/null 2>&1 && return 0
+    (( SECONDS < deadline )) || return 1
+
+    process_state="$(pulse_process_state)" || return 1
+    (( SECONDS < deadline )) || return 1
+    if [[ "$process_state" == present ]]; then
+        printf '[%s] PulseAudio control socket is stale; restarting the app-owned daemon\n' \
+            "$(date -Iseconds)" >&2
+        if ! env -u PULSE_SERVER timeout 1s pulseaudio --kill >/dev/null 2>&1; then
+            timeout 1s pkill -TERM -x pulseaudio >/dev/null 2>&1 || true
+        fi
+        for attempt in $(seq 1 10); do
+            process_state="$(pulse_process_state)" || return 1
+            [[ "$process_state" == absent ]] && break
+            (( SECONDS < deadline )) || return 1
+            sleep 0.1
+        done
+        process_state="$(pulse_process_state)" || return 1
+        (( SECONDS < deadline )) || return 1
+        if [[ "$process_state" == present ]]; then
+            timeout 1s pkill -KILL -x pulseaudio >/dev/null 2>&1 || true
+            for attempt in $(seq 1 5); do
+                process_state="$(pulse_process_state)" || return 1
+                [[ "$process_state" == absent ]] && break
+                (( SECONDS < deadline )) || return 1
+                sleep 0.1
+            done
+        fi
+        process_state="$(pulse_process_state)" || return 1
+        [[ "$process_state" == absent ]] || return 1
+    fi
+
+    (( SECONDS < deadline )) || return 1
+    rm -f "$PULSE_HOST_SOCKET"
+    # PRoot's syscall emulation cannot pass SHM/memfd file descriptors across the
+    # guest boundary. When the daemon offers shared-memory transport, a Debian
+    # client authenticates over the Unix socket but its playback stream dies during
+    # the SHM/srbchannel handshake ("Connection died"), so the Android sink never
+    # leaves IDLE and no sound is heard. The client-side drop-in refuses SHM, and
+    # ensure_audio_bridge_config also disables it daemon-side via daemon.conf.d so
+    # the fallback to plain socket transport holds even if pulseaudio --start
+    # re-execs the daemon without inheriting a command-line flag.
+    env -u PULSE_SERVER timeout 2s pulseaudio --start --exit-idle-time=-1 || return 1
+    for attempt in 1 2 3; do
+        env -u PULSE_SERVER timeout 1s pactl info >/dev/null 2>&1 && return 0
+        (( SECONDS < deadline )) || return 1
+        sleep 0.1
+    done
+    return 1
+}
+
+ensure_audio_bridge() {
+    local attempt bridge_ready=0 module_index="" sink="" query_status=0
+    local bridge_module_output="" deadline=$((SECONDS + 12))
+    local -a bridge_indexes=()
+    has pulseaudio || { printf '[%s] PulseAudio server command is missing\n' "$(date -Iseconds)" >&2; return 1; }
+    has pactl || { printf '[%s] PulseAudio control command is missing\n' "$(date -Iseconds)" >&2; return 1; }
+
+    ensure_audio_bridge_config
+    if ! start_or_recover_pulseaudio "$deadline"; then
+        printf '[%s] PulseAudio daemon did not start\n' "$(date -Iseconds)" >&2
+        return 1
+    fi
+
+    (( SECONDS < deadline )) || return 1
+    if ! bridge_module_output="$(pulse_bridge_module_indexes)"; then
+        printf '[%s] PulseAudio module inventory is unavailable; refusing bridge mutation\n' \
+            "$(date -Iseconds)" >&2
+        return 1
+    fi
+    if [[ -n "$bridge_module_output" ]]; then
+        mapfile -t bridge_indexes <<< "$bridge_module_output"
+    fi
+    if [[ "${#bridge_indexes[@]}" == 1 ]] && [[ -S "$PULSE_HOST_SOCKET" ]] && \
+        PULSE_SERVER="$PULSE_HOST_SERVER" timeout 1s pactl info >/dev/null 2>&1; then
+        bridge_ready=1
+    fi
+    if [[ "$bridge_ready" != 1 ]]; then
+        for module_index in "${bridge_indexes[@]}"; do
+            (( SECONDS < deadline )) || return 1
+            if ! env -u PULSE_SERVER timeout 1s pactl unload-module "$module_index" \
+                >/dev/null 2>&1; then
+                printf '[%s] PulseAudio bridge module %s could not be unloaded; refusing replacement\n' \
+                    "$(date -Iseconds)" "$module_index" >&2
+                return 1
+            fi
+        done
+        rm -f "$PULSE_HOST_SOCKET"
+        module_index="$(
+            env -u PULSE_SERVER timeout 2s pactl load-module module-native-protocol-unix \
+                "socket=$PULSE_HOST_SOCKET" auth-anonymous=1 2>/dev/null || true
+        )"
+        [[ "$module_index" =~ ^[0-9]+$ ]] || \
+            printf '[%s] dedicated PulseAudio Unix module was not loaded directly; probing config result\n' \
+                "$(date -Iseconds)" >&2
+    fi
+
+    for attempt in 1 2; do
+        if [[ -S "$PULSE_HOST_SOCKET" ]] && \
+            PULSE_SERVER="$PULSE_HOST_SERVER" timeout 1s pactl info >/dev/null 2>&1; then
+            bridge_ready=1
+            break
+        fi
+        (( SECONDS < deadline )) || return 1
+        sleep 0.1
+    done
+    [[ "$bridge_ready" == 1 ]] || {
+        printf '[%s] dedicated PulseAudio Unix socket is unavailable: %s\n' \
+            "$(date -Iseconds)" "$PULSE_HOST_SOCKET" >&2
+        return 1
+    }
+
+    (( SECONDS < deadline )) || return 1
+    if sink="$(pulse_real_sink)"; then
+        :
+    else
+        query_status=$?
+        [[ "$query_status" == 1 ]] || return 1
+        sink=""
+    fi
+    if [[ -z "$sink" ]]; then
+        if pulse_module_loaded module-aaudio-sink; then
+            :
+        else
+            query_status=$?
+            [[ "$query_status" == 1 ]] || return 1
+            (( SECONDS < deadline )) || return 1
+            env -u PULSE_SERVER timeout 2s pactl load-module module-aaudio-sink \
+                >/dev/null 2>&1 || true
+            if sink="$(pulse_real_sink)"; then
+                :
+            else
+                query_status=$?
+                [[ "$query_status" == 1 ]] || return 1
+                sink=""
+            fi
+        fi
+    fi
+    if [[ -z "$sink" ]]; then
+        if pulse_module_loaded module-sles-sink; then
+            :
+        else
+            query_status=$?
+            [[ "$query_status" == 1 ]] || return 1
+            (( SECONDS < deadline )) || return 1
+            env -u PULSE_SERVER timeout 2s pactl load-module module-sles-sink \
+                >/dev/null 2>&1 || true
+            if sink="$(pulse_real_sink)"; then
+                :
+            else
+                query_status=$?
+                [[ "$query_status" == 1 ]] || return 1
+                sink=""
+            fi
+        fi
+    fi
+    [[ -n "$sink" ]] || {
+        printf '[%s] PulseAudio is running but Android audio sink is unavailable\n' \
+            "$(date -Iseconds)" >&2
+        return 1
+    }
+    PULSE_SERVER="$PULSE_HOST_SERVER" timeout 1s pactl set-default-sink "$sink" \
+        >/dev/null 2>&1 || true
+    printf '[%s] PulseAudio bridge ready: server=%s sink=%s\n' \
+        "$(date -Iseconds)" "$PULSE_GUEST_SERVER" "$sink"
+}
+
+guest_audio_ready() {
+    local id="$1" attempt
+    # A freshly started daemon can still be binding its dedicated socket and
+    # loading the Unix module when the first guest login lands, so a single probe
+    # races cold start and reports a false negative. Retry a few times; each PRoot
+    # login already takes ~1-2s, which also paces the daemon settling window.
+    for attempt in 1 2 3; do
+        if timeout 6s proot-distro login "$id" --shared-tmp \
+            --bind "$PULSE_GUEST_BIND" --user desktop -- \
+            /bin/bash -c '
+                test -S /tmp/ldfa-pulse/native || exit 1
+                if command -v pactl >/dev/null 2>&1; then
+                    PULSE_SERVER=unix:/tmp/ldfa-pulse/native pactl info >/dev/null 2>&1
+                else
+                    grep -Fq "default-server = unix:/tmp/ldfa-pulse/native" \
+                        /etc/pulse/client.conf.d/99-ldfa.conf
+                fi
+            ' >/dev/null 2>&1; then
+            return 0
+        fi
+        (( attempt < 3 )) && sleep 0.5
+    done
+    return 1
+}
+
+desktop_session_script() {
+    cat <<'SESSION'
+#!/bin/bash
+# LDFA_SESSION_RUNTIME_VERSION=18
+# Hardened LDFA Session Script
+set -Eeuo pipefail
+
+# Clear environment inherited from Android/Termux before entering the desktop.
+unset LD_PRELOAD
+unset LD_LIBRARY_PATH
+unset SESSION_MANAGER
+
+export LANG=ja_JP.UTF-8
+export LANGUAGE=ja_JP:ja
+export LC_ALL=ja_JP.UTF-8
+export DISPLAY="${DISPLAY:-:1}"
+export XDG_SESSION_TYPE=x11
+export XDG_SESSION_DESKTOP=xfce
+export XDG_CURRENT_DESKTOP=XFCE
+export DESKTOP_SESSION=xfce
+export GDK_BACKEND=x11
+export QT_QPA_PLATFORM=xcb
+export GTK_IM_MODULE=fcitx
+export QT_IM_MODULE=fcitx
+export XMODIFIERS=@im=fcitx
+export PULSE_SERVER=unix:/tmp/ldfa-pulse/native
+
+# PRoot has no usable MIT-SHM and Pixel GPUs are not directly exposed to Debian.
+export _MITSHM=0
+export QT_X11_NO_MITSHM=1
+export GDK_RENDERING=image
+export LIBGL_ALWAYS_SOFTWARE=1
+export GALLIUM_DRIVER=llvmpipe
+
+export G_SLICE=always-malloc
+export MALLOC_CHECK_=0
+export NO_AT_BRIDGE=1
+
+export XDG_RUNTIME_DIR="/tmp/runtime-desktop"
+mkdir -p \
+    "$XDG_RUNTIME_DIR" \
+    "$HOME/Desktop" \
+    "$HOME/.cache/sessions" \
+    "$HOME/.config" \
+    "${XDG_STATE_HOME:-$HOME/.local/state}/ldfa"
+chmod 700 "$XDG_RUNTIME_DIR"
+
+# Do not restore a killed XFCE session. Chrome has its own bounded crash restore.
+rm -f "$HOME/.cache/sessions"/xfce4-session-* 2>/dev/null || true
+
+DBUS_PID_FILE="$XDG_RUNTIME_DIR/dbus.pid"
+DBUS_SOCK="$XDG_RUNTIME_DIR/bus"
+DBUS_ADDRESS_FILE="$XDG_RUNTIME_DIR/dbus_address"
+if [[ -f "$DBUS_PID_FILE" ]]; then
+    dbus_pid="$(cat "$DBUS_PID_FILE" 2>/dev/null || true)"
+    dbus_name=""
+    if [[ "$dbus_pid" =~ ^[0-9]+$ ]] && [[ -r "/proc/$dbus_pid/comm" ]]; then
+        dbus_name="$(cat "/proc/$dbus_pid/comm" 2>/dev/null || true)"
+    fi
+    if [[ ! "$dbus_pid" =~ ^[0-9]+$ ]] || \
+        ! kill -0 "$dbus_pid" 2>/dev/null || \
+        [[ "$dbus_name" != dbus-daemon ]] || \
+        [[ ! -S "$DBUS_SOCK" ]] || \
+        [[ ! -s "$DBUS_ADDRESS_FILE" ]]; then
+        rm -f "$DBUS_PID_FILE" "$DBUS_SOCK" "$DBUS_ADDRESS_FILE"
+    fi
+fi
+
+if [[ ! -f "$DBUS_PID_FILE" ]]; then
+    dbus-daemon --session --fork --print-address 5 --print-pid 6 \
+        --address="unix:path=$DBUS_SOCK" \
+        5> "$DBUS_ADDRESS_FILE" 6> "$DBUS_PID_FILE"
+    sleep 0.5
+fi
+export DBUS_SESSION_BUS_ADDRESS="$(cat "$DBUS_ADDRESS_FILE")"
+
+# xfce4-session depends on ICE hard-link locking, which PRoot cannot provide.
+# Starting the XFCE components directly avoids its repeated 8-second auth
+# retries and omits desktop-only daemons that compete with Chrome for Android's
+# child-process budget. Preserve the user's complete panel file before removing
+# only plugins that are non-functional inside LDFA. Debian Bookworm assigns
+# plugin 8 to PulseAudio, so keep it available for volume and mute control.
+PANEL_CONFIG_DIR="$HOME/.config/xfce4/xfconf/xfce-perchannel-xml"
+PANEL_CONFIG="$PANEL_CONFIG_DIR/xfce4-panel.xml"
+PANEL_MOBILE_V1_MARKER="${XDG_STATE_HOME:-$HOME/.local/state}/ldfa/panel-mobile-v1"
+PANEL_MOBILE_MARKER="${XDG_STATE_HOME:-$HOME/.local/state}/ldfa/panel-mobile-v2"
+mkdir -p "$PANEL_CONFIG_DIR"
+if [[ ! -f "$PANEL_CONFIG" ]] && [[ -f /etc/xdg/xfce4/panel/default.xml ]]; then
+    cp /etc/xdg/xfce4/panel/default.xml "$PANEL_CONFIG"
+fi
+if [[ -f "$PANEL_CONFIG" ]] && [[ ! -f "$PANEL_MOBILE_MARKER" ]]; then
+    plugin_id=""
+    plugin_name=""
+    if [[ ! -f "$PANEL_MOBILE_V1_MARKER" ]]; then
+        if [[ ! -f "$PANEL_CONFIG.ldfa-before-mobile-optimization" ]]; then
+            cp -p "$PANEL_CONFIG" "$PANEL_CONFIG.ldfa-before-mobile-optimization"
+        fi
+        for plugin_spec in \
+            '9:power-manager-plugin' \
+            '10:notification-plugin' \
+            '14:actions'; do
+            plugin_id="${plugin_spec%%:*}"
+            plugin_name="${plugin_spec#*:}"
+            if grep -Fq \
+                "<property name=\"plugin-$plugin_id\" type=\"string\" value=\"$plugin_name\"" \
+                "$PANEL_CONFIG"; then
+                sed -i -E "/<value type=\"int\" value=\"$plugin_id\"\/>/d" "$PANEL_CONFIG"
+            fi
+        done
+    fi
+
+    # v1 accidentally removed plugin 8 from panel-1. Restore only the exact
+    # Bookworm PulseAudio definition, and only when that panel does not already
+    # contain the ID; never rewrite the user's whole panel configuration.
+    if grep -Fq '<property name="plugin-8" type="string" value="pulseaudio"' \
+        "$PANEL_CONFIG" && ! awk '
+            /<property name="panel-1" type="empty">/ { in_panel = 1 }
+            in_panel && /<property name="plugin-ids" type="array">/ { in_ids = 1 }
+            in_ids && /<value type="int" value="8"\/>/ { found = 1 }
+            in_ids && /<\/property>/ { exit }
+            END { exit(found ? 0 : 1) }
+        ' "$PANEL_CONFIG"; then
+        panel_temporary="$PANEL_CONFIG.ldfa-audio.$$"
+        if awk '
+            /<property name="panel-1" type="empty">/ { in_panel = 1 }
+            in_panel && /<property name="plugin-ids" type="array">/ { in_ids = 1 }
+            in_ids && /<value type="int"/ && indent == "" {
+                match($0, /^[[:space:]]*/)
+                indent = substr($0, RSTART, RLENGTH)
+            }
+            in_ids && /<\/property>/ && ! inserted {
+                if (indent == "") indent = "        "
+                print indent "<value type=\"int\" value=\"8\"/>"
+                inserted = 1
+                in_ids = 0
+            }
+            { print }
+            END { exit(inserted ? 0 : 1) }
+        ' "$PANEL_CONFIG" > "$panel_temporary"; then
+            mv -f "$panel_temporary" "$PANEL_CONFIG"
+        else
+            rm -f "$panel_temporary"
+        fi
+    fi
+    : > "$PANEL_MOBILE_MARKER"
+fi
+
+setxkbmap -layout jp >/dev/null 2>&1 || true
+xfconf-query -c xsettings -p /Net/ThemeName -s Adwaita 2>/dev/null || true
+xfconf-query -c xfwm4 -p /general/use_compositing -s false 2>/dev/null || true
+xfconf-query -c xfwm4 -p /general/sync_to_vblank -s false 2>/dev/null || true
+fcitx5 -d --replace >/dev/null 2>&1 || true
+
+chrome_running() {
+    pgrep -x chrome >/dev/null 2>&1 || \
+        pgrep -x google-chrome >/dev/null 2>&1 || \
+        pgrep -x google-chrome-stable >/dev/null 2>&1
+}
+
+visible_xfce_client() {
+    local wanted="$1" window
+    for window in $(
+        xprop -root _NET_CLIENT_LIST 2>/dev/null |
+            grep -oE '0x[[:xdigit:]]+' || true
+    ); do
+        if xprop -id "$window" WM_CLASS 2>/dev/null | grep -Fqi "$wanted" && \
+            LC_ALL=C xwininfo -id "$window" 2>/dev/null | \
+                grep -Fq 'Map State: IsViewable'; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Verify both sides of EWMH's supporting-WM handshake. The root property can
+# briefly retain the dead xfwm4 window ID after Android trims that process, so
+# checking the referenced window prevents us from treating stale X11 state as
+# a newly usable window manager.
+wm_ready() {
+    local root_property wm_property wm_window
+    root_property="$(xprop -root _NET_SUPPORTING_WM_CHECK 2>/dev/null)" || return 1
+    [[ "$root_property" =~ 0x[[:xdigit:]]+ ]] || return 1
+    wm_window="${BASH_REMATCH[0]}"
+    wm_property="$(
+        xprop -id "$wm_window" _NET_SUPPORTING_WM_CHECK 2>/dev/null
+    )" || return 1
+    [[ "${wm_property,,}" == *"${wm_window,,}"* ]]
+}
+
+# The launcher leaves this marker only while Chrome is running or after an
+# abnormal process-group kill. Restore as soon as the replacement WM is real;
+# waiting for the panel and wallpaper to map needlessly leaves Chrome a full
+# second behind XFCE. Full desktop health checks remain stricter below.
+restore_chrome_after_wm_ready() {
+    local marker="${XDG_STATE_HOME:-$HOME/.local/state}/ldfa/chrome-running" attempt
+    [[ -f "$marker" ]] || return 0
+    for attempt in $(seq 1 60); do
+        # wm_ready performs a live X11 round trip and validates the referenced
+        # xfwm4 window. Running xset and pgrep as well only creates extra
+        # Android-visible children while the device is already under pressure.
+        if wm_ready; then
+            if ! chrome_running; then
+                printf '[%s] restoring Google Chrome after interrupted desktop session\n' \
+                    "$(date -Iseconds)"
+                /usr/local/bin/google-chrome-ldfa \
+                    --restore-last-session \
+                    --disable-session-crashed-bubble \
+                    >"$XDG_RUNTIME_DIR/chrome-restore.log" 2>&1 &
+            fi
+            return 0
+        fi
+        sleep 0.25
+    done
+}
+
+COMPONENT_LOG="$XDG_RUNTIME_DIR/xfce-components.log"
+: > "$COMPONENT_LOG"
+
+# Clean only volatile desktop components from a partially killed generation.
+# User applications and the persistent Chrome profile are not touched here.
+for component in xfce4-session xfwm4 xfsettingsd xfce4-panel xfdesktop Thunar xfce4-notifyd; do
+    pkill -TERM -x "$component" >/dev/null 2>&1 || true
+done
+sleep 0.25
+
+launch_settings() {
+    xfsettingsd --disable-wm-check --replace >>"$COMPONENT_LOG" 2>&1 &
+    settings_pid=$!
+    printf '%s\n' "$settings_pid" > "$XDG_RUNTIME_DIR/xfsettingsd.pid"
+}
+
+launch_wm() {
+    xfwm4 --compositor=off --replace >>"$COMPONENT_LOG" 2>&1 &
+    wm_pid=$!
+}
+
+launch_panel() {
+    xfce4-panel --disable-wm-check >>"$COMPONENT_LOG" 2>&1 &
+    panel_pid=$!
+}
+
+launch_desktop() {
+    xfdesktop --disable-wm-check >>"$COMPONENT_LOG" 2>&1 &
+    desktop_pid=$!
+}
+
+pid_is_live() {
+    local pid="${1:-}"
+    [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+    kill -0 "$pid" 2>/dev/null || return 1
+}
+
+component_pid_running() {
+    local pid="${1:-}" stat_pid="" comm="" state="" parent_pid=""
+    [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+    [[ -r "/proc/$pid/stat" ]] || return 1
+    IFS=' ' read -r stat_pid comm state parent_pid _ < "/proc/$pid/stat" || return 1
+    [[ "$stat_pid" == "$pid" ]] && [[ "$state" != Z ]] && [[ "$parent_pid" == "$$" ]]
+}
+
+wait_for_wm() {
+    local attempt
+    for attempt in $(seq 1 30); do
+        if wm_ready; then
+            return 0
+        fi
+        sleep 0.1
+    done
+    return 1
+}
+
+launch_settings
+launch_wm
+launch_panel
+launch_desktop
+wait_for_wm || {
+    printf '[%s] xfwm4 did not publish a root window manager\n' "$(date -Iseconds)" >&2
+    exit 71
+}
+
+CHROME_RESTORE_REQUEST="${XDG_STATE_HOME:-$HOME/.local/state}/ldfa/chrome-restore-request"
+if [[ -f "${XDG_STATE_HOME:-$HOME/.local/state}/ldfa/chrome-running" ]]; then
+    : > "$CHROME_RESTORE_REQUEST"
+fi
+
+# Do not poll with xset, ps, cat or sleep: every external command becomes an
+# Android-visible child under PRoot. Bash 5's wait -n blocks on child exit
+# events and wakes immediately when Android trims any component. Do not pass
+# the remembered component PIDs to wait: one wait -n can reap several jobs
+# while reporting only one of them, and a later call with those stale PIDs can
+# otherwise block forever on the sole surviving child.
+restore_helper_pid=""
+failure_window_started=$SECONDS
+failure_count=0
+
+# An interrupted Chrome from the previous Android process generation must also
+# be restored on an otherwise healthy, freshly launched XFCE session.
+if [[ -f "$CHROME_RESTORE_REQUEST" ]]; then
+    rm -f "$CHROME_RESTORE_REQUEST"
+    restore_chrome_after_wm_ready &
+    restore_helper_pid=$!
+fi
+
+while true; do
+    exited_component_pid=""
+    wait -n -p exited_component_pid || true
+
+    # Android can deliver a batch of SIGKILLs a few milliseconds apart. Let
+    # that burst settle before sampling all four direct children so the first
+    # notification cannot race the remaining deaths. This one-shot sleep runs
+    # only after a child exits; there is no steady-state polling process.
+    sleep 0.05
+    recovery_timestamp="$(date -Iseconds)"
+
+    # Several children can be SIGKILLed in one Android trim pass while wait -n
+    # reports only one PID. Read procfs with Bash builtins: a surviving direct
+    # child must still have this shell as PPID and must not be a zombie. This is
+    # reliable for both one-process and all-process trims and spawns no checker.
+
+    recovered_component=0
+    recovered_wm=0
+
+    if ! component_pid_running "$settings_pid"; then
+        printf '[%s] restarting xfsettingsd\n' "$recovery_timestamp"
+        launch_settings
+        recovered_component=1
+    fi
+    if ! component_pid_running "$wm_pid"; then
+        printf '[%s] restarting xfwm4\n' "$recovery_timestamp"
+        launch_wm
+        recovered_wm=1
+        recovered_component=1
+    fi
+    if ! component_pid_running "$panel_pid"; then
+        printf '[%s] restarting xfce4-panel\n' "$recovery_timestamp"
+        launch_panel
+        recovered_component=1
+    fi
+    if ! component_pid_running "$desktop_pid"; then
+        printf '[%s] restarting xfdesktop\n' "$recovery_timestamp"
+        launch_desktop
+        recovered_component=1
+    fi
+
+    # A completed Chrome restore helper also wakes the no-argument wait -n.
+    # Count only actual XFCE replacements toward the crash-loop threshold.
+    if [[ "$recovered_component" == 1 ]]; then
+        if (( SECONDS - failure_window_started > 5 )); then
+            failure_window_started=$SECONDS
+            failure_count=0
+        fi
+        failure_count=$((failure_count + 1))
+        if (( failure_count >= 12 )); then
+            printf '[%s] XFCE components repeatedly exited; leaving component supervisor\n' \
+                "$recovery_timestamp" >&2
+            exit 72
+        fi
+        if [[ -f "${XDG_STATE_HOME:-$HOME/.local/state}/ldfa/chrome-running" ]]; then
+            : > "$CHROME_RESTORE_REQUEST"
+        fi
+    fi
+    if [[ -f "$CHROME_RESTORE_REQUEST" ]]; then
+        rm -f "$CHROME_RESTORE_REQUEST"
+        if ! pid_is_live "$restore_helper_pid"; then
+            restore_chrome_after_wm_ready &
+            restore_helper_pid=$!
+        fi
+    fi
+    # Panel, desktop and Chrome all use WM-independent startup paths. Let them
+    # initialize in parallel with the replacement xfwm4, then validate the WM;
+    # serializing these launches added almost a second to visible recovery.
+    if [[ "$recovered_wm" == 1 ]]; then
+        wait_for_wm || true
+    fi
+done
+SESSION
+}
+
+desktop_runtime_ready() {
+    local id="$1"
+    timeout 4s proot-distro login "$id" -- /bin/bash -c \
+        'test -x /usr/local/bin/ldfa-session && grep -Fqx "$1" /usr/local/bin/ldfa-session' \
+        _ "$DESKTOP_RUNTIME_MARKER" \
+        >/dev/null 2>&1
+}
+
+ensure_desktop_runtime() {
+    local id="$1"
+    validate_id "$id"
+    desktop_runtime_ready "$id" && return 0
+
+    unset PROOT_NO_SECCOMP
+    desktop_session_script | proot-distro login "$id" -- /bin/bash -c '
+        set -Eeuo pipefail
+        install -d -m 0755 /usr/local/bin
+        temporary="/usr/local/bin/.ldfa-session.$$"
+        trap '\''rm -f "$temporary"'\'' EXIT HUP INT TERM
+        cat > "$temporary"
+        chmod 0755 "$temporary"
+        mv -f "$temporary" /usr/local/bin/ldfa-session
+        trap - EXIT HUP INT TERM
+    '
+}
+
+audio_client_ready() {
+    local id="$1"
+    # dpkg-query with -f="${Status}\n" leaves the \n literal when this string is
+    # passed through the nested proot/bash -c layers, which produced empty output
+    # and made this check always fail (forcing a needless apt run every start).
+    # Query each package individually with no newline in the format instead.
+    timeout 8s proot-distro login "$id" -- /bin/bash -c \
+        'for package in pulseaudio-utils libasound2-plugins; do
+             [ "$(dpkg-query -W -f='"'"'${Status}'"'"' "$package" 2>/dev/null)" = \
+                 "install ok installed" ] || exit 1
+         done
+         test -f /etc/pulse/client.conf.d/99-ldfa.conf &&
+         grep -Fqx "$1" /etc/pulse/client.conf.d/99-ldfa.conf &&
+         grep -Fq "default-server = unix:/tmp/ldfa-pulse/native" \
+             /etc/pulse/client.conf.d/99-ldfa.conf &&
+         test -f /etc/alsa/conf.d/99-ldfa-pulse.conf &&
+         grep -Fqx "$1" /etc/alsa/conf.d/99-ldfa-pulse.conf &&
+         grep -Fq "type pulse" /etc/alsa/conf.d/99-ldfa-pulse.conf' \
+        _ "$AUDIO_CLIENT_MARKER" \
+        >/dev/null 2>&1
+}
+
+ensure_audio_client() {
+    local id="$1"
+    validate_id "$id"
+    if audio_client_ready "$id"; then
+        say "Debian音声クライアントは設定済みです。"
+        return 0
+    fi
+
+    unset PROOT_NO_SECCOMP
+    proot-distro login "$id" -- /bin/bash -s <<'AUDIO_CLIENT_SETUP'
+set -Eeuo pipefail
+export DEBIAN_FRONTEND=noninteractive
+export LC_ALL=C.UTF-8
+APT=(
+    apt-get
+    -o Acquire::Retries=1
+    -o Acquire::http::Timeout=5
+    -o Acquire::https::Timeout=5
+    -o Dpkg::Lock::Timeout=3
+    -o Dpkg::Use-Pty=0
+)
+
+# Write app-owned system drop-ins before any optional network migration. User
+# PulseAudio and ALSA files remain untouched and may override these defaults;
+# the desktop session's explicit PULSE_SERVER remains the canonical route.
+install -d -m 0755 /etc/pulse/client.conf.d /etc/alsa/conf.d
+cat > /etc/pulse/client.conf.d/99-ldfa.conf <<'PULSE_CLIENT'
+# LDFA_AUDIO_CLIENT_VERSION=3
+default-server = unix:/tmp/ldfa-pulse/native
+autospawn = no
+# PRoot cannot pass SHM/memfd descriptors across the guest boundary. Without
+# these, a playback stream authenticates but dies during the SHM/srbchannel
+# handshake and the Android sink stays IDLE (no audio). Force socket transport.
+enable-shm = no
+enable-memfd = no
+PULSE_CLIENT
+
+cat > /etc/alsa/conf.d/99-ldfa-pulse.conf <<'ALSA_PULSE'
+# LDFA_AUDIO_CLIENT_VERSION=3
+pcm.!default {
+    type pulse
+}
+ctl.!default {
+    type pulse
+}
+ALSA_PULSE
+chmod 0644 \
+    /etc/pulse/client.conf.d/99-ldfa.conf \
+    /etc/alsa/conf.d/99-ldfa-pulse.conf
+
+# A short-lived development build wrote these two files before the system
+# drop-in design was finalized. Remove only byte-for-byte LDFA v1 content; an
+# arbitrary user configuration is never deleted or rewritten.
+legacy_pulse_content=$'# LDFA_AUDIO_CLIENT_VERSION=1\ndefault-server = unix:/tmp/ldfa-pulse/native\nautospawn = no'
+legacy_alsa_content=$'# LDFA_AUDIO_CLIENT_VERSION=1\npcm.!default {\n    type pulse\n}\nctl.!default {\n    type pulse\n}'
+if [[ -f /home/desktop/.config/pulse/client.conf ]] && \
+    cmp -s /home/desktop/.config/pulse/client.conf \
+        <(printf '%s\n' "$legacy_pulse_content"); then
+    rm -f /home/desktop/.config/pulse/client.conf
+fi
+if [[ -f /home/desktop/.asoundrc ]] && \
+    cmp -s /home/desktop/.asoundrc <(printf '%s\n' "$legacy_alsa_content"); then
+    rm -f /home/desktop/.asoundrc
+fi
+
+packages_ready=1
+for package in pulseaudio-utils libasound2-plugins; do
+    dpkg-query -W -f='${Status}\n' "$package" 2>/dev/null | \
+        grep -Fxq 'install ok installed' || packages_ready=0
+done
+if [[ "$packages_ready" != 1 ]]; then
+    printf '\n[%s] Debian音声クライアントを準備しています\n' "$(date -Iseconds)"
+    # Keep existing-container startup responsive when the network is offline.
+    # Only the update/download phase is interruptible; after all packages are
+    # cached, the small local dpkg transaction is allowed to finish safely.
+    if ! timeout --signal=INT --kill-after=2s 15s /bin/bash -c '
+        set -Eeuo pipefail
+        APT=(
+            apt-get
+            -o Acquire::Retries=1
+            -o Acquire::http::Timeout=5
+            -o Acquire::https::Timeout=5
+            -o Dpkg::Lock::Timeout=3
+            -o Dpkg::Use-Pty=0
+        )
+        "${APT[@]}" update
+        "${APT[@]}" --download-only install -y --no-install-recommends \
+            pulseaudio-utils \
+            libasound2-plugins
+    '; then
+        printf '[%s] 音声補助パッケージの取得を15秒で中断しました。次回起動時に再試行します。\n' \
+            "$(date -Iseconds)" >&2
+        exit 75
+    fi
+    "${APT[@]}" --no-download install -y --no-install-recommends \
+        pulseaudio-utils \
+        libasound2-plugins
+fi
+
+command -v pactl >/dev/null
+compgen -G '/usr/lib/*/alsa-lib/libasound_module_pcm_pulse.so' >/dev/null
+AUDIO_CLIENT_SETUP
+}
+
 google_chrome_ready() {
     local id="$1"
     proot-distro login "$id" -- /bin/bash -c \
         'test -x /usr/bin/google-chrome-stable &&
          test -x /usr/local/bin/google-chrome-ldfa &&
-         test -f /home/desktop/.local/share/applications/google-chrome.desktop' \
+         test -f /home/desktop/.local/share/applications/google-chrome.desktop &&
+         grep -Fqx "$1" /usr/local/bin/google-chrome-ldfa' \
+        _ "$CHROME_LAUNCHER_MARKER" \
         >/dev/null 2>&1
 }
 
@@ -217,15 +1052,92 @@ fi
 install -d -m 0755 /usr/local/bin
 cat > /usr/local/bin/google-chrome-ldfa <<'CHROME_LAUNCHER'
 #!/bin/sh
+# LDFA_CHROME_LAUNCHER_VERSION=8
 # Chromium's namespace/setuid sandbox cannot establish its normal privilege
 # boundary inside Android PRoot. Run Chrome as the unprivileged desktop user
-# with the PRoot-compatible flags required by this environment.
-exec /usr/bin/google-chrome-stable \
-    --no-sandbox \
-    --disable-dev-shm-usage \
-    --ozone-platform=x11 \
-    --password-store=basic \
-    "$@"
+# with the PRoot-compatible flags required by this environment. Keep a small,
+# bounded renderer pool instead of single-process/forced-low-end modes: Google
+# sign-in remains compatible while Android, Gboard and XFCE have more headroom.
+export MALLOC_ARENA_MAX="${MALLOC_ARENA_MAX:-2}"
+state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/ldfa"
+running_marker="$state_dir/chrome-running"
+xdg_app_dir="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
+mkdir -p "$state_dir"
+mkdir -p "$xdg_app_dir"
+[ -f "$xdg_app_dir/mimeapps.list" ] || : > "$xdg_app_dir/mimeapps.list"
+: > "$running_marker"
+
+# Reproduce the vendor wrapper's required environment, but invoke the browser
+# binary directly. Google's wrapper keeps two `cat` pipe relays alive for the
+# lifetime of Chrome; avoiding only those relays preserves Chrome's normal
+# multi-process fault isolation while staying below Android's child-process cap.
+export CHROME_WRAPPER=/opt/google/chrome/google-chrome
+export CHROME_VERSION_EXTRA=stable
+export GNOME_DISABLE_CRASH_DIALOG=SET_BY_GOOGLE_CHROME
+
+chrome_running() {
+    pgrep -x chrome >/dev/null 2>&1 || \
+        pgrep -x google-chrome >/dev/null 2>&1 || \
+        pgrep -x google-chrome-stable >/dev/null 2>&1
+}
+
+restart_attempt=0
+while :; do
+    if [ "$restart_attempt" -eq 0 ]; then
+        /opt/google/chrome/chrome \
+            --no-sandbox \
+            --disable-dev-shm-usage \
+            --disable-background-mode \
+            --disable-breakpad \
+            --disable-crash-reporter \
+            --disable-extensions \
+            --disable-component-extensions-with-background-pages \
+            --disable-gpu \
+            --no-zygote \
+            --ozone-platform=x11 \
+            --password-store=basic \
+            --renderer-process-limit=2 \
+            "$@"
+    else
+        /opt/google/chrome/chrome \
+            --no-sandbox \
+            --disable-dev-shm-usage \
+            --disable-background-mode \
+            --disable-breakpad \
+            --disable-crash-reporter \
+            --disable-extensions \
+            --disable-component-extensions-with-background-pages \
+            --disable-gpu \
+            --no-zygote \
+            --ozone-platform=x11 \
+            --password-store=basic \
+            --renderer-process-limit=2 \
+            --restore-last-session \
+            --disable-session-crashed-bubble \
+            "$@"
+    fi
+    status=$?
+
+    # If Android trims only Chrome while this lightweight launcher survives,
+    # retry once after the old helper processes disappear. Repeated crashes are
+    # left to the Activity-resume/supervisor recovery path instead of looping.
+    if [ "$status" -eq 0 ] || [ "$restart_attempt" -ge 1 ]; then
+        break
+    fi
+    restart_attempt=$((restart_attempt + 1))
+    for wait_attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+        chrome_running || break
+        sleep 0.1
+    done
+done
+
+# A second launcher invocation returns while the original browser is still
+# alive. Remove the marker only after a clean exit and after every Chrome
+# process is actually gone; SIGKILL/LMK therefore leaves recoverable state.
+if [ "$status" -eq 0 ] && ! chrome_running; then
+    rm -f "$running_marker"
+fi
+exit "$status"
 CHROME_LAUNCHER
 chmod 0755 /usr/local/bin/google-chrome-ldfa
 ln -sfn google-chrome-ldfa /usr/local/bin/google-chrome
@@ -248,23 +1160,108 @@ StartupWMClass=Google-chrome
 CHROME_DESKTOP
 chown desktop:desktop /home/desktop/.local/share/applications/google-chrome.desktop
 
+# Debian's bottom-panel Web Browser launcher delegates to exo-open. Select the
+# bundled LDFA launcher without replacing any terminal or file-manager choice
+# the user may already have made.
+install -d -m 0755 -o desktop -g desktop /home/desktop/.config/xfce4
+helpers_file=/home/desktop/.config/xfce4/helpers.rc
+touch "$helpers_file"
+if grep -q '^WebBrowser=' "$helpers_file"; then
+    sed -i 's/^WebBrowser=.*/WebBrowser=google-chrome/' "$helpers_file"
+else
+    printf 'WebBrowser=google-chrome\n' >> "$helpers_file"
+fi
+chown desktop:desktop "$helpers_file"
+
 /usr/bin/google-chrome-stable --version
 apt-get clean
 rm -rf /var/lib/apt/lists/*
 CHROME_SETUP
 }
 
+mark_chrome_for_restore_if_running() {
+    local id="$1"
+    timeout 4s proot-distro login "$id" --user desktop -- /bin/bash -c '
+        state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/ldfa"
+        if pgrep -x chrome >/dev/null 2>&1 ||
+            pgrep -x google-chrome >/dev/null 2>&1 ||
+            pgrep -x google-chrome-stable >/dev/null 2>&1; then
+            mkdir -p "$state_dir"
+            : > "$state_dir/chrome-running"
+        fi
+    ' >/dev/null 2>&1 || true
+}
+
+clear_chrome_restore_marker() {
+    local id="$1"
+    timeout 4s proot-distro login "$id" --user desktop -- /bin/rm -f \
+        /home/desktop/.local/state/ldfa/chrome-running \
+        >/dev/null 2>&1 || true
+}
+
+request_chrome_restore_if_needed() {
+    local id="$1" result settings_pid="" settings_name="" parent_pid=""
+    local -a parent_args=()
+    result="$(timeout 4s proot-distro login "$id" --user desktop -- /bin/bash -c '
+        state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/ldfa"
+        marker="$state_dir/chrome-running"
+        request="$state_dir/chrome-restore-request"
+        if [[ -f "$marker" ]] &&
+            ! pgrep -x chrome >/dev/null 2>&1 &&
+            ! pgrep -x google-chrome >/dev/null 2>&1 &&
+            ! pgrep -x google-chrome-stable >/dev/null 2>&1; then
+            : > "$request"
+            printf "restore_needed=1\n"
+        fi
+    ' 2>/dev/null)" || return 1
+    [[ "$result" == *"restore_needed=1"* ]] || return 0
+
+    # Wake wait -n without adding a watcher process. xfsettingsd owns no desktop
+    # window, so replacing only this direct child leaves WM, panel and wallpaper
+    # visible while the same supervisor event consumes the Chrome request.
+    [[ -r "$PREFIX/tmp/runtime-desktop/xfsettingsd.pid" ]] && \
+        IFS= read -r settings_pid < "$PREFIX/tmp/runtime-desktop/xfsettingsd.pid"
+    if [[ "$settings_pid" =~ ^[0-9]+$ ]] && [[ -r "/proc/$settings_pid/status" ]]; then
+        while IFS=$'\t ' read -r key value _; do
+            [[ "$key" == Name: ]] && settings_name="$value"
+        done < "/proc/$settings_pid/status"
+    fi
+    if [[ "$settings_pid" =~ ^[0-9]+$ ]] && [[ -r "/proc/$settings_pid/stat" ]]; then
+        IFS=' ' read -r _ _ _ parent_pid _ < "/proc/$settings_pid/stat" || true
+    fi
+    if [[ "$parent_pid" =~ ^[0-9]+$ ]] && [[ -r "/proc/$parent_pid/cmdline" ]]; then
+        mapfile -d '' -t parent_args < "/proc/$parent_pid/cmdline" || true
+    fi
+    [[ "$settings_name" == xfsettingsd ]] && \
+        [[ " ${parent_args[*]} " == *" /usr/local/bin/ldfa-session "* ]] && \
+        kill -0 "$settings_pid" 2>/dev/null && \
+        kill -TERM "$settings_pid" 2>/dev/null
+}
+
 stop_one() {
-    local id="$1" session active=""
+    local id="$1" preserve_chrome_restore="${2:-0}" session active="" worker_pid="" attempt
     validate_id "$id"
     [[ -d "$(meta_dir "$id")" ]] || return 0
+
+    if [[ "$preserve_chrome_restore" == 1 ]]; then
+        mark_chrome_for_restore_if_running "$id"
+    else
+        clear_chrome_restore_marker "$id"
+    fi
 
     session="$(run_session "$id")"
     set_status "$id" stopping 100 "Linuxデスクトップを停止しています…"
     touch "$(stop_file "$id")"
 
     if tmux_alive "$session"; then
+        worker_pid="$(tmux list-panes -t "$session" -F '#{pane_pid}' 2>/dev/null | head -n 1 || true)"
         tmux kill-session -t "$session" >/dev/null 2>&1 || true
+        if [[ "$worker_pid" =~ ^[0-9]+$ ]]; then
+            for attempt in $(seq 1 40); do
+                kill -0 "$worker_pid" 2>/dev/null || break
+                sleep 0.05
+            done
+        fi
     fi
 
     if has proot-distro; then
@@ -296,19 +1293,40 @@ stop_other_desktops() {
 }
 
 cmd_doctor() {
-    local tmux_ok=0 proot_ok=0 storage_ok=0 host_ok=0
+    local tmux_ok=0 proot_ok=0 storage_ok=0 audio_tools_ok=0 host_ok=0
     has tmux && tmux_ok=1
     has proot-distro && proot_ok=1
+    has pulseaudio && has pactl && audio_tools_ok=1
     [[ -d "$HOME/storage/shared" ]] && storage_ok=1
-    [[ $tmux_ok -eq 1 && $proot_ok -eq 1 && $storage_ok -eq 1 ]] && host_ok=1
+    [[ $tmux_ok -eq 1 && $proot_ok -eq 1 && $storage_ok -eq 1 && \
+        $audio_tools_ok -eq 1 ]] && host_ok=1
 
     say "version=$VERSION"
     say "host_ready=$host_ok"
     say "tmux=$tmux_ok"
     say "proot_distro=$proot_ok"
     say "embedded_x11=1"
+    say "audio_tools=$audio_tools_ok"
     say "storage=$storage_ok"
     say "shared_directory=$SHARED_ROOT"
+}
+
+cmd_audio_probe() {
+    local id="${1:-}" sink="" guest_ready=0
+    ensure_audio_bridge || die "Android音声出力を初期化できませんでした。"
+    sink="$(pulse_real_sink)"
+    if [[ -n "$id" ]]; then
+        validate_id "$id"
+        container_exists "$id" || die "Debian環境が見つかりません。"
+        guest_audio_ready "$id" && guest_ready=1
+        write_meta "$id" audio_ready "$guest_ready"
+    fi
+    say "audio_server=1"
+    say "audio_socket=$PULSE_HOST_SOCKET"
+    say "audio_sink=$sink"
+    say "audio_guest=$guest_ready"
+    [[ -z "$id" || "$guest_ready" == 1 ]] || \
+        die "DebianからAndroid音声出力へ接続できませんでした。"
 }
 
 cmd_bootstrap() {
@@ -491,7 +1509,9 @@ step "基本パッケージをインストールしています"
     x11-utils \
     x11-xserver-utils \
     mesa-utils \
-    libgl1-mesa-dri
+    libgl1-mesa-dri \
+    pulseaudio-utils \
+    libasound2-plugins
 
 step "XFCEデスクトップをインストールしています"
 "${APT[@]}" install -y --no-install-recommends \
@@ -546,85 +1566,6 @@ printf 'desktop ALL=(ALL:ALL) NOPASSWD:ALL\n' > /etc/sudoers.d/90-linux-desktop
 chmod 0440 /etc/sudoers.d/90-linux-desktop
 visudo -cf /etc/sudoers.d/90-linux-desktop
 
-install -d -m 0755 /usr/local/bin
-cat > /usr/local/bin/ldfa-session <<'SESSION'
-#!/bin/bash
-# Hardened LDFA Session Script
-set -Eeuo pipefail
-
-# 1. Clear environment from Android/Termux leakage
-unset LD_PRELOAD
-unset LD_LIBRARY_PATH
-unset SESSION_MANAGER
-
-# 2. Setup robust environment
-export LANG=ja_JP.UTF-8
-export LANGUAGE=ja_JP:ja
-export LC_ALL=ja_JP.UTF-8
-export DISPLAY="${DISPLAY:-:1}"
-export XDG_SESSION_TYPE=x11
-export XDG_SESSION_DESKTOP=xfce
-export XDG_CURRENT_DESKTOP=XFCE
-export DESKTOP_SESSION=xfce
-export GDK_BACKEND=x11
-export QT_QPA_PLATFORM=xcb
-export GTK_IM_MODULE=fcitx
-export QT_IM_MODULE=fcitx
-export XMODIFIERS=@im=fcitx
-export PULSE_SERVER=127.0.0.1
-
-# 3. Disable SHM to avoid futex/sync errors on older kernels
-export _MITSHM=0
-export QT_X11_NO_MITSHM=1
-export GDK_RENDERING=image
-export LIBGL_ALWAYS_SOFTWARE=1
-export GALLIUM_DRIVER=llvmpipe
-
-# 4. GLib/DBus stability
-export G_SLICE=always-malloc
-export MALLOC_CHECK_=0
-export NO_AT_BRIDGE=1
-
-export XDG_RUNTIME_DIR="/tmp/runtime-desktop"
-mkdir -p "$XDG_RUNTIME_DIR" "$HOME/Desktop" "$HOME/.cache" "$HOME/.config"
-chmod 700 "$XDG_RUNTIME_DIR"
-
-# 5. Start DBus manually (Hardened for PRoot)
-DBUS_PID_FILE="$XDG_RUNTIME_DIR/dbus.pid"
-DBUS_SOCK="$XDG_RUNTIME_DIR/bus"
-if [[ -f "$DBUS_PID_FILE" ]]; then
-    pid=$(cat "$DBUS_PID_FILE")
-    kill -0 "$pid" 2>/dev/null || rm -f "$DBUS_PID_FILE" "$DBUS_SOCK"
-fi
-
-if [[ ! -f "$DBUS_PID_FILE" ]]; then
-    dbus-daemon --session --fork --print-address 5 --print-pid 6 \
-        --address="unix:path=$DBUS_SOCK" \
-        5> "$XDG_RUNTIME_DIR/dbus_address" 6> "$DBUS_PID_FILE"
-    # Give DBus a moment to stabilize on some kernels
-    sleep 1
-fi
-export DBUS_SESSION_BUS_ADDRESS=$(cat "$XDG_RUNTIME_DIR/dbus_address")
-
-# 6. Apply UI tweaks
-setxkbmap -layout jp >/dev/null 2>&1 || true
-xfconf-query -c xsettings -p /Net/ThemeName -s Adwaita 2>/dev/null || true
-xfconf-query -c xfwm4 -p /general/use_compositing -s false 2>/dev/null || true
-xfconf-query -c xfwm4 -p /general/sync_to_vblank -s false 2>/dev/null || true
-
-# 7. Start session components with recovery
-fcitx5 -d --replace >/dev/null 2>&1 || true
-
-exec startxfce4 || {
-    echo "startxfce4 failed; starting minimal desktop" >&2
-    xfwm4 --compositor=off --replace &
-    xfce4-panel &
-    xfdesktop &
-    wait
-}
-SESSION
-chmod 0755 /usr/local/bin/ldfa-session
-
 install -d -m 0700 -o desktop -g desktop /home/desktop/.config/fcitx5
 cat > /home/desktop/.config/fcitx5/profile <<'FCITX_PROFILE'
 [Groups/0]
@@ -662,6 +1603,10 @@ chown -R desktop:desktop /home/desktop
 step "Debian XFCEの設定が完了しました"
 CONTAINER_SETUP
 
+    set_status "$id" installing 82 "Debianの音声クライアントを設定しています…"
+    ensure_audio_client "$id"
+    set_status "$id" installing 84 "デスクトップ監視機能を設定しています…"
+    ensure_desktop_runtime "$id"
     set_status "$id" installing 86 "Google Chromeをインストールしています…"
     ensure_google_chrome "$id"
     if google_chrome_ready "$id"; then
@@ -690,6 +1635,130 @@ start_run_worker() {
         env LDFA_DISPLAY_NUMBER="$display_number" "$SELF" worker-run "$id" "$display_number"
 }
 
+desktop_ready_once() {
+    local id="$1" display="${2:-$(read_meta "$1" display "$DEFAULT_DISPLAY_NUMBER")}"
+    validate_id "$id"
+    validate_display_number "$display"
+    tmux_alive "$(run_session "$id")" || return 1
+    [[ -S "$PREFIX/tmp/.X11-unix/X${display}" ]] || return 1
+
+    timeout 3s proot-distro login "$id" --shared-tmp --user desktop -- \
+        /usr/bin/env DISPLAY=":$display" XAUTHORITY=/dev/null \
+        /bin/bash -c '
+            visible_client_class() {
+                wanted="$1"
+                for window in $(
+                    /usr/bin/xprop -root _NET_CLIENT_LIST 2>/dev/null |
+                        /usr/bin/grep -oE "0x[[:xdigit:]]+" || true
+                ); do
+                    if /usr/bin/xprop -id "$window" WM_CLASS 2>/dev/null |
+                            /usr/bin/grep -Fqi "$wanted" &&
+                        LC_ALL=C /usr/bin/xwininfo -id "$window" 2>/dev/null |
+                            /usr/bin/grep -Fq "Map State: IsViewable"; then
+                        return 0
+                    fi
+                done
+                return 1
+            }
+            /usr/bin/xset q >/dev/null 2>&1 &&
+            /usr/bin/pgrep -x xfsettingsd >/dev/null 2>&1 &&
+            /usr/bin/pgrep -x xfwm4 >/dev/null 2>&1 &&
+            /usr/bin/pgrep -x xfce4-panel >/dev/null 2>&1 &&
+            /usr/bin/pgrep -x xfdesktop >/dev/null 2>&1 &&
+            /usr/bin/xprop -root _NET_SUPPORTING_WM_CHECK 2>/dev/null |
+                /bin/grep -q "window id" &&
+            visible_client_class xfdesktop &&
+            visible_client_class xfce4-panel
+        ' >/dev/null 2>&1
+}
+
+desktop_process_snapshot() {
+    local id="$1"
+    timeout 3s proot-distro login "$id" -- /bin/bash -c \
+        '/bin/ps -eo comm= 2>/dev/null | /usr/bin/sort -u | /usr/bin/paste -sd, -' \
+        2>/dev/null || true
+}
+
+recover_desktop_session() {
+    local id="$1" trigger="${2:-watchdog}" force_rebuild="${3:-0}"
+    local state display attempt started_at snapshot
+    validate_id "$id"
+    [[ "$force_rebuild" == 0 || "$force_rebuild" == 1 ]] || \
+        die "不正なデスクトップ強制復旧指定です。"
+    state="$(read_meta "$id" state unknown)"
+    display="$(read_meta "$id" display "$DEFAULT_DISPLAY_NUMBER")"
+    validate_display_number "$display"
+
+    if [[ "$force_rebuild" == 0 ]] && desktop_ready_once "$id" "$display"; then
+        say "desktop_ready=1"
+        say "desktop_recovered=0"
+        return 0
+    fi
+
+    # The in-session supervisor notices a trimmed XFCE component within 0.5s
+    # and replaces it without discarding Chrome's profile or the live X server.
+    # Android resume and the periodic heartbeat can race that repair: a single
+    # strict health miss must not tear down the replacement processes while
+    # their windows are still mapping. Give the lightweight repair a bounded
+    # two-second grace period before escalating to a whole-session restart.
+    if [[ "$force_rebuild" == 0 ]] && tmux_alive "$(run_session "$id")" && \
+        [[ -S "$PREFIX/tmp/.X11-unix/X${display}" ]]; then
+        for attempt in $(seq 1 8); do
+            sleep 0.25
+            if desktop_ready_once "$id" "$display"; then
+                printf '[%s] component supervisor recovery observed trigger=%s display=:%s\n' \
+                    "$(date -Iseconds)" "$trigger" "$display" >> "$(log_file "$id")"
+                say "desktop_ready=1"
+                say "desktop_recovered=1"
+                return 0
+            fi
+            tmux_alive "$(run_session "$id")" || break
+        done
+    fi
+
+    [[ "$state" == running || "$state" == starting ]] || \
+        die "実行中ではないLinuxデスクトップは自動復旧しません（現在: $state）。"
+    [[ -S "$PREFIX/tmp/.X11-unix/X${display}" ]] || \
+        die "DISPLAY=:$display が消失したためXFCEだけを復旧できません。"
+
+    snapshot="$(desktop_process_snapshot "$id")"
+    printf '[%s] desktop health failed trigger=%s display=:%s processes=%s\n' \
+        "$(date -Iseconds)" "$trigger" "$display" "${snapshot:-unavailable}" \
+        >> "$(log_file "$id")"
+    set_status "$id" starting 100 "消失したXFCEとChromeを自動復旧しています…"
+
+    # A surviving PRoot tracer can outlive xfce4-session and fool the old tmux-only
+    # watchdog. Tear down this Linux process group while keeping the verified X11
+    # server, then start one clean session against the same DISPLAY.
+    stop_one "$id" 1
+    sleep 0.25
+    write_meta "$id" display "$display"
+    write_file "$(active_file)" "$id"
+    set_status "$id" starting 100 "XFCEセッションを再生成しています…"
+    started_at="$(date +%s)"
+    start_run_worker "$id" "$display"
+
+    for attempt in $(seq 1 60); do
+        if desktop_ready_once "$id" "$display"; then
+            set_status "$id" running 100 "Linuxデスクトップを実行中"
+            printf '[%s] desktop recovery succeeded trigger=%s display=:%s elapsed=%ss\n' \
+                "$(date -Iseconds)" "$trigger" "$display" "$(( $(date +%s) - started_at ))" \
+                >> "$(log_file "$id")"
+            say "desktop_ready=1"
+            say "desktop_recovered=1"
+            return 0
+        fi
+        tmux_alive "$(run_session "$id")" || break
+        sleep 0.25
+    done
+
+    snapshot="$(desktop_process_snapshot "$id")"
+    printf '[%s] desktop recovery failed trigger=%s display=:%s processes=%s\n' \
+        "$(date -Iseconds)" "$trigger" "$display" "${snapshot:-unavailable}" \
+        >> "$(log_file "$id")"
+    die "XFCEセッションを再生成しましたがDISPLAY=:$displayで起動確認できませんでした。"
+}
+
 cmd_start() {
     local id="${1:-}" state display_number
     validate_id "$id"
@@ -709,14 +1778,87 @@ cmd_start() {
     say "$id"
 }
 
+# Fingerprint of every provisioning contract this build enforces. When the guest
+# already satisfies all of them, ensure-apps can be skipped entirely on the hot
+# start path. Any marker bump changes the fingerprint and forces re-provisioning.
+apps_provisioned_fingerprint() {
+    printf '%s|%s|%s' \
+        "$AUDIO_CLIENT_MARKER" "$DESKTOP_RUNTIME_MARKER" "$CHROME_LAUNCHER_MARKER"
+}
+
+# Verify audio client, desktop runtime and Chrome launcher in ONE guest login
+# instead of three. Chrome is optional (32-bit guests have none), so its absence
+# does not fail the check; the caller records google_chrome separately. Returns
+# 0 only when audio+runtime are ready, printing "chrome=1" or "chrome=0".
+apps_combined_ready() {
+    local id="$1"
+    timeout 8s proot-distro login "$id" -- /bin/bash -c '
+        audio_marker="$1"; runtime_marker="$2"; chrome_marker="$3"
+        for package in pulseaudio-utils libasound2-plugins; do
+            [ "$(dpkg-query -W -f='"'"'${Status}'"'"' "$package" 2>/dev/null)" = \
+                "install ok installed" ] || exit 1
+        done
+        test -f /etc/pulse/client.conf.d/99-ldfa.conf || exit 1
+        grep -Fqx "$audio_marker" /etc/pulse/client.conf.d/99-ldfa.conf || exit 1
+        grep -Fq "default-server = unix:/tmp/ldfa-pulse/native" \
+            /etc/pulse/client.conf.d/99-ldfa.conf || exit 1
+        grep -Fq "enable-shm = no" /etc/pulse/client.conf.d/99-ldfa.conf || exit 1
+        test -f /etc/alsa/conf.d/99-ldfa-pulse.conf || exit 1
+        grep -Fqx "$audio_marker" /etc/alsa/conf.d/99-ldfa-pulse.conf || exit 1
+        test -x /usr/local/bin/ldfa-session || exit 1
+        grep -Fqx "$runtime_marker" /usr/local/bin/ldfa-session || exit 1
+        if test -x /usr/bin/google-chrome-stable &&
+            test -x /usr/local/bin/google-chrome-ldfa &&
+            test -f /home/desktop/.local/share/applications/google-chrome.desktop &&
+            grep -Fqx "$chrome_marker" /usr/local/bin/google-chrome-ldfa; then
+            printf "chrome=1\n"
+        else
+            printf "chrome=0\n"
+        fi
+    ' _ "$AUDIO_CLIENT_MARKER" "$DESKTOP_RUNTIME_MARKER" "$CHROME_LAUNCHER_MARKER" \
+        2>/dev/null
+}
+
 cmd_ensure_apps() {
-    local id="${1:-}"
+    local id="${1:-}" fingerprint combined chrome_state
     validate_id "$id"
     [[ -d "$(meta_dir "$id")" ]] || die "環境が見つかりません。"
     container_exists "$id" || die "Debian環境が見つかりません。"
     [[ "$(read_meta "$id" installed 0)" == 1 ]] || \
         die "この環境のインストールは完了していません。"
 
+    # Hot path: when metadata records that this exact provisioning fingerprint was
+    # already verified, confirm it with a single guest login. Only fall through to
+    # the full per-component migration (3-4 PRoot logins plus optional network) on
+    # a mismatch. This removes the dominant repeat-start cost on real ARM devices,
+    # where each PRoot login is seconds rather than the ~0.1s of x86 emulation.
+    fingerprint="$(apps_provisioned_fingerprint)"
+    if [[ "$(read_meta "$id" apps_provisioned '')" == "$fingerprint" ]]; then
+        if combined="$(apps_combined_ready "$id")"; then
+            case "$combined" in
+                *chrome=1*) write_meta "$id" google_chrome 1; say "google_chrome=1" ;;
+                *)          write_meta "$id" google_chrome 0; say "google_chrome=unsupported" ;;
+            esac
+            say "apps_provisioned=cached"
+            return 0
+        fi
+        # Fingerprint matched but the guest no longer satisfies it (user changed the
+        # rootfs, package removed, etc.). Drop the marker and re-provision fully.
+        write_meta "$id" apps_provisioned ''
+    fi
+
+    local audio_ok=1
+    if ! ensure_audio_client "$id" >> "$(log_file "$id")" 2>&1; then
+        tail -n 60 "$(log_file "$id")" >&2 || true
+        write_meta "$id" audio_ready 0
+        audio_ok=0
+        printf '警告: Debianの音声クライアントを更新できませんでした。GUI起動は継続します。\n' \
+            >&2
+    fi
+    if ! ensure_desktop_runtime "$id" >> "$(log_file "$id")" 2>&1; then
+        tail -n 60 "$(log_file "$id")" >&2 || true
+        die "Debian XFCEの復旧機能を更新できませんでした。ログを確認してください。"
+    fi
     if ! ensure_google_chrome "$id" >> "$(log_file "$id")" 2>&1; then
         tail -n 60 "$(log_file "$id")" >&2 || true
         die "Google ChromeをDebianへインストールできませんでした。ネットワーク接続とログを確認してください。"
@@ -728,10 +1870,21 @@ cmd_ensure_apps() {
         write_meta "$id" google_chrome 0
         say "google_chrome=unsupported"
     fi
+
+    # Record the provisioning fingerprint so the next start can take the hot path.
+    # Only record when the audio client actually provisioned (a degraded audio run
+    # must keep retrying on later starts) and Chrome reached a definite state
+    # (installed on 64-bit, or genuinely unsupported on 32-bit). A transient Chrome
+    # failure already died above, so reaching here means the state is authoritative.
+    if [[ "$audio_ok" == 1 ]]; then
+        write_meta "$id" apps_provisioned "$fingerprint"
+    else
+        write_meta "$id" apps_provisioned ''
+    fi
 }
 
 worker_run() {
-    local id="$1" display_number="${2:-${LDFA_DISPLAY_NUMBER:-$(read_meta "$1" display "$DEFAULT_DISPLAY_NUMBER")}}" shared log rc=0 wait_count=0 xset_attempt xset_ready=0
+    local id="$1" display_number="${2:-${LDFA_DISPLAY_NUMBER:-$(read_meta "$1" display "$DEFAULT_DISPLAY_NUMBER")}}" shared log rc=0 wait_count=0 xset_attempt xset_ready=0 audio_ready=0
     validate_id "$id"
     validate_display_number "$display_number"
     DISPLAY_NUMBER="$display_number"
@@ -760,7 +1913,14 @@ worker_run() {
     printf '\n[%s] Linux Desktop worker started: %s display=:%s\n' "$(date -Iseconds)" "$id" "$DISPLAY_NUMBER"
     termux-wake-lock >/dev/null 2>&1 || true
     rm -f "$(stop_file "$id")"
-    pulseaudio --start --exit-idle-time=-1 >/dev/null 2>&1 || true
+    if ensure_audio_bridge && guest_audio_ready "$id"; then
+        audio_ready=1
+    fi
+    write_meta "$id" audio_ready "$audio_ready"
+    if [[ "$audio_ready" != 1 ]]; then
+        printf '[%s] Audio bridge is unavailable; continuing the graphical session without sound\n' \
+            "$(date -Iseconds)" >&2
+    fi
 
     while [[ ! -S "$X11_SOCKET" ]] && (( wait_count < 40 )); do
         [[ -f "$(stop_file "$id")" ]] && exit 0
@@ -791,19 +1951,22 @@ worker_run() {
         unset LD_LIBRARY_PATH
         unset PROOT_NO_SECCOMP
 
-        # Use env -u to ensure child processes within PRoot don't inherit Termux preloads
-        proot-distro login "$id" --shared-tmp --bind "$shared:/mnt/android" --user desktop -- \
+        # Use env -u to ensure child processes within PRoot don't inherit Termux preloads.
+        # --bind exposes the app-private PulseAudio bridge socket at /tmp/ldfa-pulse
+        # independently of --shared-tmp, so desktop audio survives proot's tmp churn.
+        proot-distro login "$id" --shared-tmp --bind "$shared:/mnt/android" \
+            --bind "$PULSE_GUEST_BIND" --user desktop -- \
             /usr/bin/env -u LD_PRELOAD -u LD_LIBRARY_PATH \
                 DISPLAY=":$DISPLAY_NUMBER" GTK_IM_MODULE=fcitx QT_IM_MODULE=fcitx \
-                XMODIFIERS=@im=fcitx PULSE_SERVER=127.0.0.1 \
+                XMODIFIERS=@im=fcitx PULSE_SERVER="$PULSE_GUEST_SERVER" \
                 /usr/local/bin/ldfa-session
         rc=$?
         set -e
 
         [[ -f "$(stop_file "$id")" ]] && break
-        printf '[%s] session exited (%s); restarting in 4 seconds\n' "$(date -Iseconds)" "$rc"
+        printf '[%s] session exited (%s); restarting in 1 second\n' "$(date -Iseconds)" "$rc"
         set_status "$id" starting 100 "セッションを自動復旧しています…"
-        sleep 4
+        sleep 1
         set_status "$id" running 100 "Linuxデスクトップを実行中"
     done
 
@@ -815,9 +1978,11 @@ worker_run() {
 }
 
 cmd_stop() {
-    local id="${1:-}"
+    local id="${1:-}" preserve_chrome_restore="${2:-0}"
     validate_id "$id"
-    stop_one "$id"
+    [[ "$preserve_chrome_restore" == 0 || "$preserve_chrome_restore" == 1 ]] || \
+        die "不正なChrome復元指定です。"
+    stop_one "$id" "$preserve_chrome_restore"
 }
 
 cmd_delete() {
@@ -847,9 +2012,7 @@ cmd_probe() {
     tmux_alive "$(run_session "$id")" || die "Linuxデスクトップworkerが停止しています。"
 
     for attempt in $(seq 1 80); do
-        if proot-distro login "$id" --shared-tmp --user desktop -- \
-            /usr/bin/env DISPLAY=":$display" XAUTHORITY=/dev/null \
-            /bin/bash -c '/usr/bin/xset q >/dev/null 2>&1 && /usr/bin/pgrep -x xfce4-session >/dev/null 2>&1 && /usr/bin/pgrep -x xfwm4 >/dev/null 2>&1 && /usr/bin/xprop -root _NET_SUPPORTING_WM_CHECK 2>/dev/null | /bin/grep -q "window id"'; then
+        if desktop_ready_once "$id" "$display"; then
             say "desktop_ready=1"
             say "display=:$display"
             return 0
@@ -858,6 +2021,34 @@ cmd_probe() {
         sleep 0.25
     done
     die "XFCE window managerがDISPLAY=:$displayで起動完了しませんでした。"
+}
+
+cmd_resume() {
+    local id="${1:-}" state force_rebuild=0
+    validate_id "$id"
+    [[ -d "$(meta_dir "$id")" ]] || die "環境が見つかりません。"
+    container_exists "$id" || die "Debian環境が見つかりません。"
+    [[ "$(read_meta "$id" installed 0)" == 1 ]] || \
+        die "この環境のインストールは完了していません。"
+    state="$(read_meta "$id" state unknown)"
+    [[ "$state" == running || "$state" == starting ]] || \
+        die "実行中ではないLinuxデスクトップは復帰しません（現在: $state）。"
+
+    # Controller and Debian/Chrome launcher migrations run before the viewer opens.
+    # Repeating them on every Activity resume creates avoidable PRoot children next
+    # to Chrome, exactly when Android may already be enforcing its child-process cap.
+    if ! request_chrome_restore_if_needed "$id"; then
+        force_rebuild=1
+        printf '[%s] Chrome restore signal missed; rebuilding desktop session\n' \
+            "$(date -Iseconds)" >> "$(log_file "$id")"
+    fi
+    recover_desktop_session "$id" "android-resume" "$force_rebuild"
+}
+
+cmd_health() {
+    local id="${1:-}"
+    validate_id "$id"
+    recover_desktop_session "$id" "display-heartbeat"
 }
 
 cmd_logs() {
@@ -889,11 +2080,7 @@ cmd_heartbeat() {
             starting|running)
                 busy=1
                 if [[ -z "$requested" || "$requested" == "$id" ]]; then
-                    if ! tmux_alive "$(run_session "$id")"; then
-                        set_status "$id" starting 100 "中断されたセッションを復旧しています…"
-                        write_file "$(active_file)" "$id"
-                        start_run_worker "$id"
-                    fi
+                    recover_desktop_session "$id" "periodic-heartbeat"
                 fi
                 ;;
         esac
@@ -926,7 +2113,7 @@ cmd_repair() {
 usage() {
     cat <<USAGE
 Usage: ldfa-host <command> [arguments]
-Commands: doctor bootstrap list create ensure-apps start stop delete probe logs heartbeat repair
+Commands: doctor bootstrap list create ensure-apps start resume health stop delete probe audio-probe logs heartbeat repair
 USAGE
 }
 
@@ -935,7 +2122,7 @@ main() {
     [[ -n "$command" ]] || { usage; exit 2; }
     shift || true
     case "$command" in
-        bootstrap|create|ensure-apps|start|stop|delete|heartbeat|repair)
+        bootstrap|create|ensure-apps|start|resume|health|stop|delete|audio-probe|heartbeat|repair)
             acquire_controller_lock
             locked=1
             trap release_controller_lock EXIT INT TERM
@@ -949,10 +2136,13 @@ main() {
         worker-install) worker_install "$@" ;;
         ensure-apps) cmd_ensure_apps "$@" ;;
         start) cmd_start "$@" ;;
+        resume) cmd_resume "$@" ;;
+        health) cmd_health "$@" ;;
         worker-run) worker_run "$@" ;;
         stop) cmd_stop "$@" ;;
         delete) cmd_delete "$@" ;;
         probe) cmd_probe "$@" ;;
+        audio-probe) cmd_audio_probe "$@" ;;
         logs) cmd_logs "$@" ;;
         heartbeat) cmd_heartbeat "$@" ;;
         repair) cmd_repair "$@" ;;

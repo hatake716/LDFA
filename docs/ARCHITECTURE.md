@@ -93,15 +93,17 @@ stop old host worker and display backends
   -> capture successful-present serial baseline
   -> issue an `xrefresh` repaint probe after Surface attachment
   -> require successful EGL swap serial > baseline
-  -> start XFCE with explicit DISPLAY=:1
-  -> require worker + xset + xfce4-session + xfwm4 + _NET_SUPPORTING_WM_CHECK
+  -> start xfsettingsd + xfwm4 + Panel + Desktop with explicit DISPLAY=:1
+  -> require worker + xset + all 4 processes + visible EWMH Panel/Desktop windows
   -> issue a fresh post-XFCE damage and require another successful-present delta
   -> commit active session
 ```
 
 `renderedFrames` は FPS 用の5秒窓であり、失敗した `eglSwapBuffers` も数えていたため health 判定には使いません。viewer process 内の単調な `successfulPresentSerial` を、`eglSwapBuffers() == EGL_TRUE` の場合だけ増やします。
 
-通常運転中の native heartbeat は Xorg process / Binder / real socket / `xset` / host worker を確認し、viewer が開いている場合だけ `xrefresh` を一度発行して、同じ viewer が successful-present serial を進められることも確認します。静止している画面の自然な frame 発生には依存しません。viewer を閉じた headless 状態では表示 server と worker の生存だけを検査します。Xorg または VNC を復旧した場合は、死んだ display に接続していた XFCE workerも停止・再作成します。
+新規起動時は、Xorg process、Binder、real socket、`xset`、host worker、XFCEの実ウィンドウまで完全検査します。viewerが開いている場合は`xrefresh`を発行し、同じviewerのsuccessful-present serialが進むことも確認します。静止画面の自然なframe発生には依存しません。Activityの通常resumeは、後述する子processを増やさない`/proc`高速経路を使い、欠落を検出した場合だけ同じ厳密検査へ昇格します。
+
+viewerが前面にあり、同じ世代の`:x11` serviceがreadyである通常運転中は、定期heartbeatからPRoot／RunCommandの完全probeを起動しません。確認済みserviceのbusy状態を軽量に返し、Androidのphantom child process枠とForeground Service起動回数を消費しないためです。viewerを閉じたheadless状態では表示serverとworkerの生存を検査します。XorgまたはVNCを復旧した場合は、死んだdisplayに接続していたXFCE workerも停止・再作成します。
 
 通常描画で viewer / Surface / EGL 自体を準備できない場合、legacy 描画は同じ EGL 経路なので再試行せず VNC へ移ります。viewer が READY で presentation だけ失敗した場合は、buffer transport を変える legacy 描画を試します。
 
@@ -126,8 +128,61 @@ DISPLAY=:1 または :2
 GTK_IM_MODULE=fcitx
 QT_IM_MODULE=fcitx
 XMODIFIERS=@im=fcitx
-PULSE_SERVER=127.0.0.1
+PULSE_SERVER=unix:/tmp/ldfa-pulse/native
 ```
+
+音声はX11／VNCとは独立し、Debian clientからTermux PulseAudioのAndroid
+sinkへ送ります。Termux側は`$PREFIX/var/run/ldfa-pulse-bridge/native`へ専用の
+`module-native-protocol-unix`を公開し、親directoryを`0700`にします。socketを
+`$PREFIX/tmp`の外へ置くのは、`--shared-tmp`が`$PREFIX/tmp`全体をguestの`/tmp`へ
+bindし、PRootのsession teardown（link2symlink／kill-on-exit）がこのtmpを掃除する際、
+daemonが生存したままでもsocket directoryを断続的に削除する競合を避けるためです。
+このbridge directoryは各guest loginへ明示的な`--bind`でguestの`/tmp/ldfa-pulse`へ
+mapされるため、guestからは従来どおり`/tmp/ldfa-pulse/native`として見え、`--shared-tmp`の
+churnから独立します。PulseAudio自身のruntime dirも`$PREFIX/var/run/ldfa-pulse-rt`へ
+`PULSE_RUNTIME_PATH`で固定し、`$PREFIX/tmp`を触らせません。匿名TCP 4713を
+Android端末全体のloopbackへ公開しません。
+
+PRootのsyscall emulationはSHM／memfdのfile descriptorをguest境界越しに渡せません。
+daemonがshared memory transportを提示すると、Debian clientはUnix socket上で認証まで
+成功しても再生streamがSHM／srbchannel handshakeで切断され、Android sinkがIDLEのまま
+無音になります。これを防ぐため、client drop-inに`enable-shm = no`／`enable-memfd = no`を、
+daemonには`daemon.conf.d`のdrop-inで同じ設定を書き、plain socket transportへ確実に
+fallbackさせます。
+
+workerは12秒のhost bridge deadlineを目安にPulseAudio daemon、専用module、socket、
+非`auto_null` sinkを確認し、その後Debian側接続を別枠の最大4秒で確認します。deadline
+直前に開始した1〜2秒の個別command timeout分だけ、実wall-clockは超過し得ます。
+Termuxの一時領域だけが消えて古いdaemonが残った
+場合は、二重起動を避けるためlocal controlを先に検査し、TERM／必要時KILLと終了待ちの
+後に一度だけ再起動します。Android 8以降で既定のOpenSL ES sinkが作れない場合だけ
+AAudio sinkを試します。音声bridgeが利用不能でも状態を`audio_ready=0`とhost logへ
+残し、検証済みのGUI起動は継続します。
+
+Debian側の既定値はapp-ownedな`/etc/pulse/client.conf.d/99-ldfa.conf`と
+`/etc/alsa/conf.d/99-ldfa-pulse.conf`へ置き、ユーザーの`client.conf`と`.asoundrc`は
+上書きしません。既存containerに`pulseaudio-utils`と`libasound2-plugins`がなければ、
+起動前の`ensure-apps`でnetwork update／downloadだけを15秒に制限して移行します。
+取得失敗時もsystem drop-inと明示`PULSE_SERVER`によりnative Pulse clientのGUI起動を
+継続し、補助packageは次回起動で再試行します。
+
+起動を速くするため、`ensure-apps`は音声client・desktop runtime・Chrome launcherの各
+契約versionを連結したfingerprintを`apps_provisioned` metadataへ記録します。次回以降の
+起動では、fingerprintが一致する間はこの3項目を1回のguest loginでまとめて検証するだけで
+済ませ、通常必要な3〜4回のPRoot loginを省きます。PRoot loginが数秒かかる実機ほど効果が
+大きくなります。fingerprintが一致しない（version bump、package削除、ユーザーによるrootfs
+変更）場合だけ、従来どおり各componentを個別に再migrationします。
+
+Debian Bookworm既定panelのplugin 8はPulseAudioの音量／mute UIです。旧
+`panel-mobile-v1`がこのIDを誤って除去した既存環境には`panel-mobile-v2` migrationを
+適用し、plugin 8の定義が実際に`pulseaudio`で、panel-1にIDがない場合だけ再挿入します。
+パネル設定全体や既存backupは置換しません。
+
+`xfce4-session`はICE authorizationのhard-link lockを使い、PRootでは起動が長時間停滞するため常駐経路に使用しません。`ldfa-session`は`xfsettingsd`、`xfwm4 --compositor=off`、`xfce4-panel`、`xfdesktop`を直接・並列に起動し、Panel／Desktopの実ウィンドウまでready条件に含めます。
+
+4要素は同じBash supervisorの直接の子です。supervisorはPIDを限定しない`wait -n -p`で全子processの終了イベントを待ちます。イベント発生時だけ50 msの同時終了集約を行い、各PIDの`/proc/<pid>/stat`をBash builtinで読み、PPIDとzombie状態を確認して不足した要素をまとめて再起動します。PIDを`wait`へ列挙しないのは、複数SIGKILLの最初の通知でBashが複数jobを回収した場合に、次の`wait`が失効済みPIDを無視して唯一の生存要素だけを待ち続ける競合を避けるためです。定常時に`ps`、`cat`、`xset`、`sleep`を繰り返さないため、監視自体がAndroidのapp child process上限を圧迫しません。Chrome復元helperの正常終了はXFCE crash-loop回数に含めません。Chrome launcherは正常終了と異常終了をmarkerで区別し、launcher shellが残れば1回だけ自己再起動します。launcherも終了した場合はActivity復帰時にsupervisorを安全に起こし、window manager復旧後に前回sessionを再起動します。
+
+viewerのActivity復帰時は、main process内から同一UIDの`/proc`を直接読みます。現在のcontainer rootを祖先command lineに持つ`ldfa-session`、そのPIDを親に持つXFCE 4要素、Chrome markerとbrowser本体がそろっていれば、RunCommand／PRootを生成しない高速経路で終了します。supervisorが一部要素を交換中なら`/proc`だけで最大3秒追跡し、正常化した時点で終了します。supervisor、Chrome本体、X11 serviceのいずれかが欠ける場合だけinstalled controllerの厳密なEWMH／socket検査へ進みます。これにより復旧途中のwindow mappingを故障と誤認して、戻ったdesktopを二度目の全session再構築で消す競合を避けます。
 
 controller は lifecycle 操作を host lock で直列化し、metadata を一時ファイルから atomic rename で更新します。古い DISPLAY の tmux worker を再利用せず、起動前に対象 worker を停止して現在の backend から作り直します。
 
@@ -146,7 +201,7 @@ controller の配置は一時ファイル、`chmod`、atomic rename の順です
 - 起動失敗は active 状態を commit せず、対象 host worker、viewer、X11 / VNC endpoint を bounded cleanup します。
 - native X11 は viewer を閉じてから `stopService()` を使い、service PID marker の process death まで待ちます。残留時は marker または `.X1-lock` の PID と `/proc/<pid>/cmdline` が `com.termux:x11` に一致する場合だけ SIGTERM / SIGKILL を使います。
 - `queued` / `installing` の install worker と `starting` / `running` の session worker は heartbeat が再作成します。
-- XFCE worker は session 終了後に X11 が生存する場合だけ再起動します。
+- XFCE supervisor はsession全体の終了だけでなく、4要素のいずれかが個別終了した場合もX11が生存する範囲で不足分を再起動します。
 - viewer を閉じただけなら Xorg / XFCE session は維持し、再表示時に Binder で接続し直します。
 
 ## 状態、ログ、共有フォルダ
@@ -170,4 +225,4 @@ XFCE:    ~/Desktop/Android共有
 - 旧外部 Termux の container は自動移行しません。
 - PRoot には systemd、完全な Linux kernel 機能、通常の native GPU 権限がありません。
 - Xorg server は remote process ですが viewer renderer は現在 main process です。
-- Android の process death を完全には禁止できません。中間 phase の永続 resume は今後の改善余地です。
+- Android の process death 自体は完全には禁止できません。Chrome本体まで終了された場合は新processと前回sessionの再生成が必要なため、正常な履歴復帰より表示に時間がかかります。端末メーカー固有のbackground制御を含む実機確認は引き続き必要です。

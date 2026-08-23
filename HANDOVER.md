@@ -1,6 +1,200 @@
 # LDFA Linux GUI 起動修正 引き継ぎ
 
-最終更新: 2026-08-22 (JST)
+最終更新: 2026-08-23 (JST)
+
+## 00. 最新確定: 音声の真因（SHM + socket位置）と起動高速化（2026-08-23、実機音声OK確認済み）
+
+本節が音声・起動高速化に関する最新かつ最優先の情報です。§0以降の「PULSE_SERVER=127.0.0.1／
+TCP」という当初仮説は、後述の実機再現で**真因ではなかった**ことが判明しました。API 35 x86_64
+AVD上の実Debian 12コンテナで再現・修正・検証し、その後ユーザーが実機で可聴出力を確認済みです。
+
+### 00.1 音声が出なかった真因（2つの独立したPRoot境界問題）
+
+1. **SHM/memfdがPRoot境界を越えられない。** daemonがshared-memory転送を提示すると、Debian
+   clientはUnix socketで**認証まで成功**するが、再生streamがSHM/srbchannel handshakeで
+   `Connection died`となり、Android sinkがIDLEのまま無音になる。制御呼び出し（`pactl info`）は
+   通るが再生streamだけ死ぬため、panel pluginも同じ箇所で切れて「接続されていません」表示。
+2. **bridge socket dirがPRootのtmp churnで削除される。** socketが`$PREFIX/tmp/ldfa-pulse`に
+   あったため、`--shared-tmp`が`$PREFIX/tmp`全体をguestへbindし、PRootのsession teardown
+   （link2symlink/kill-on-exit）がdaemon生存中にこのdirを断続的に`rm -rf`するrace。
+
+### 00.2 実装した音声修正（`app/src/main/assets/ldfa-host.sh`）
+
+- **SHM無効化**（決定打）: client drop-in（`99-ldfa.conf`をv3へ）とdaemonの
+  `daemon.conf.d/99-ldfa-noshm.conf`の両方に`enable-shm = no`／`enable-memfd = no`。
+  `pulseaudio --start`のCLI`--disable-shm`はre-execで伝播しないため使わず、drop-inで確実化。
+- **socketを`/tmp`の外へ**: `$PREFIX/var/run/ldfa-pulse-bridge`へ移動、`PULSE_RUNTIME_PATH`も
+  `$PREFIX/var/run/ldfa-pulse-rt`へ固定。guestへは各loginに明示的な
+  `--bind "$PULSE_HOST_DIR:/tmp/ldfa-pulse"`でmapし、guest可視pathは`/tmp/ldfa-pulse/native`の
+  まま（client設定・session・normalizer無変更）。
+- `guest_audio_ready`にretryループ追加（cold-daemon-start raceの偽陰性対策）。
+
+実機受け入れ: ユーザーが本体で「音声が再生されること」を確認済み。エミュレータでも
+`audio_guest=1`、sink RUNNING、live sink-inputを確認。
+
+### 00.3 起動高速化（ensure-apps hot path）
+
+`ensure-apps`が毎回3〜4回のPRoot login（audio/runtime/chrome確認）を実行していたのを、
+契約versionのfingerprint（`apps_provisioned` metadata）が一致する間は**1回のcombined login**で
+まとめて検証し即return（`apps_provisioned=cached`）する構成へ変更。PRoot loginが数秒かかる実機
+ほど効果大（確認フェーズが約3〜9秒短縮）。不一致時のみ従来の個別再構築へfallback。
+
+併せて**既存bug修正**: `dpkg-query -f="${Status}\n"`がネスト`-c`内で`\n`リテラル化＋`${Status}`
+誤展開により`audio_client_ready`が常に偽を返し、毎回不要なapt処理が走っていた。個別問い合わせ
+＋single-quoted`-f='${Status}'`へ修正。ユーザーが実機で起動が速くなったことを確認済み。
+
+固定delay短縮・ensure-apps並列化は、実機でしか検証できないrace（renderer/audio修正時に発見）
+再発を避けるため見送り（機能保全優先）。
+
+### 00.4 更新した検証gate
+
+- `scripts/check-host-script.sh`: SHM無効化、daemon.conf.d、bridge新location、
+  `--bind "$PULSE_GUEST_BIND"`、fingerprint／combined-check文字列を追加。
+- `scripts/test-host-controller.sh`: bridge socket pathを`$PREFIX/var/run/ldfa-pulse-bridge`へ更新、
+  daemon.conf.d drop-in生成を検査。
+- 158 unit tests／3 module lint／3 shell gate すべてPASS、clean full build成功。
+
+## 0. 旧仮説（superseded）: 動画は再生できるが音が出ない問題（2026-08-23）
+
+> 注意: 以下§0の「TCP／127.0.0.1」仮説は§00で真因（SHM＋socket位置）が確定したため
+> 履歴として残す。実際の修正は§00を参照。
+
+ユーザーによる実機確認では、これまでの既知のGUI起動・復帰不具合は解消し、
+Chromeで動画映像も再生できました。一方で動画の音声がAndroidへ出力されないことが
+判明したため、今回の正本では音声経路を修正しました。本節は、それより後ろにある
+2026-08-22までの起動修正履歴より新しく、音声に関して最優先で参照する情報です。
+
+### 0.1 確定したコード上の不整合
+
+旧実装はDebianへ`PULSE_SERVER=127.0.0.1`を渡していました。このserver stringは
+PulseAudioのTCP接続を選びますが、Termux側ではdaemonを起動するだけで
+`module-native-protocol-tcp`をロードしていませんでした。Termuxの標準構成はnative
+Unix protocolとAndroid出力sinkを使うため、Debian clientだけが存在しないTCP endpoint
+へ接続する不整合があり、観測された無音の最有力原因です。旧起動処理はエラーを破棄して
+`|| true`で継続していたため、GUIが正常に起動しても音声障害が利用者や状態表示へ現れませんでした。
+旧APK実機のmodule／sink／route証跡を障害発生時に保存できていないため、直接原因の最終
+確定は、同じ端末・動画で修正版の可聴出力を確認した時点とします。
+
+### 0.2 実装した音声経路
+
+音声は表示backendから独立した、アプリsandbox内の専用Unix socketへ統一しました。
+
+```text
+Debian / XFCE / Chrome
+  PULSE_SERVER=unix:/tmp/ldfa-pulse/native
+                  |
+                  | proot-distro --shared-tmp
+                  v
+Termux compatible runtime
+  $PREFIX/tmp/ldfa-pulse/native
+                  |
+                  v
+PulseAudio module-sles-sink
+  （失敗時のみ module-aaudio-sink）
+                  |
+                  v
+Android media route（本体speaker / Bluetooth / イヤホン）
+```
+
+- socket親directoryは`0700`で作成し、匿名TCP listenerや`0.0.0.0` listenerは作りません。
+- `$PREFIX/etc/pulse/default.pa.d/ldfa-audio.pa`をatomicに生成し、Termux package本体の
+  `default.pa`を直接変更しません。
+- daemon、module、socket、非`auto_null`の実sink、Debian client接続を別々に検査します。
+- stale control socket／daemonは、状態を三値で判定してからTERM、bounded wait、必要時
+  KILL、終了再確認の順で処理し、二重daemonを起動しません。
+- module／sink一覧の取得に失敗した場合は「存在しない」と推測して重複ロードせず、
+  音声だけをdegraded状態にしてGUI起動を継続します。
+- `doctor`に`audio_tools`、専用の`audio-probe <環境ID>`、worker stateに
+  `audio_ready=0/1`を追加しました。失敗理由はhost logへ残ります。
+
+今回の対象は再生出力だけです。`RECORD_AUDIO`とmicrophone foreground-service permission
+は追加しておらず、マイク入力は実装範囲外です。
+
+### 0.3 新規環境と既存環境の移行
+
+新規Debian 12環境には`pulseaudio-utils`と`libasound2-plugins`を導入します。既存環境は
+次回の停止→起動時に、app-ownedな次のdrop-inを作成します。
+
+```text
+/etc/pulse/client.conf.d/99-ldfa.conf
+/etc/alsa/conf.d/99-ldfa-pulse.conf
+```
+
+ユーザー所有の`~/.config/pulse/client.conf`と`~/.asoundrc`は上書きしません。開発途中の
+v1設定だけは内容がbyte単位で完全一致する場合に限って削除します。network上のAPT
+update／downloadは有限時間で打ち切り、失敗してもGUIを起動します。既存環境のAPT cache
+やpackage listは音声移行のために削除しません。
+
+Debian BookwormのXFCE既定panelではplugin ID 8がPulseAudioの音量／mute項目です。旧
+`panel-mobile-v1`が誤って削除した環境では`panel-mobile-v2`が、このpluginの定義が
+実際に`pulseaudio`で、panel-1にまだ存在しない場合だけ復元します。ユーザーが再追加した
+他のplugin、panel全体、既存backupは保持します。
+
+### 0.4 回帰検査
+
+今回追加・更新したgateは次を検査します。
+
+- 生成した`ldfa-session`と最終PRoot環境のUnix endpoint一致
+- cold／warm起動、二重module防止、stale socket／stale daemon復旧
+- module inventory、sink inventory、module unload、`pgrep`異常時のfail-safe
+- OpenSL ES sink不在時のAAudio fallback成功経路と、degraded caller contractの構造
+- 新規panel移行、旧v1移行、backup保持、二回実行時のidempotency
+- user Pulse／ALSA pathへ直接書かず、旧v1完全一致時だけ削除する静的契約
+- compatibility normalizerがlegacy workerにも同じUnix endpointを注入すること
+- APK内host assetがsourceとbyte一致し、同じstatic gateを通ること
+- 再生専用buildへ不要なマイクpermissionが混入していないこと
+
+stateful integration testが実行するのはcold／warm bridge、inventory／unload異常、stale
+daemon／socket、AAudio fallback成功などです。AAudio／SLESの両方が失敗した実workerと、
+任意内容のuser Pulse／ALSAファイルのpre／post byte比較は実機受け入れ項目です。static
+contractの合格を、この二つの動的実行済みという意味には扱いません。
+
+2026-08-23の最終クリーンビルド結果は次のとおりです。
+
+| 項目 | 結果 |
+| --- | --- |
+| Gradle | `BUILD SUCCESSFUL in 1m 41s`、377 actionable tasks |
+| unit tests | 全体158 / 158 PASS（app 13 / 13）、failure 0、error 0、skip 0 |
+| lint | app／termux-runtime／embedded-x11すべてPASS、error 0 |
+| host／X11 shell gate | static、stateful PulseAudio controller、X11 architectureすべてPASS |
+| package | `com.termux`、versionCode 16、versionName 0.9.0、label LDFA |
+| native ABI | `arm64-v8a`、`armeabi-v7a`、`x86`、`x86_64`の`libXlorie.so`を確認 |
+| JNI | 必須9 symbolを4 ABIすべてで確認、packaged `.so`はstripped build outputと一致 |
+| alignment | `zipalign -c -P 16 4` PASS。arm64-v8a／x86_64の最小PT_LOAD alignmentは`0x4000` |
+| signature | APK Signature Scheme v2 PASS、Android Debug certificate |
+| audio asset | APK内`ldfa-host.sh`はsourceとbyte一致し、音声static gate PASS |
+| permission | `RECORD_AUDIO`／`FOREGROUND_SERVICE_MICROPHONE`不在 |
+
+引き渡すAPKは次です。三つのファイルは同一内容ですが、音声修正版であることが明確な
+最初の名前を実機試験に使用してください。
+
+```text
+app/build/outputs/apk/debug/LDFA-v0.9.0-audio-fix-debug.apk
+app/build/outputs/apk/debug/LDFA-v0.9.0-debug.apk
+app/build/outputs/apk/debug/app-debug.apk
+
+size:    157072967 bytes
+SHA-256: 561907b3ad13158f43c78057061715c16d4ed5ceedb6d5f3044e9228b8132fe2
+```
+
+### 0.5 実機で残る受け入れ境界
+
+ソース／テスト／APK検査では、DebianのstreamがAndroid端末のspeakerから実際に聞こえる
+ことまでは証明できません。修正版APKを上書きした後、実行中の既存環境を一度停止して
+から起動し、Native X11とVNC fallbackの両方で次を確認してください。
+
+1. 修復コマンドの実行前に、startupが記録した`audio_ready=1`、host log、socket、module、
+   非`auto_null` sink、guest接続をread-onlyで採取する。
+2. その後の`ldfa-host audio-probe <環境ID>`が`audio_server=1`、`audio_guest=1`を
+   報告する。これはdaemon／moduleを修復しmetadataを書き換えるため、手順1の代用にはしない。
+3. Chromeの音声付き動画または既知のWAVを再生中に`sink-input`が現れる。
+4. XFCE panelの音量項目でmute／unmuteと音量変更ができる。
+5. 本体speaker、および利用するBluetooth／有線routeで実際に音が聞こえる。
+6. stop→startを繰り返しても専用moduleが増殖しない。
+
+端末がUSB接続されていない状態での作業では、上記6項目の実機音声受け入れは未実施です。
+とくに「人が実際に聞く」確認は、transport／sinkの診断結果だけで代用できません。診断と
+具体的なADBコマンドは`docs/TESTING.md`の「音声出力の実機回帰試験」を参照します。
 
 ## 1. この文書の目的
 
@@ -9,7 +203,7 @@
 重要な点は次の三つです。
 
 - ソース上で複数の確定した不具合を発見し、今回の P0 修正は canonical tree に統合済みです。
-- pinned pristine submodule からの canonical clean full build、155 unit tests、3 module lint、4 ABI native package gate、zipalign、APK 署名まで成功しています。
+- pinned pristine submodule からの canonical clean full build、158 unit tests（app 13を含む）、3 module lint、4 ABI native package gate、zipalign、APK 署名まで成功しています。
 - その後、API 35 x86_64・4 KB page の一時 AVD で Debian 12 rootfs の実インストールから native X11、XFCE、Mozc、共有ストレージ、Surface 再作成、停止／再起動、強制 VNC fallback まで動的検証しました。物理 ARM64 と 16 KB page の最終受け入れは引き続き未完了です。
 
 ### 1.1 2026-08-22 継続デバッグの要約
@@ -69,9 +263,14 @@ Chrome で https://example.com を実表示                   PASS
 ```text
 /home/takeshi/StudioProjects/LDFA-fix
 branch: fix/linux-gui-startup
-base HEAD: 63b4ab1012de8d4c3cc6e2119fb4ae28dc5966cb
+tracked HEAD: a73298b971f2400ee89421be7173720ebf65fdef
+upstream: origin/main at a73298b971f2400ee89421be7173720ebf65fdef
 origin: https://github.com/hatake716/LDFA.git
 ```
+
+音声修正と同時点のGUI継続修正は未commitのworking-tree差分を含みます。上記HEADだけを
+checkoutしても、今回のAPKと同じ内容にはなりません。再build／公開時は、本書の必須
+未追跡ファイルを含む現在のworking tree全体を候補として扱い、明示的にscopeを確認します。
 
 submodule の基準は次です。
 
@@ -93,7 +292,10 @@ vendor/termux-x11  50ac80fb2d4a475e323e752d17fcc0483c3c99fc
 - `Linux-Desktop-for-Android` はビルド可能な Ubuntu 系参照実装ですが、Debian を使う今回の製品仕様そのものではありません。
 - どちらかのディレクトリを `LDFA-fix` へ丸ごとコピーしないでください。
 
-2026-08-22、ユーザーから今回の変更を GitHub の `main` へ反映し、README を現状へ合わせて書き直す明示指示を受けました。v0.9.0 の GitHub プレリリース作成は物理実機テストの結果待ちであり、main 更新と同時には行いません。
+2026-08-22、ユーザーから当時の変更をGitHubの`main`へ反映し、READMEを現状へ合わせて
+書き直す明示指示を受けました。これは履歴情報であり、2026-08-23の未commit音声修正を
+commit／pushする権限を意味しません。v0.9.0のGitHubプレリリース作成は物理実機テストの
+結果待ちです。
 
 ## 3. 公開版から保持したもの
 
@@ -285,7 +487,7 @@ Debian host script には日本語入力／デスクトップ品質に関する�
 
 ### 6.1 canonical clean full build
 
-2026-08-22、継続修正後の `LDFA-fix` canonical worktree と pinned pristine `termux-x11@50ac80f` を使い、JDK 17／Gradle 8.13／writable Android SDK で次を clean から再実行しました。
+2026-08-23、音声修正を含む`LDFA-fix` canonical worktreeのsnapshotと pinned pristine `termux-x11@50ac80f` を使い、JDK 17／Gradle 8.13／writable Android SDK で次を clean から再実行しました。
 
 ```text
 clean
@@ -299,12 +501,12 @@ assembleDebug
 結果は次のとおりです。
 
 ```text
-BUILD SUCCESSFUL                                         PASS
-Gradle tasks                                             377 (348 executed, 29 up-to-date)
-unit tests                                               155 / 155 PASS
+BUILD SUCCESSFUL in 1m 41s                               PASS
+Gradle tasks                                             377 (370 executed, 7 up-to-date)
+unit tests                                               158 / 158 PASS (app 13 / 13)
 test failures / errors / skipped                         0 / 0 / 0
 lint errors                                              0
-lint warnings                                            app 34 / termux-runtime 26 / embedded-x11 41
+lint warnings                                            app 37 / termux-runtime 25 / embedded-x11 40
 arm64-v8a / armeabi-v7a / x86 / x86_64 native build      PASS
 ```
 
@@ -315,6 +517,7 @@ bash scripts/check-host-script.sh                         PASS
 bash scripts/test-host-controller.sh                      PASS
 bash scripts/check-x11-controller.sh                      PASS
 shell assets/scripts bash -n                              PASS
+APK内host assetの同一性と音声static gate                 PASS
 ```
 
 wrapper JAR を置かない状態から Gradle 8.13 wrapper を取得し、契約 SHA-256 と一致することも確認済みです。pinned pristine vendor から generator を直接実行した Java overlay と、build が実際に使った Java overlay は同一です。主要 native 生成物 4 点も直接生成結果と全 ABI の build input が一致しました。
@@ -324,9 +527,9 @@ wrapper JAR を置かない状態から Gradle 8.13 wrapper を取得し、契�
 検証済み APK を canonical project へ次の名前で配置しました。
 
 ```text
-/home/takeshi/StudioProjects/LDFA-fix/app/build/outputs/apk/debug/LDFA-v0.9.0-debug.apk
-size: 157044263 bytes
-SHA-256: 32aaa493e347b7194b9e7514b3c47e1e74f1f2d23b3905af9bdfd8ae6764c5f6
+/home/takeshi/StudioProjects/LDFA-fix/app/build/outputs/apk/debug/LDFA-v0.9.0-audio-fix-debug.apk
+size: 157072967 bytes
+SHA-256: 561907b3ad13158f43c78057061715c16d4ed5ceedb6d5f3044e9228b8132fe2
 ```
 
 package gate の結果は次のとおりです。
@@ -340,6 +543,8 @@ ToolsScreen / VNC fallback / X11 controller               present
 EmbeddedX11ServerService android:process=":x11"           present
 obsolete x11-loader / app_process / external launch       absent
 Chrome provisioning asset / startup wait text             present
+app-private PulseAudio bridge / session runtime v18       present
+RECORD_AUDIO / microphone FGS permission                  absent
 dead Settings X11 label in DEX                            absent
 zipalign -c -P 16 4                                       PASS
 arm64-v8a / x86_64全10 .so PT_LOAD >= 0x4000             PASS
@@ -349,10 +554,10 @@ APK signature                                             PASS (debug certificat
 各 ABI の APK 内 `libXlorie.so` は Gradle の stripped native intermediate と SHA-256 が一致し、必須 JNI export は 9/9 です。
 
 ```text
-arm64-v8a    d3181bb10ee0b862784bbb1d743dcefd739e61cc6ad403f0201419eb7f88509b    9/9
-armeabi-v7a  da1545d9b12e5fdd1f80da44e1896da2ac7c2ce8b4fa7a3e59bb045356993ec3    9/9
-x86          23f5d370e75183efddd40442928729e5dcf55e5523f9b84f6304d87d72db9a0b    9/9
-x86_64       997029eefb7d2f7cc8cfe2d88c1dacf45eaacfd9eb7d505f7a3877004fdf09bf    9/9
+arm64-v8a    7f761e0d3cc884f0252784fc530fba07fd5a5707464472e7e49cba47a2f23990    9/9
+armeabi-v7a  e0932f3ce3deb44b1c3a7ef963ea6b554f7f0f0c545be2c40ee01215681d0178    9/9
+x86          cbae3caebffc011d1892e9f973c1023d57935085a7516322195d9efa25869bb8    9/9
+x86_64       febd7667939dd93ed2a3f0453bbca153e9118e5258611441b0b72e133fb68051    9/9
 ```
 
 Android 公式の ELF alignment 判定対象である `arm64-v8a` と `x86_64` は、`libXlorie.so`、`libandroidx.graphics.path.so`、`liblocal-socket.so`、`libtermux-bootstrap.so`、`libtermux.so` の全 10 files が minimum LOAD alignment `0x4000` でした。`armeabi-v7a`／`x86` は 4 KB alignment ですが、16 KB page kernel の公式判定対象ではありません。
@@ -392,6 +597,9 @@ GTK_IM_MODULE=fcitx / QT_IM_MODULE=fcitx / XMODIFIERS=@im=fcitx
 
 - 物理 ARM64 端末での clean install と長時間操作
 - ARM64 16 KB page device での Debian rootfs／XFCE E2E
+- 音声修正版APKでの`audio-probe`、実sink／sink-input、XFCE panel音量操作
+- 本体speaker／Bluetooth／有線routeからの可聴出力
+- stop→start反復時の専用PulseAudio module非重複
 - Developer options の “Don't keep activities” を有効にした transaction 完走
 - low-memory kill／main process recreation を越える復旧（persistent orchestrator 自体が未実装）
 - vendor EGL driver 内部の永久 hang と native SIGSEGV の process isolation
@@ -441,7 +649,7 @@ GTK_IM_MODULE=fcitx / QT_IM_MODULE=fcitx / XMODIFIERS=@im=fcitx
 - generator の replacement drift、生成構造、pristine pinned vendor 再現性を検査
 - `scripts/check-x11-controller.sh` に atomic stopping、helper 3 箇所、lock/fence cleanup、shutdown guard の構造回帰検査を追加
 - stale notification STOP が新しい active session／KeepAlive service を停止しないよう `startId` ownership を修正
-- canonical clean full build、155 unit tests、3 module lint、4 ABI native build を実行
+- canonical clean full build、158 unit tests（app 13）、3 module lint、4 ABI native build を実行
 - APK package、CRC、branding、manifest、DEX、4 ABI、JNI export、stripped hash、zipalign、signature を検証
 - `.github/workflows/android.yml` を同じ package gate に更新
 - `.gitignore` に module build directory、`__pycache__`、Python bytecode を追加
@@ -562,6 +770,7 @@ Gradle 8.13 wrapper JAR SHA-256:
 10. native normal のみを意図的に失敗させ、分類可能な buffer-import 系 failure なら legacy、その他なら clean teardown 後に VNC `:2` へ fallback することを確認する。
 11. VNC fallback で XFCE 本体も `DISPLAY=:2` にいることを確認する。
 12. stop／restart を連打しても同名 tmux worker、socket、metadata、viewer が世代混在しないことを確認する。
+13. 本書§0.5と`docs/TESTING.md`に従い、修復前snapshot、Native X11／VNCのstream、panel、module反復、本体speaker／Bluetoothの可聴音声を確認する。
 
 ログを取る場合は、テスト開始前に logcat を clear し、main process と `:x11` process の PID、native crash tombstone、service generation、renderer state、present serial を一緒に保存してください。
 
@@ -581,14 +790,19 @@ native crash が起きた場合は「画面が出なかった」だけでなく�
 
 特に次を区別します。
 
-### 今回の公開に必須だった新規ファイル
+### 今回の公開に必須の新規ファイル
 
 ```text
 embedded-x11/scripts/prepare_embedded_java.py
 HANDOVER.md
+app/src/main/java/com/hatake716/linuxdesktop/data/ProcessExitDiagnostics.kt
+app/src/test/java/com/hatake716/linuxdesktop/data/ProcessExitDiagnosticsTest.kt
 ```
 
-`prepare_embedded_java.py` は clean checkout の build に必須です。公開時に必ず明示的に含めます。
+`prepare_embedded_java.py`と`HANDOVER.md`はすでに追跡済みです。上記の
+`ProcessExitDiagnostics` 2ファイルは2026-08-23時点で未追跡ですが、既存の呼び出し元と
+APK package gateに必要です。公開時に落とすとclean checkoutのcompile／gateが失敗するため、
+必ず明示的に含めます。
 
 ### 生成物なので commit しない
 
@@ -617,14 +831,14 @@ vendor/termux-x11/
 4. submodule gitlink が上記 pinned hash のままか確認する。
 5. build directory、wrapper JAR、bootstrap zip、daemon JVM のローカル生成物が stage されていないことを確認する。
 6. canonical full clean build と package gate を最終 commit 候補そのものに対して実行する。
-7. 今回は main への直接反映が明示承認済みです。今後の追加 commit／push／PR は、その都度ユーザーの明示指示を確認する。
+7. 2026-08-22バッチへのmain反映承認は履歴情報です。2026-08-23音声修正を含む今後のcommit／push／PRは、その都度ユーザーの明示指示を確認する。
 
 ## 12. 次担当者向けの再開チェックリスト
 
 1. `/home/takeshi/StudioProjects/LDFA-fix/HANDOVER.md` と `git status --short` を読む。
 2. `vendor/termux-x11` が `50ac80f` かつ clean であることを確認する。
-3. `prepare_embedded_java.py` と `HANDOVER.md` が追跡済みで存在することを確認する。前者が欠けると clean checkout の X11 static gate／build が成立しない。
-4. 検証済み APK の SHA-256 が `32aaa493e347b7194b9e7514b3c47e1e74f1f2d23b3905af9bdfd8ae6764c5f6` であることを確認する。
+3. `prepare_embedded_java.py`、`HANDOVER.md`、`ProcessExitDiagnostics.kt`と同testが追跡済みで存在することを確認する。欠けるとclean checkoutのstatic gate／buildが成立しない。
+4. 音声修正版APKのSHA-256が`561907b3ad13158f43c78057061715c16d4ed5ceedb6d5f3044e9228b8132fe2`であることを確認する。
 5. 物理 ARM64 実機で clean-install E2E を native normal から実施する。
 6. ARM64 16 KB page device で APK install、native viewer、Debian PRoot/XFCE を確認する。
 7. “Don't keep activities”、low-memory／main process recreation を追加検証する。
@@ -635,7 +849,6 @@ vendor/termux-x11/
 ## 13. 低優先度の既知事項
 
 - vendor EGL call 自体が driver 内で永久停止した場合の完全隔離には、viewer の別 process 化が必要です。今回の同期 shutdown hardening はコード上判明した mutex／fence 待機を停止可能にしましたが、driver 内部 hang の時間上限までは保証しません。
-- `ldfa-host.sh` の `exec startxfce4 || { ... }` は、`exec` 成功時点で shell が置換されるため、`startxfce4` が後から非ゼロ終了しても fallback block は実行されません。fallback を実際に使うなら `startxfce4 || { ... }` とし、正常終了時に worker をどう扱うかも明示する必要があります。
 - `LINUX_IMAGE="debian:12"` は今回の PRoot/apt E2E を成立させた Bookworm baseline です。UI の一般名は「Debian」ですが、release pin を外すと Trixie/apt 3 の syscall 要件で再び壊れ得るため、変更時は新規 rootfs install から再検証してください。
 
 ## 14. 現時点の結論
@@ -644,4 +857,8 @@ vendor/termux-x11/
 
 今回の P0 修正は canonical tree に統合され、renderer shutdown hardening、static/integration gates、unit tests、3 module lint、4 ABI native build、APK package/JNI/hash/align/signature gate に加え、4 KB API 35 AVD の Debian 12/XFCE E2E まで進みました。native 正常系、Mozc の日本語確定、共有 storage、Surface 再作成、background、stop/restart、強制 VNC `:2` fallback は実画面と process/socket/env の両方で確認済みです。さらに、起動待機注意、Google Chrome の自動導入、設定画面の死んだ X11 項目削除を最終 APK 上で確認済みです。
 
-したがって「エミュレーター上で Linux GUI が表示できる」ことは確認済みです。一方、物理 ARM64、ARM64 16 KB page、low-memory/process-death、vendor EGL hang の受け入れは残っています。APK の 16 KB alignment 成功だけを Debian userland を含む 16 KB E2E 成功とは扱わないでください。
+したがって「エミュレーター上で Linux GUI が表示できる」ことは確認済みです。一方、
+音声修正版での実sink／sink-input／panel／module反復と本体speaker・Bluetoothの可聴出力、
+物理 ARM64、ARM64 16 KB page、low-memory/process-death、vendor EGL hang の受け入れは
+残っています。APKのtransport／alignment成功だけを、Android audio routeの実音や
+Debian userlandを含む16 KB E2E成功とは扱わないでください。

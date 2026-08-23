@@ -23,6 +23,28 @@ import java.util.UUID
  * running in the background, and Android owns the service process lifetime directly.
  */
 internal object EmbeddedX11ServiceController {
+    /**
+     * Rebuilds volatile launch state after Android reclaims only the main app process.
+     * A stale state file is never sufficient: the dedicated X11 PID, Unix socket and
+     * X11 lock must all still identify the same live service process.
+     */
+    fun restoreDisplayAccess(context: Context): Boolean {
+        val state = serviceState(context) ?: return false
+        if (!isExpectedServiceReady(context, state.generation)) return false
+
+        synchronized(displayOpenLock) {
+            displayOpenAllowed = true
+            expectedServiceGeneration = state.generation
+            displayOpenFailure = null
+        }
+        EmbeddedX11Display.restoreLaunchGeneration(state.generation)
+        Log.i(
+            LIFECYCLE_LOG_TAG,
+            "restored viewer access for verified live X11 generation=${state.generation}",
+        )
+        return true
+    }
+
     suspend fun restartAndWait(
         context: Context,
         legacyDrawing: Boolean,

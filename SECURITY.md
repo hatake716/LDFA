@@ -39,7 +39,7 @@ Service世代UUID、PIDと`/proc/<pid>/cmdline`を照合し、所有を確認で
 
 PRootは仮想マシンや強いセキュリティ境界ではありません。Debian環境のrootはAndroid端末のrootではありませんが、同じアプリのファイルや明示的にバインドした共有フォルダへアクセスできます。Debianの`desktop`ユーザーには利便性のためパスワードなしの`sudo`を設定します。
 
-Google ChromeはGoogle公式のstableパッケージをDebian環境へ実行時に取得します。Android PRootではChromeの通常のnamespace／setuid sandboxが成立しないため、専用ランチャーは一般ユーザー`desktop`から`--no-sandbox`で起動します。Chromeのrenderer sandboxに依存した隔離は提供されません。信頼できないWebサイト、拡張機能、ダウンロードファイルを扱う場合は、この制約を前提にしてください。
+Google ChromeはGoogle公式のstableパッケージをDebian環境へ実行時に取得します。Android PRootではChromeの通常のnamespace／setuid sandboxが成立しないため、専用ランチャーは一般ユーザー`desktop`から`--no-sandbox`で起動します。省メモリ化のrenderer上限はこのsandboxを復元するものではなく、Chromeのrenderer sandboxに依存した隔離は提供されません。信頼できないWebサイト、拡張機能、ダウンロードファイルを扱う場合は、この制約を前提にしてください。
 
 ## 既知のリスク
 

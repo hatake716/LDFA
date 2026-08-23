@@ -99,6 +99,7 @@ internal object HostScriptCompatibility {
             "env -u LD_PRELOAD -u LD_LIBRARY_PATH /usr/local/bin/ldfa-session",
             "env -u LD_PRELOAD -u LD_LIBRARY_PATH DISPLAY=\":${'$'}DISPLAY_NUMBER\" " +
                 "GTK_IM_MODULE=fcitx QT_IM_MODULE=fcitx XMODIFIERS=@im=fcitx " +
+                "PULSE_SERVER=unix:/tmp/ldfa-pulse/native " +
                 "/usr/local/bin/ldfa-session",
         )
 

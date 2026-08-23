@@ -76,6 +76,16 @@ class MainActivity : ComponentActivity() {
         viewModel.refreshEnvironment()
     }
 
+    override fun onStart() {
+        super.onStart()
+        viewModel.setHostActivityVisible(true)
+    }
+
+    override fun onStop() {
+        viewModel.setHostActivityVisible(false)
+        super.onStop()
+    }
+
     private fun prepareEmbeddedRuntime() {
         if (bootstrapDialogRequested && !EmbeddedTermuxRuntime.isBootstrapInstalled()) return
         bootstrapDialogRequested = true

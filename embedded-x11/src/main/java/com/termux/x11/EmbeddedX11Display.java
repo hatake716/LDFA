@@ -62,6 +62,19 @@ public final class EmbeddedX11Display {
         open(context);
     }
 
+    /**
+     * Restores only the in-process launch capability after Android reclaims the main process.
+     * The application layer must first verify the persisted service PID, generation, X11 socket
+     * and lock owner; this method deliberately performs no Activity launch by itself.
+     */
+    public static void restoreLaunchGeneration(String generation) {
+        if (generation == null || generation.isEmpty())
+            throw new IllegalArgumentException("X11 viewer generation is required");
+        synchronized (launchLock) {
+            allowedLaunchGeneration = generation;
+        }
+    }
+
     public static boolean isOpen() {
         return MainActivity.getInstance() != null;
     }

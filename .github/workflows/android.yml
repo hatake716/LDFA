@@ -114,7 +114,10 @@ jobs:
           # negative assertion), so every grep below reads a regular file.
           unzip -Z1 "$APK" > "$VERIFY_DIR/entries.txt"
           unzip -p "$APK" 'classes*.dex' | strings > "$VERIFY_DIR/dex-strings.txt"
+          unzip -p "$APK" assets/ldfa-host.sh > "$VERIFY_DIR/ldfa-host.sh"
           unzip -p "$APK" assets/ldfa-x11.sh > "$VERIFY_DIR/ldfa-x11.sh"
+          cmp app/src/main/assets/ldfa-host.sh "$VERIFY_DIR/ldfa-host.sh"
+          bash scripts/check-host-script.sh "$VERIFY_DIR/ldfa-host.sh"
           "$APKANALYZER" manifest print "$APK" > "$VERIFY_DIR/manifest.xml"
           "$APKANALYZER" manifest application-id "$APK" > "$VERIFY_DIR/application-id.txt"
           "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$APK" > "$VERIFY_DIR/badging.txt"
@@ -153,6 +156,8 @@ jobs:
           grep -Fq 'EmbeddedX11ServiceController' "$VERIFY_DIR/dex-strings.txt"
           grep -Fq 'com.hatake716.linuxdesktop.x11.EmbeddedX11ServerService' "$VERIFY_DIR/manifest.xml"
           grep -Fq 'android:process=":x11"' "$VERIFY_DIR/manifest.xml"
+          ! grep -Fq 'android.permission.RECORD_AUDIO' "$VERIFY_DIR/manifest.xml"
+          ! grep -Fq 'android.permission.FOREGROUND_SERVICE_MICROPHONE' "$VERIFY_DIR/manifest.xml"
 
           # The obsolete app_process/loader and shell-owned Android lifecycle must not return.
           ! grep -Fq 'assets/x11-loader.apk' "$VERIFY_DIR/entries.txt"
@@ -170,6 +175,21 @@ jobs:
           grep -Fq "versionCode='16' versionName='0.9.0'" "$VERIFY_DIR/badging.txt"
           grep -Fq "application-label:'LDFA'" "$VERIFY_DIR/badging.txt"
           grep -Fq 'ToolsScreen' "$VERIFY_DIR/dex-strings.txt"
+          grep -Fq 'ProcessExitDiagnostics' "$VERIFY_DIR/dex-strings.txt"
+          grep -Fq 'ldfaImeResizeV1' "$VERIFY_DIR/dex-strings.txt"
+
+          # Chrome keeps Google sign-in support while bounding its renderer pool.  The launcher
+          # marker forces existing Debian environments to receive this update before startup.
+          grep -Fq '# LDFA_CHROME_LAUNCHER_VERSION=8' "$VERIFY_DIR/ldfa-host.sh"
+          grep -Fq '# LDFA_SESSION_RUNTIME_VERSION=18' "$VERIFY_DIR/ldfa-host.sh"
+          grep -Fq -- '--renderer-process-limit=2' "$VERIFY_DIR/ldfa-host.sh"
+          grep -Fq -- '--disable-background-mode' "$VERIFY_DIR/ldfa-host.sh"
+          grep -Fq -- '--disable-extensions' "$VERIFY_DIR/ldfa-host.sh"
+          grep -Fq -- '--disable-component-extensions-with-background-pages' "$VERIFY_DIR/ldfa-host.sh"
+          grep -Fq 'wait -n -p exited_component_pid || true' "$VERIFY_DIR/ldfa-host.sh"
+          grep -Fq 'sleep 0.05' "$VERIFY_DIR/ldfa-host.sh"
+          ! grep -Fq -- '--single-process' "$VERIFY_DIR/ldfa-host.sh"
+          ! grep -Fq -- '--enable-low-end-device-mode' "$VERIFY_DIR/ldfa-host.sh"
 
           "$ANDROID_HOME/build-tools/36.0.0/zipalign" -c -P 16 4 "$APK"
           "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify "$APK"

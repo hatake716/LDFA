@@ -61,7 +61,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         refreshEnvironment(showLoading = true)
-        startPolling()
+    }
+
+    /**
+     * The Compose home screen is stopped while the native X11 activity is visible. Polling its
+     * cards in that state only starts short-lived Termux/PRoot processes beside Chrome, so keep
+     * the five-second refresh strictly scoped to the visible host activity.
+     */
+    fun setHostActivityVisible(visible: Boolean) {
+        if (visible) {
+            if (pollingJob?.isActive != true) startPolling()
+            return
+        }
+        pollingJob?.cancel()
+        pollingJob = null
+        containerRefreshJob?.cancel()
+        containerRefreshJob = null
     }
 
     fun refreshEnvironment(showLoading: Boolean = false) {
