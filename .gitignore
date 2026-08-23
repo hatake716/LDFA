@@ -13,3 +13,4 @@ app/build/
 __pycache__/
 *.py[cod]
 gradle/wrapper/gradle-wrapper.jar
+.kotlin/
