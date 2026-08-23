@@ -1,30 +1,80 @@
 # LDFA — Linux Desktop for Android
 
 [![LDFA Android CI](https://github.com/hatake716/LDFA/actions/workflows/android.yml/badge.svg?branch=main)](https://github.com/hatake716/LDFA/actions/workflows/android.yml)
+[![Release](https://img.shields.io/github/v/release/hatake716/LDFA?include_prereleases&label=release)](https://github.com/hatake716/LDFA/releases/tag/v0.9.0)
 [![License: GPL-3.0-only](https://img.shields.io/badge/License-GPL--3.0--only-blue.svg)](LICENSE)
 
 **LDFA** は、Android端末の中にDebian 12（Bookworm）とXFCEデスクトップを構築し、1つのAndroidアプリ内で操作するためのプロジェクトです。
 
 Termux互換ランタイム、X11サーバー、X11 viewer、ターミナル、Debian PRoot、XFCE、日本語入力環境をアプリに統合しています。通常利用では、外部Termux、外部Termux:X11、外部VNCクライアントを別々にインストールする必要はありません。
 
+> **スマホの中に、Debian の PC を。** 追加アプリも root も要りません。1つのアプリを開くだけで、Debian XFCE デスクトップが起動します。
+
+### 📸 スクリーンショット
+
+Androidの管理画面から環境をワンタップで起動し、そのまま本物のLinuxデスクトップが立ち上がります。
+
+<table>
+  <tr>
+    <td width="33%" align="center">
+      <img src="docs/screenshots/home.png" alt="LDFA ホーム画面 — 保存した環境の起動・停止をカードで管理" width="240"><br>
+      <sub><b>ホーム</b> — 環境をワンタップ起動</sub>
+    </td>
+    <td width="33%" align="center">
+      <img src="docs/screenshots/desktop.png" alt="Android 上で動作する Debian XFCE デスクトップ。Thunar と Chrome が起動している" width="240"><br>
+      <sub><b>デスクトップ</b> — Thunar と Chrome が動作</sub>
+    </td>
+    <td width="33%" align="center">
+      <img src="docs/screenshots/chrome.png" alt="Debian 上で起動した Google Chrome" width="240"><br>
+      <sub><b>Google Chrome</b> — 公式版を自動導入</sub>
+    </td>
+  </tr>
+  <tr>
+    <td width="33%" align="center">
+      <img src="docs/screenshots/tools.png" alt="ツール画面。システムの状態がすべて緑のチェック" width="240"><br>
+      <sub><b>ツール</b> — 内蔵環境の状態を可視化</sub>
+    </td>
+    <td width="33%" align="center">
+      <img src="docs/screenshots/settings.png" alt="設定画面。準備状況がすべて完了" width="240"><br>
+      <sub><b>設定</b> — 準備状況を一目で確認</sub>
+    </td>
+    <td width="33%" align="center">
+      <img src="docs/screenshots/xfce.png" alt="XFCE デスクトップ本体。パネルにスピーカーアイコン" width="240"><br>
+      <sub><b>XFCE</b> — 日本語デスクトップと音声出力</sub>
+    </td>
+  </tr>
+</table>
+
+<p align="center">
+  <img src="docs/screenshots/desktop-landscape.png" alt="横向きに回転しても追従する Debian XFCE デスクトップ" width="640"><br>
+  <sub>横向き表示 — 同じセッションのまま画面の向きに追従</sub>
+</p>
+
+### ⬇️ 入手（v0.9.0 プレリリース）
+
+**[▶ Releases から `LDFA-v0.9.0-debug.apk` をダウンロード](https://github.com/hatake716/LDFA/releases/tag/v0.9.0)**
+
+1. 上のリンクから APK をダウンロードします（提供元不明アプリの許可が必要な場合があります）。
+2. アプリを開き、案内に沿って内蔵ランタイム・ストレージ権限・Debian 環境の初回セットアップを完了します（初回は数分）。
+3. 環境を追加し「Debian XFCE を開く」でデスクトップを起動します。
+
+> 詳しい手順は [APKの入手方法](#apkの入手方法) と [初回セットアップ](#初回セットアップ) を参照してください。v0.9.0 はプレリリース（デバッグ署名）版です。
+
 ## 現在のステータス
 
 | 項目 | 状態 |
 | --- | --- |
 | バージョン | `0.9.0` / versionCode `16` |
-| リリース段階 | **プレリリース候補**。正式なGitHubプレリリースは実機受け入れ後に作成予定 |
+| リリース段階 | **プレリリース公開済み**。[Releases v0.9.0](https://github.com/hatake716/LDFA/releases/tag/v0.9.0) からAPKを入手できます |
 | Linux環境 | Debian 12（Bookworm）+ XFCE |
 | 通常表示 | 内蔵native X11、`DISPLAY=:1` |
 | 最終フォールバック | TigerVNC + noVNC、`DISPLAY=:2` |
 | ローカル／AVD検証 | 2026-08-23 clean build、158 unit tests（app 13）、3 module lint、4 ABI APK、音声bridgeのstatic／stateful controller／APK asset gateを確認。API 35 x86_64・4 GB RAM・4 KB page AVDではChrome + Gboard、履歴からの通常復帰、Chrome／XFCE強制終了後の自動復旧を確認 |
-| 実機検証 | Pixel 10a（ARM64・8 GB RAM）でnative起動、Chromeログインのパスワード入力まで確認済み。Gmail本人確認から戻る経路は本修正版で再テスト予定。ARM64 16 KB pageは未完了 |
-| 音声受け入れ | 旧版で動画映像の再生と無音を確認。Unix socket修正版APKのtransport／package検査はPASS。Androidの本体speaker／Bluetoothからの可聴出力は、更新後の停止→起動で実機再確認が必要 |
+| 実機検証 | Pixel 10a（ARM64・8 GB RAM）でnative起動、Chromeログインのパスワード入力まで確認済み。ARM64 16 KB pageは未完了 |
+| 音声受け入れ | **実機で可聴出力を確認済み**（動画音声がAndroidスピーカーから再生）。SHM無効化＋socket隔離による修正版がmainへ反映済み |
+| 起動時間 | プロビジョニング確認を4→1 PRoot loginへ削減。2回目以降の起動を高速化（実機で確認済み） |
 
-2026-08-23時点では、音声修正はローカルworking treeと下記の検証済みAPKにあり、まだ
-`origin/main`へcommit／pushされていません。`main`の既存Actions artifactは旧TCP endpointを
-含むため、この無音修正の確認には使用しないでください。実機検証が完了するまでは、
-日常データを置く唯一のLinux環境としてではなく、バックアップを取ったテスト環境として
-使用してください。
+音声修正と起動高速化は `origin/main`（`01d8da7`）へ反映済みで、[v0.9.0 プレリリース](https://github.com/hatake716/LDFA/releases/tag/v0.9.0)として公開しています。物理ARM64での長時間運用とARM64 16 KB page端末のE2Eは継続検証中のため、日常データを置く唯一のLinux環境としてではなく、バックアップを取ったテスト環境として使用してください。
 
 ## 主な機能
 
@@ -111,22 +161,15 @@ Webコンテンツ用rendererの上限は、Googleログインとの互換性を
 
 ## APKの入手方法
 
-実機受け入れが完了するまでは正式なプレリリースを作成していません。
+### 1. GitHub Releases から入手（推奨）
 
-今回の音声修正を含む検証済みローカルAPKは次です。
+**[Releases v0.9.0](https://github.com/hatake716/LDFA/releases/tag/v0.9.0)** から `LDFA-v0.9.0-debug.apk` をダウンロードします。音声修正と起動高速化を含む、CIで検証済みのビルドです。v0.9.0 はプレリリース（デバッグ署名）版です。
 
-```text
-app/build/outputs/apk/debug/LDFA-v0.9.0-audio-fix-debug.apk
-SHA-256: 561907b3ad13158f43c78057061715c16d4ed5ceedb6d5f3044e9228b8132fe2
-```
+### 2. GitHub Actions の artifact から入手
 
-音声修正をcommit／pushした後は、[LDFA Android CI](https://github.com/hatake716/LDFA/actions/workflows/android.yml)で
-そのcommitの成功した`main` runから`LDFA-v0.9.0-debug-apk` artifactを取得できます。修正前の
-runから取得したartifactは、今回の無音修正を含みません。Actions artifactには保存期限があります。
+最新の `main` の[CI run](https://github.com/hatake716/LDFA/actions/workflows/android.yml)から `LDFA-v0.9.0-debug-apk` artifactを取得できます。Actions artifactには保存期限があります。
 
-実機検証完了後は、[GitHub Releases](https://github.com/hatake716/LDFA/releases)へv0.9.0プレリリースとしてAPKと検証情報を掲載する予定です。
-
-ローカルにAPKがある場合のインストール例:
+### 3. ローカルにAPKがある場合のインストール例
 
 ```bash
 adb install -r LDFA-v0.9.0-debug.apk
