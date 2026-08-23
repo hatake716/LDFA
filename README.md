@@ -84,6 +84,7 @@ Androidの管理画面から環境をワンタップで起動し、そのまま�
 - タッチ、マウス、物理キーボード、ソフトウェアキーボードで操作
 - 日本語ロケール、Noto CJK、日本語キーボード、Fcitx5 + Mozcを自動設定
 - Google公式のGoogle Chrome stableを64-bit Debianへ自動導入
+- Node.js 22 LTS（公式静的ビルド）を自動導入し、`npm install -g`でClaude CodeやCodexなどのCLIを利用可能に
 - 一般ユーザー`desktop`とパスワードなし`sudo`を構成
 - Android共有ストレージをDebianの`/mnt/android`へ接続
 - 内蔵ターミナルからDebianを保守
@@ -245,6 +246,23 @@ viewer表示中の定期heartbeatは、既に確認済みのX11 serviceを軽量
 Chrome本体と依存パッケージによる追加使用量はバージョンによって変わります。x86_64の動的検証では、Chrome packageの`Installed-Size`は約431 MiBでした。
 
 Chromeの初回起動時には、Google Chromeの利用規約確認が表示されます。
+
+## Node.jsとコマンドラインツール（Claude Code / Codex など）
+
+Debian 12のaptが提供するNode.jsは18系で、Claude Code（Node 22以上が必要）など最近のCLIには古すぎます。そのためLDFAは、環境作成時にNode.jsの**公式静的ビルド（22 LTS）**をSHA-256検証のうえ`/opt/nodejs`へ導入し、`node`／`npm`／`npx`を`/usr/local/bin`へリンクします。グローバルなnpmパッケージはユーザーの`~/.npm-global`へ入るよう設定してあるため、`sudo`なしで導入できます。
+
+内蔵ターミナルまたはXFCEのターミナルから、通常どおりインストールできます。
+
+```bash
+node --version      # v22.x
+npm install -g @anthropic-ai/claude-code
+claude --version
+
+npm install -g @openai/codex
+codex --version
+```
+
+これらのCLIは実行時にプラットフォーム別のネイティブバイナリを取得します。LDFAのDebianはglibcベースのため、`linux-x64`／`linux-arm64`（glibc）ビルドが選ばれ、PRoot上で動作します。導入にはネットワーク接続が必要です。32-bit環境ではNode.jsの自動導入をスキップし、デスクトップは通常どおり起動します。
 
 ## 日本語入力
 

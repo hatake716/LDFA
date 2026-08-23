@@ -19,6 +19,16 @@ CHROME_LAUNCHER_MARKER="# LDFA_CHROME_LAUNCHER_VERSION=8"
 DESKTOP_RUNTIME_MARKER="# LDFA_SESSION_RUNTIME_VERSION=18"
 AUDIO_CLIENT_MARKER="# LDFA_AUDIO_CLIENT_VERSION=3"
 PULSE_BRIDGE_MARKER="# LDFA_PULSE_BRIDGE_VERSION=1"
+# Modern Node.js runtime provisioned into the guest so Node-based CLIs (Claude
+# Code, Codex, and other npm tools) install and run out of the box. Debian 12's
+# apt Node is 18.x — too old for tools that now require Node >= 22 — so LDFA
+# installs the official upstream static build into /usr/local instead. The build
+# is glibc-based and self-contained (no apt dependencies) and runs cleanly under
+# PRoot. SHA-256 sums are the upstream SHASUMS256.txt values, pinned per arch.
+NODEJS_MARKER="# LDFA_NODEJS_VERSION=1"
+NODEJS_VERSION="v22.23.2"
+NODEJS_SHA256_x64="d60acfe00a2932254bb0ad20e01b0d74397a0875595de719654b214f4b03f307"
+NODEJS_SHA256_arm64="fff4078c5def658577f92c88db7db3bc0072924bfb93fe52c1e744a54e94abb8"
 # The bridge socket directory must live OUTSIDE $PREFIX/tmp. proot-distro's
 # --shared-tmp binds the whole $PREFIX/tmp into every guest as /tmp, and proot's
 # per-session housekeeping (link2symlink/kill-on-exit teardown) races with, and
@@ -1179,6 +1189,122 @@ rm -rf /var/lib/apt/lists/*
 CHROME_SETUP
 }
 
+nodejs_ready() {
+    local id="$1"
+    proot-distro login "$id" -- /bin/bash -c \
+        'test -x /opt/nodejs/bin/node &&
+         test -x /opt/nodejs/bin/npm &&
+         test -x /usr/local/bin/node &&
+         test -x /usr/local/bin/npm &&
+         test -f /opt/nodejs/ldfa-nodejs-version &&
+         grep -Fqx "$1" /opt/nodejs/ldfa-nodejs-version &&
+         /opt/nodejs/bin/node -e "process.exit(parseInt(process.versions.node) >= 22 ? 0 : 1)"' \
+        _ "$NODEJS_MARKER" \
+        >/dev/null 2>&1
+}
+
+ensure_nodejs() {
+    local id="$1"
+    validate_id "$id"
+    if nodejs_ready "$id"; then
+        say "Node.jsランタイムはインストール済みです。"
+        return 0
+    fi
+
+    # Debian 12's apt Node.js is 18.x, which is too old for current Node CLIs
+    # (Claude Code and others require Node >= 22). Install the official upstream
+    # static build into a dedicated /opt/nodejs directory and symlink node/npm/npx
+    # into /usr/local/bin, so tools installed with `npm install -g` find a modern,
+    # glibc-based, PRoot-compatible runtime. The tarball is verified against the
+    # pinned upstream SHA-256 before extraction.
+    unset PROOT_NO_SECCOMP
+    NODEJS_VERSION="$NODEJS_VERSION" \
+    NODEJS_SHA256_x64="$NODEJS_SHA256_x64" \
+    NODEJS_SHA256_arm64="$NODEJS_SHA256_arm64" \
+    NODEJS_MARKER="$NODEJS_MARKER" \
+    proot-distro login "$id" -- /usr/bin/env \
+        NODEJS_VERSION="$NODEJS_VERSION" \
+        NODEJS_SHA256_x64="$NODEJS_SHA256_x64" \
+        NODEJS_SHA256_arm64="$NODEJS_SHA256_arm64" \
+        NODEJS_MARKER="$NODEJS_MARKER" \
+        /bin/bash -s <<'NODEJS_SETUP'
+set -Eeuo pipefail
+export DEBIAN_FRONTEND=noninteractive
+export LC_ALL=C.UTF-8
+APT=(apt-get -o Acquire::Retries=3 -o Dpkg::Use-Pty=0)
+
+# Map the Debian architecture to the upstream Node.js download arch. Only the
+# two 64-bit architectures LDFA targets are supported; on anything else Node is
+# skipped and the desktop still starts.
+architecture="$(dpkg --print-architecture)"
+case "$architecture" in
+    amd64) node_arch="x64";   node_sha256="$NODEJS_SHA256_x64" ;;
+    arm64) node_arch="arm64"; node_sha256="$NODEJS_SHA256_arm64" ;;
+    *)
+        printf 'Node.jsの自動導入は%sへ対応していません。Debian XFCEの設定は継続します。\n' \
+            "$architecture" >&2
+        exit 0
+        ;;
+esac
+
+printf '\n[%s] Node.js %s (%s)を準備しています\n' \
+    "$(date -Iseconds)" "$NODEJS_VERSION" "$node_arch"
+"${APT[@]}" update
+"${APT[@]}" install -y --no-install-recommends ca-certificates wget xz-utils
+
+node_tarball="$(mktemp /tmp/nodejs.XXXXXX.tar.xz)"
+cleanup_node_tarball() { rm -f "$node_tarball"; }
+trap cleanup_node_tarball EXIT INT TERM
+
+node_basename="node-${NODEJS_VERSION}-linux-${node_arch}"
+wget --https-only --tries=3 --timeout=30 --progress=dot:giga \
+    -O "$node_tarball" \
+    "https://nodejs.org/dist/${NODEJS_VERSION}/${node_basename}.tar.xz"
+
+# Verify the pinned upstream checksum before touching the filesystem.
+printf '%s  %s\n' "$node_sha256" "$node_tarball" | sha256sum -c - >/dev/null
+
+# Extract into a dedicated, always-empty directory. Unpacking straight into
+# /usr/local fails under PRoot: tar cannot utime pre-existing directories
+# (EPERM) and Node's top-level README/LICENSE collide with other packages'
+# files. A clean target sidesteps both and makes upgrades/removal trivial.
+# --no-same-owner and --no-same-permissions avoid chown/chmod PRoot rejects.
+rm -rf /opt/nodejs
+mkdir -p /opt/nodejs
+tar -xJf "$node_tarball" -C /opt/nodejs --strip-components=1 \
+    --no-same-owner --no-same-permissions
+rm -f "$node_tarball"
+trap - EXIT INT TERM
+
+# Expose the runtime on the default PATH via symlinks in /usr/local/bin.
+install -d -m 0755 /usr/local/bin
+for tool in node npm npx corepack; do
+    if [[ -e "/opt/nodejs/bin/$tool" ]]; then
+        ln -sfn "/opt/nodejs/bin/$tool" "/usr/local/bin/$tool"
+    fi
+done
+
+# Point npm's global prefix at the user's home so `npm install -g` never needs
+# root, and expose those bins on PATH via the desktop profile. This is what lets
+# `npm install -g @anthropic-ai/claude-code` (and similar) work from the terminal.
+install -d -m 0755 -o desktop -g desktop /home/desktop/.npm-global
+cat > /home/desktop/.npmrc <<'NPMRC'
+prefix=/home/desktop/.npm-global
+NPMRC
+chown desktop:desktop /home/desktop/.npmrc
+if ! grep -Fq '.npm-global/bin' /home/desktop/.profile 2>/dev/null; then
+    printf 'export PATH="$HOME/.npm-global/bin:$PATH"\n' >> /home/desktop/.profile
+fi
+
+# Verify with absolute paths so a minimal rootfs PATH cannot make this fail, then
+# stamp the version marker only after node and npm both run.
+/opt/nodejs/bin/node --version
+/opt/nodejs/bin/node /opt/nodejs/bin/npm --version
+install -d -m 0755 /opt/nodejs
+printf '%s\n' "$NODEJS_MARKER" > /opt/nodejs/ldfa-nodejs-version
+NODEJS_SETUP
+}
+
 mark_chrome_for_restore_if_running() {
     local id="$1"
     timeout 4s proot-distro login "$id" --user desktop -- /bin/bash -c '
@@ -1614,6 +1740,13 @@ CONTAINER_SETUP
     else
         write_meta "$id" google_chrome 0
     fi
+    set_status "$id" installing 90 "Node.jsランタイムを準備しています…"
+    if ensure_nodejs "$id"; then
+        write_meta "$id" nodejs 1
+    else
+        write_meta "$id" nodejs 0
+        printf '警告: Node.jsの自動導入に失敗しました。GUI起動は継続します。\n' >&2
+    fi
     set_status "$id" installing 92 "Linuxデスクトップの初回設定を仕上げています…"
     write_meta "$id" installed 1
     write_meta "$id" desktop "xfce"
@@ -1782,18 +1915,20 @@ cmd_start() {
 # already satisfies all of them, ensure-apps can be skipped entirely on the hot
 # start path. Any marker bump changes the fingerprint and forces re-provisioning.
 apps_provisioned_fingerprint() {
-    printf '%s|%s|%s' \
-        "$AUDIO_CLIENT_MARKER" "$DESKTOP_RUNTIME_MARKER" "$CHROME_LAUNCHER_MARKER"
+    printf '%s|%s|%s|%s' \
+        "$AUDIO_CLIENT_MARKER" "$DESKTOP_RUNTIME_MARKER" "$CHROME_LAUNCHER_MARKER" \
+        "$NODEJS_MARKER"
 }
 
-# Verify audio client, desktop runtime and Chrome launcher in ONE guest login
-# instead of three. Chrome is optional (32-bit guests have none), so its absence
-# does not fail the check; the caller records google_chrome separately. Returns
-# 0 only when audio+runtime are ready, printing "chrome=1" or "chrome=0".
+# Verify audio client, desktop runtime, Chrome launcher and Node.js in ONE guest
+# login instead of four. Chrome and Node are optional (32-bit guests have
+# neither), so their absence does not fail the check; the caller records their
+# state separately. Returns 0 only when audio+runtime are ready, printing
+# "chrome=1|0" and "node=1|0".
 apps_combined_ready() {
     local id="$1"
     timeout 8s proot-distro login "$id" -- /bin/bash -c '
-        audio_marker="$1"; runtime_marker="$2"; chrome_marker="$3"
+        audio_marker="$1"; runtime_marker="$2"; chrome_marker="$3"; node_marker="$4"
         for package in pulseaudio-utils libasound2-plugins; do
             [ "$(dpkg-query -W -f='"'"'${Status}'"'"' "$package" 2>/dev/null)" = \
                 "install ok installed" ] || exit 1
@@ -1815,7 +1950,15 @@ apps_combined_ready() {
         else
             printf "chrome=0\n"
         fi
+        if test -x /opt/nodejs/bin/node && test -x /usr/local/bin/npm &&
+            test -f /opt/nodejs/ldfa-nodejs-version &&
+            grep -Fqx "$node_marker" /opt/nodejs/ldfa-nodejs-version; then
+            printf "node=1\n"
+        else
+            printf "node=0\n"
+        fi
     ' _ "$AUDIO_CLIENT_MARKER" "$DESKTOP_RUNTIME_MARKER" "$CHROME_LAUNCHER_MARKER" \
+        "$NODEJS_MARKER" \
         2>/dev/null
 }
 
@@ -1839,6 +1982,10 @@ cmd_ensure_apps() {
                 *chrome=1*) write_meta "$id" google_chrome 1; say "google_chrome=1" ;;
                 *)          write_meta "$id" google_chrome 0; say "google_chrome=unsupported" ;;
             esac
+            case "$combined" in
+                *node=1*) write_meta "$id" nodejs 1; say "nodejs=1" ;;
+                *)        write_meta "$id" nodejs 0; say "nodejs=unsupported" ;;
+            esac
             say "apps_provisioned=cached"
             return 0
         fi
@@ -1847,7 +1994,7 @@ cmd_ensure_apps() {
         write_meta "$id" apps_provisioned ''
     fi
 
-    local audio_ok=1
+    local audio_ok=1 nodejs_ok=1
     if ! ensure_audio_client "$id" >> "$(log_file "$id")" 2>&1; then
         tail -n 60 "$(log_file "$id")" >&2 || true
         write_meta "$id" audio_ready 0
@@ -1870,13 +2017,27 @@ cmd_ensure_apps() {
         write_meta "$id" google_chrome 0
         say "google_chrome=unsupported"
     fi
+    # Node.js is best-effort like Chrome: a network failure degrades tooling but
+    # never blocks the desktop. A failed run leaves nodejs_ok=0 so the fingerprint
+    # is not recorded and the next start retries.
+    if ! ensure_nodejs "$id" >> "$(log_file "$id")" 2>&1; then
+        tail -n 60 "$(log_file "$id")" >&2 || true
+        nodejs_ok=0
+        printf '警告: Node.jsの自動導入に失敗しました。GUI起動は継続します。\n' >&2
+    fi
+    if nodejs_ready "$id"; then
+        write_meta "$id" nodejs 1
+        say "nodejs=1"
+    else
+        write_meta "$id" nodejs 0
+        say "nodejs=unsupported"
+    fi
 
     # Record the provisioning fingerprint so the next start can take the hot path.
-    # Only record when the audio client actually provisioned (a degraded audio run
-    # must keep retrying on later starts) and Chrome reached a definite state
-    # (installed on 64-bit, or genuinely unsupported on 32-bit). A transient Chrome
-    # failure already died above, so reaching here means the state is authoritative.
-    if [[ "$audio_ok" == 1 ]]; then
+    # Only record when the audio client and Node.js actually provisioned (a
+    # degraded run must keep retrying on later starts); Chrome already died above
+    # on a hard failure, so reaching here means its state is authoritative.
+    if [[ "$audio_ok" == 1 && "$nodejs_ok" == 1 ]]; then
         write_meta "$id" apps_provisioned "$fingerprint"
     else
         write_meta "$id" apps_provisioned ''

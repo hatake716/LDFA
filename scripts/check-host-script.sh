@@ -15,6 +15,12 @@ sed -n '/<<'"'"'AUDIO_CLIENT_SETUP'"'"'$/,/^AUDIO_CLIENT_SETUP$/p' "$script" | \
 bash -n "$audio_client_setup"
 ! grep -Fq 'apt-get clean' "$audio_client_setup"
 ! grep -Fq 'rm -rf /var/lib/apt/lists' "$audio_client_setup"
+nodejs_setup="$test_sandbox/nodejs-setup.sh"
+sed -n '/<<'"'"'NODEJS_SETUP'"'"'$/,/^NODEJS_SETUP$/p' "$script" | \
+  sed '1d;$d' > "$nodejs_setup"
+bash -n "$nodejs_setup"
+grep -Fq 'sha256sum -c -' "$nodejs_setup"
+grep -Fq 'https://nodejs.org/dist/' "$nodejs_setup"
 sed -n '/^cat > \/usr\/local\/bin\/google-chrome-ldfa <<'"'"'CHROME_LAUNCHER'"'"'$/,/^CHROME_LAUNCHER$/p' "$script" | sed '1d;$d' | sh -n
 
 # Reproduce the v1 panel migration against a minimal Bookworm-shaped config.
@@ -96,9 +102,24 @@ required=(
   'google-chrome-stable_current_${architecture}.deb'
   'amd64|arm64'
   'dpkg-deb --field "$chrome_package" Package'
+  'ensure_nodejs()'
+  'nodejs_ready()'
+  'NODEJS_MARKER="# LDFA_NODEJS_VERSION=1"'
+  'NODEJS_VERSION="v22.23.2"'
+  'node-${NODEJS_VERSION}-linux-${node_arch}'
+  'https://nodejs.org/dist/${NODEJS_VERSION}/${node_basename}.tar.xz'
+  'sha256sum -c -'
+  'tar -xJf "$node_tarball" -C /opt/nodejs --strip-components=1 \'
+  '--no-same-owner --no-same-permissions'
+  'ln -sfn "/opt/nodejs/bin/$tool" "/usr/local/bin/$tool"'
+  'amd64) node_arch="x64";   node_sha256="$NODEJS_SHA256_x64" ;;'
+  'arm64) node_arch="arm64"; node_sha256="$NODEJS_SHA256_arm64" ;;'
+  'prefix=/home/desktop/.npm-global'
+  'ldfa-nodejs-version'
   'CHROME_LAUNCHER_MARKER="# LDFA_CHROME_LAUNCHER_VERSION=8"'
   'DESKTOP_RUNTIME_MARKER="# LDFA_SESSION_RUNTIME_VERSION=18"'
   'AUDIO_CLIENT_MARKER="# LDFA_AUDIO_CLIENT_VERSION=3"'
+  'NODEJS_MARKER="# LDFA_NODEJS_VERSION=1"'
   'PULSE_BRIDGE_MARKER="# LDFA_PULSE_BRIDGE_VERSION=1"'
   'PULSE_HOST_DIR="$PREFIX/var/run/ldfa-pulse-bridge"'
   'PULSE_RUNTIME_PATH="$PREFIX/var/run/ldfa-pulse-rt"'
