@@ -25,7 +25,7 @@ PULSE_BRIDGE_MARKER="# LDFA_PULSE_BRIDGE_VERSION=1"
 # installs the official upstream static build into /usr/local instead. The build
 # is glibc-based and self-contained (no apt dependencies) and runs cleanly under
 # PRoot. SHA-256 sums are the upstream SHASUMS256.txt values, pinned per arch.
-NODEJS_MARKER="# LDFA_NODEJS_VERSION=1"
+NODEJS_MARKER="# LDFA_NODEJS_VERSION=2"
 NODEJS_VERSION="v22.23.2"
 NODEJS_SHA256_x64="d60acfe00a2932254bb0ad20e01b0d74397a0875595de719654b214f4b03f307"
 NODEJS_SHA256_arm64="fff4078c5def658577f92c88db7db3bc0072924bfb93fe52c1e744a54e94abb8"
@@ -1198,6 +1198,9 @@ nodejs_ready() {
          test -x /usr/local/bin/npm &&
          test -f /opt/nodejs/ldfa-nodejs-version &&
          grep -Fqx "$1" /opt/nodejs/ldfa-nodejs-version &&
+         # The npm global bin must be on PATH for interactive terminal (non-login)
+         # shells too, not just login shells; xfce4-terminal opens non-login bash.
+         grep -Fq ".npm-global/bin" /home/desktop/.bashrc &&
          /opt/nodejs/bin/node -e "process.exit(parseInt(process.versions.node) >= 22 ? 0 : 1)"' \
         _ "$NODEJS_MARKER" \
         >/dev/null 2>&1
@@ -1247,34 +1250,43 @@ case "$architecture" in
         ;;
 esac
 
-printf '\n[%s] Node.js %s (%s)を準備しています\n' \
-    "$(date -Iseconds)" "$NODEJS_VERSION" "$node_arch"
-"${APT[@]}" update
-"${APT[@]}" install -y --no-install-recommends ca-certificates wget xz-utils
+# Skip the download+extract when the runtime is already the pinned version. This
+# lets a marker bump that only changes shell configuration (e.g. adding the PATH
+# to .bashrc for existing installs) run cheaply without re-fetching ~30 MB.
+if [[ -x /opt/nodejs/bin/node ]] && \
+    [[ "$(/opt/nodejs/bin/node --version 2>/dev/null)" == "$NODEJS_VERSION" ]]; then
+    printf '\n[%s] Node.js %s は導入済みです。設定のみ更新します\n' \
+        "$(date -Iseconds)" "$NODEJS_VERSION"
+else
+    printf '\n[%s] Node.js %s (%s)を準備しています\n' \
+        "$(date -Iseconds)" "$NODEJS_VERSION" "$node_arch"
+    "${APT[@]}" update
+    "${APT[@]}" install -y --no-install-recommends ca-certificates wget xz-utils
 
-node_tarball="$(mktemp /tmp/nodejs.XXXXXX.tar.xz)"
-cleanup_node_tarball() { rm -f "$node_tarball"; }
-trap cleanup_node_tarball EXIT INT TERM
+    node_tarball="$(mktemp /tmp/nodejs.XXXXXX.tar.xz)"
+    cleanup_node_tarball() { rm -f "$node_tarball"; }
+    trap cleanup_node_tarball EXIT INT TERM
 
-node_basename="node-${NODEJS_VERSION}-linux-${node_arch}"
-wget --https-only --tries=3 --timeout=30 --progress=dot:giga \
-    -O "$node_tarball" \
-    "https://nodejs.org/dist/${NODEJS_VERSION}/${node_basename}.tar.xz"
+    node_basename="node-${NODEJS_VERSION}-linux-${node_arch}"
+    wget --https-only --tries=3 --timeout=30 --progress=dot:giga \
+        -O "$node_tarball" \
+        "https://nodejs.org/dist/${NODEJS_VERSION}/${node_basename}.tar.xz"
 
-# Verify the pinned upstream checksum before touching the filesystem.
-printf '%s  %s\n' "$node_sha256" "$node_tarball" | sha256sum -c - >/dev/null
+    # Verify the pinned upstream checksum before touching the filesystem.
+    printf '%s  %s\n' "$node_sha256" "$node_tarball" | sha256sum -c - >/dev/null
 
-# Extract into a dedicated, always-empty directory. Unpacking straight into
-# /usr/local fails under PRoot: tar cannot utime pre-existing directories
-# (EPERM) and Node's top-level README/LICENSE collide with other packages'
-# files. A clean target sidesteps both and makes upgrades/removal trivial.
-# --no-same-owner and --no-same-permissions avoid chown/chmod PRoot rejects.
-rm -rf /opt/nodejs
-mkdir -p /opt/nodejs
-tar -xJf "$node_tarball" -C /opt/nodejs --strip-components=1 \
-    --no-same-owner --no-same-permissions
-rm -f "$node_tarball"
-trap - EXIT INT TERM
+    # Extract into a dedicated, always-empty directory. Unpacking straight into
+    # /usr/local fails under PRoot: tar cannot utime pre-existing directories
+    # (EPERM) and Node's top-level README/LICENSE collide with other packages'
+    # files. A clean target sidesteps both and makes upgrades/removal trivial.
+    # --no-same-owner and --no-same-permissions avoid chown/chmod PRoot rejects.
+    rm -rf /opt/nodejs
+    mkdir -p /opt/nodejs
+    tar -xJf "$node_tarball" -C /opt/nodejs --strip-components=1 \
+        --no-same-owner --no-same-permissions
+    rm -f "$node_tarball"
+    trap - EXIT INT TERM
+fi
 
 # Expose the runtime on the default PATH via symlinks in /usr/local/bin.
 install -d -m 0755 /usr/local/bin
@@ -1285,16 +1297,26 @@ for tool in node npm npx corepack; do
 done
 
 # Point npm's global prefix at the user's home so `npm install -g` never needs
-# root, and expose those bins on PATH via the desktop profile. This is what lets
+# root, and expose those bins on PATH. This is what lets
 # `npm install -g @anthropic-ai/claude-code` (and similar) work from the terminal.
 install -d -m 0755 -o desktop -g desktop /home/desktop/.npm-global
 cat > /home/desktop/.npmrc <<'NPMRC'
 prefix=/home/desktop/.npm-global
 NPMRC
 chown desktop:desktop /home/desktop/.npmrc
-if ! grep -Fq '.npm-global/bin' /home/desktop/.profile 2>/dev/null; then
-    printf 'export PATH="$HOME/.npm-global/bin:$PATH"\n' >> /home/desktop/.profile
-fi
+
+# Put ~/.npm-global/bin on PATH for BOTH shell kinds. .profile covers login
+# shells; .bashrc covers the interactive non-login shells that xfce4-terminal
+# opens — without the .bashrc entry, a globally installed `claude`/`codex` is
+# installed but "command not found" in the terminal. Both edits are idempotent.
+node_path_line='export PATH="$HOME/.npm-global/bin:$PATH"'
+for shell_rc in /home/desktop/.profile /home/desktop/.bashrc; do
+    [[ -f "$shell_rc" ]] || { : > "$shell_rc"; chown desktop:desktop "$shell_rc"; }
+    if ! grep -Fq '.npm-global/bin' "$shell_rc"; then
+        printf '\n# LDFA: expose npm global CLIs (claude, codex, ...) on PATH\n%s\n' \
+            "$node_path_line" >> "$shell_rc"
+    fi
+done
 
 # Verify with absolute paths so a minimal rootfs PATH cannot make this fail, then
 # stamp the version marker only after node and npm both run.
