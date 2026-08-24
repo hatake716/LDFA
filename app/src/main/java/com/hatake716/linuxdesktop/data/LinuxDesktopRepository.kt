@@ -528,6 +528,25 @@ class LinuxDesktopRepository(private val context: Context) {
 
     fun activeContainerId(): String? = preferences.getString(KEY_ACTIVE_CONTAINER, null)
 
+    fun desktopScalePercent(): Int =
+        preferences.getInt(KEY_DESKTOP_SCALE, DEFAULT_DESKTOP_SCALE)
+
+    // Persist the chosen whole-desktop scale and, when a container is active, tell
+    // the host to store it and apply live if a desktop session is running. The
+    // stored value is reapplied on every desktop start regardless, so the runtime
+    // call is best-effort (a not-yet-updated host script simply ignores it).
+    suspend fun setDesktopScale(percent: Int): Unit = withContext(Dispatchers.IO) {
+        preferences.edit().putInt(KEY_DESKTOP_SCALE, percent).apply()
+        val id = activeContainerId() ?: return@withContext
+        runCatching {
+            commandClient.runInstalledHost(
+                action = "set-scale",
+                arguments = listOf(id, percent.toString()),
+            )
+        }
+        Unit
+    }
+
     fun activeDisplayBackend(): DesktopDisplayBackend? {
         activeContainerId() ?: return null
         return DesktopDisplayBackend.fromPreference(preferences.getString(KEY_ACTIVE_BACKEND, null))
@@ -1203,6 +1222,9 @@ class LinuxDesktopRepository(private val context: Context) {
         private const val PREFERENCES = "linux_desktop_preferences"
         private const val KEY_ACTIVE_CONTAINER = "active_container"
         private const val KEY_ACTIVE_BACKEND = "active_display_backend"
+        private const val KEY_DESKTOP_SCALE = "desktop_scale_percent"
+        private const val DEFAULT_DESKTOP_SCALE = 100
+        val DESKTOP_SCALE_PRESETS = listOf(100, 125, 150, 175, 200)
         private const val PRESERVE_CHROME_RESTORE = "1"
         private const val LIVE_LOG_LINE_COUNT = 40
 

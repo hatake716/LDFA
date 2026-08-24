@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -29,6 +30,9 @@ import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Storage
 import androidx.compose.material.icons.rounded.Terminal
+import androidx.compose.material.icons.rounded.ZoomIn
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -53,6 +57,7 @@ internal fun SettingsScreen(
     onBatterySettings: () -> Unit,
     onAppSettings: () -> Unit,
     onRepair: () -> Unit,
+    onSelectDesktopScale: (Int) -> Unit,
 ) {
     LazyColumn(
         modifier = modifier
@@ -108,6 +113,16 @@ internal fun SettingsScreen(
                     ready = state.setup.hostReady,
                     readyText = "XFCEと日本語環境を構築済み",
                     pendingText = "セットアップが必要です",
+                )
+            }
+        }
+
+        item {
+            SettingsSection(title = "表示") {
+                DesktopScaleRow(
+                    current = state.setup.desktopScalePercent,
+                    enabled = state.setup.hostReady && !state.operationInProgress,
+                    onSelect = onSelectDesktopScale,
                 )
             }
         }
@@ -322,6 +337,55 @@ private fun SettingsIcon(icon: ImageVector) {
     ) {
         Box(contentAlignment = Alignment.Center) {
             Icon(icon, contentDescription = null, modifier = Modifier.size(20.dp))
+        }
+    }
+}
+
+@Composable
+private fun DesktopScaleRow(
+    current: Int,
+    enabled: Boolean,
+    onSelect: (Int) -> Unit,
+) {
+    val presets = listOf(100, 125, 150, 175, 200)
+    Column(Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            SettingsIcon(Icons.Rounded.ZoomIn)
+            Spacer(Modifier.size(14.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    "表示倍率",
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.Medium,
+                )
+                Text(
+                    "デスクトップ全体（文字・アイコン・パネル）の大きさ",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        Spacer(Modifier.size(12.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            presets.forEach { percent ->
+                FilterChip(
+                    selected = percent == current,
+                    onClick = { if (enabled) onSelect(percent) },
+                    enabled = enabled,
+                    label = { Text("$percent%") },
+                    leadingIcon = if (percent == current) {
+                        {
+                            Icon(
+                                Icons.Rounded.CheckCircle,
+                                contentDescription = null,
+                                modifier = Modifier.size(FilterChipDefaults.IconSize),
+                            )
+                        }
+                    } else {
+                        null
+                    },
+                )
+            }
         }
     }
 }

@@ -16,7 +16,7 @@ SHARED_ROOT="$HOME/storage/shared/LinuxDesktop"
 SELF="$BIN_DIR/ldfa-host"
 BOOTSTRAP_LOG="$LOG_ROOT/bootstrap.log"
 CHROME_LAUNCHER_MARKER="# LDFA_CHROME_LAUNCHER_VERSION=8"
-DESKTOP_RUNTIME_MARKER="# LDFA_SESSION_RUNTIME_VERSION=21"
+DESKTOP_RUNTIME_MARKER="# LDFA_SESSION_RUNTIME_VERSION=22"
 AUDIO_CLIENT_MARKER="# LDFA_AUDIO_CLIENT_VERSION=3"
 PULSE_BRIDGE_MARKER="# LDFA_PULSE_BRIDGE_VERSION=1"
 # Modern Node.js runtime provisioned into the guest so Node-based CLIs (Claude
@@ -493,7 +493,7 @@ guest_audio_ready() {
 desktop_session_script() {
     cat <<'SESSION'
 #!/bin/bash
-# LDFA_SESSION_RUNTIME_VERSION=21
+# LDFA_SESSION_RUNTIME_VERSION=22
 # Hardened LDFA Session Script
 set -Eeuo pipefail
 
@@ -545,6 +545,26 @@ export NO_AT_BRIDGE=1
 # where the flag also applies, and it covers terminal launches before the sweep
 # has run). Treat neither PRoot nor these apps as a security boundary.
 export ELECTRON_DISABLE_SANDBOX=1
+
+# --- LDFA whole-desktop scale ---------------------------------------------
+# LDFA_SCALE is a percent (100/125/150/175/200) injected on the launch line
+# from the container's stored preference. Derive the env every launched app
+# reads at startup here; the xsettings/xfconf keys (panel/icon/font sizes) are
+# applied just below, before xfsettingsd starts. Everything degrades to 100%.
+LDFA_SCALE="${LDFA_SCALE:-100}"
+case "$LDFA_SCALE" in 100|125|150|175|200) : ;; *) LDFA_SCALE=100 ;; esac
+_ldfa_factor="$(awk "BEGIN{printf \"%.2f\", $LDFA_SCALE/100}")"
+_ldfa_dpi=$(( LDFA_SCALE * 96 / 100 ))
+_ldfa_cursor=$(( LDFA_SCALE * 24 / 100 ))
+_ldfa_panel=$(( LDFA_SCALE * 28 / 100 ))
+_ldfa_icon=$(( LDFA_SCALE * 48 / 100 ))
+export GDK_DPI_SCALE="$_ldfa_factor"
+export QT_SCALE_FACTOR="$_ldfa_factor"
+export QT_FONT_DPI="$_ldfa_dpi"
+export XCURSOR_SIZE="$_ldfa_cursor"
+# GDK_SCALE is integer-only: use the crisp 2x path at 200%, plain 1 otherwise
+# (a fractional GDK_SCALE blurs and half-positions windows).
+if [ "$LDFA_SCALE" = 200 ]; then export GDK_SCALE=2; else export GDK_SCALE=1; fi
 
 export XDG_RUNTIME_DIR="/tmp/runtime-desktop"
 mkdir -p \
@@ -659,6 +679,26 @@ setxkbmap -layout jp >/dev/null 2>&1 || true
 xfconf-query -c xsettings -p /Net/ThemeName -s Adwaita 2>/dev/null || true
 xfconf-query -c xfwm4 -p /general/use_compositing -s false 2>/dev/null || true
 xfconf-query -c xfwm4 -p /general/sync_to_vblank -s false 2>/dev/null || true
+
+# Apply the whole-desktop scale to the xsettings/panel/desktop channels before
+# xfsettingsd starts. /Xft/DPI scales fonts + xfwm4 titlebars; the panel and
+# desktop-icon sizes are absolute pixels so they are set explicitly. Each write
+# is create-or-set (a missing property needs -n) and ends in `|| true`, so a
+# rejected key on a minimal config never breaks startup.
+ldfa_xfconf_set() {
+    xfconf-query -c "$1" -p "$2" -t int -s "$3" 2>/dev/null ||
+        xfconf-query -c "$1" -p "$2" -n -t int -s "$3" 2>/dev/null || true
+}
+ldfa_xfconf_set xsettings     /Xft/DPI                 "$_ldfa_dpi"
+ldfa_xfconf_set xsettings     /Gtk/CursorThemeSize     "$_ldfa_cursor"
+ldfa_xfconf_set xfce4-panel   /panels/panel-1/size     "$_ldfa_panel"
+ldfa_xfconf_set xfce4-desktop /desktop-icons/icon-size "$_ldfa_icon"
+if [ "$LDFA_SCALE" = 200 ]; then
+    ldfa_xfconf_set xsettings /Gdk/WindowScalingFactor 2
+else
+    ldfa_xfconf_set xsettings /Gdk/WindowScalingFactor 1
+fi
+
 fcitx5 -d --replace >/dev/null 2>&1 || true
 
 # --- LDFA Electron sandbox auto-fix ---------------------------------------
@@ -1033,7 +1073,7 @@ ensure_desktop_runtime() {
         # side effects); -p prepends so ~/.local/bin wins, matching bash.
         install -d -m 0755 /etc/fish/conf.d
         cat > /etc/fish/conf.d/00-ldfa.fish <<'"'"'LDFA_FISH'"'"'
-# LDFA_SESSION_RUNTIME_VERSION=21
+# LDFA_SESSION_RUNTIME_VERSION=22
 # Managed by LDFA. fish ignores ~/.profile and ~/.bashrc, so the PATH and env
 # LDFA sets for bash are re-applied here for fish users. conf.d is sourced in
 # every fish mode (login, interactive, script), so no status guard is needed.
@@ -2365,6 +2405,7 @@ worker_run() {
             /usr/bin/env -u LD_PRELOAD -u LD_LIBRARY_PATH \
                 DISPLAY=":$DISPLAY_NUMBER" GTK_IM_MODULE=fcitx QT_IM_MODULE=fcitx \
                 XMODIFIERS=@im=fcitx PULSE_SERVER="$PULSE_GUEST_SERVER" \
+                LDFA_SCALE="$(read_meta "$id" scale 100)" \
                 /usr/local/bin/ldfa-session
         rc=$?
         set -e
@@ -2408,6 +2449,50 @@ cmd_delete() {
     if [[ "$purge_shared" == 1 ]]; then
         rm -rf "$(shared_path "$id")"
     fi
+}
+
+cmd_set_scale() {
+    local id="${1:-}" percent="${2:-100}" display
+    validate_id "$id"
+    case "$percent" in
+        100|125|150|175|200) : ;;
+        *) die "無効な表示スケールです（100/125/150/175/200のいずれか）: $percent" ;;
+    esac
+    write_meta "$id" scale "$percent"
+
+    # If a desktop session is live, apply the size-based keys immediately so the
+    # panel/icons/fonts/cursor update without a restart. The env-derived scales
+    # (GDK/QT, GDK_SCALE) only affect newly launched apps; a stop/start reapplies
+    # everything from the stored meta.
+    if ! tmux_alive "$(run_session "$id")"; then
+        say "scale=$percent"
+        return 0
+    fi
+    display="$(read_meta "$id" display "$DEFAULT_DISPLAY_NUMBER")"
+    local dpi=$(( percent * 96 / 100 )) cur=$(( percent * 24 / 100 ))
+    local pan=$(( percent * 28 / 100 )) ico=$(( percent * 48 / 100 )) gsf=1
+    [[ "$percent" == 200 ]] && gsf=2
+    unset PROOT_NO_SECCOMP
+    LDFA_APPLY_DPI="$dpi" LDFA_APPLY_CUR="$cur" LDFA_APPLY_PAN="$pan" \
+    LDFA_APPLY_ICO="$ico" LDFA_APPLY_GSF="$gsf" \
+    proot-distro login "$id" --user desktop -- /usr/bin/env \
+        DISPLAY=":$display" \
+        LDFA_APPLY_DPI="$dpi" LDFA_APPLY_CUR="$cur" LDFA_APPLY_PAN="$pan" \
+        LDFA_APPLY_ICO="$ico" LDFA_APPLY_GSF="$gsf" \
+        /bin/bash -c '
+            addr_file=/tmp/runtime-desktop/dbus_address
+            [[ -s "$addr_file" ]] && export DBUS_SESSION_BUS_ADDRESS="$(cat "$addr_file")"
+            xq() { xfconf-query -c "$1" -p "$2" -t int -s "$3" 2>/dev/null ||
+                   xfconf-query -c "$1" -p "$2" -n -t int -s "$3" 2>/dev/null || true; }
+            xq xsettings     /Xft/DPI                 "$LDFA_APPLY_DPI"
+            xq xsettings     /Gtk/CursorThemeSize     "$LDFA_APPLY_CUR"
+            xq xsettings     /Gdk/WindowScalingFactor "$LDFA_APPLY_GSF"
+            xq xfce4-panel   /panels/panel-1/size     "$LDFA_APPLY_PAN"
+            xq xfce4-desktop /desktop-icons/icon-size "$LDFA_APPLY_ICO"
+            # Nudge the panel to re-read its size immediately.
+            xfce4-panel --restart >/dev/null 2>&1 || true
+        ' >/dev/null 2>&1 || true
+    say "scale=$percent"
 }
 
 cmd_probe() {
@@ -2519,7 +2604,7 @@ cmd_repair() {
 usage() {
     cat <<USAGE
 Usage: ldfa-host <command> [arguments]
-Commands: doctor bootstrap list create ensure-apps start resume health stop delete probe audio-probe logs heartbeat repair
+Commands: doctor bootstrap list create ensure-apps start resume health stop delete probe set-scale audio-probe logs heartbeat repair
 USAGE
 }
 
@@ -2548,6 +2633,7 @@ main() {
         stop) cmd_stop "$@" ;;
         delete) cmd_delete "$@" ;;
         probe) cmd_probe "$@" ;;
+        set-scale) cmd_set_scale "$@" ;;
         audio-probe) cmd_audio_probe "$@" ;;
         logs) cmd_logs "$@" ;;
         heartbeat) cmd_heartbeat "$@" ;;

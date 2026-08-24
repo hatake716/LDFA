@@ -60,6 +60,7 @@ fun LinuxDesktopRoot(
                 onOpenDisplay = viewModel::openDisplay,
                 onBatterySettings = viewModel::openBatterySettings,
                 onAppSettings = viewModel::openThisAppSettings,
+                onSelectDesktopScale = viewModel::setDesktopScale,
             )
         }
 

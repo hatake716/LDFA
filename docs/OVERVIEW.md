@@ -67,6 +67,7 @@ proot-distroのDebian 12（Bookworm）rootfsへ次を導入します。rootfsは
 - `pulseaudio-utils`、ALSA Pulse plugin、XFCE panelの音量／mute UI
 - Google公式Chrome stable（amd64／arm64）とPRoot互換ランチャー
 - Node.js 22 LTS（公式静的ビルド、SHA-256検証付き）を`/opt/nodejs`へ導入し、`node`／`npm`／`npx`を`/usr/local/bin`へリンク
+- デスクトップ全体の表示倍率（100〜200%）を設定画面から変更。`Xft/DPI`・パネル高さ・アイコン／カーソルサイズ・GTK/Qtスケール環境変数へまとめて反映し、環境ごとにメタ保存、起動時に再適用（起動中は即時適用）
 
 一般ユーザー`desktop`にはパスワードなしsudoを設定します。`.profile`、`.xprofile`、`.xinputrc`へ日本語・Fcitx設定を保存し、`~/Desktop/Android共有`を`/mnt/android`へ接続します。
 

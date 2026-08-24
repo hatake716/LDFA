@@ -27,6 +27,7 @@ enum class MainTab { DESKTOPS, SETTINGS }
 data class SetupSnapshot(
     val runtime: RuntimeStatus = RuntimeStatus(terminalReady = false),
     val doctor: DoctorReport? = null,
+    val desktopScalePercent: Int = 100,
 ) {
     val terminalReady: Boolean get() = runtime.terminalReady
     val x11Ready: Boolean get() = runtime.x11Embedded
@@ -110,7 +111,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 it.copy(
                     initialLoading = false,
                     refreshing = false,
-                    setup = SetupSnapshot(runtime = runtime, doctor = doctor),
+                    setup = SetupSnapshot(
+                        runtime = runtime,
+                        doctor = doctor,
+                        desktopScalePercent = repository.desktopScalePercent(),
+                    ),
                     containers = containers,
                     liveInstallationLogs = liveLogs,
                 )
@@ -295,6 +300,30 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun clearMessages() {
         _state.update { it.copy(errorMessage = null, noticeMessage = null) }
+    }
+
+    fun setDesktopScale(percent: Int) {
+        if (percent == _state.value.setup.desktopScalePercent) return
+        viewModelScope.launch {
+            _state.update {
+                it.copy(
+                    setup = it.setup.copy(desktopScalePercent = percent),
+                    operationInProgress = true,
+                    errorMessage = null,
+                )
+            }
+            runCatching { repository.setDesktopScale(percent) }
+                .onSuccess {
+                    _state.update {
+                        it.copy(
+                            operationInProgress = false,
+                            noticeMessage = "表示倍率を${percent}%に設定しました。" +
+                                "デスクトップ起動中は即時、停止中は次回起動時に反映されます。",
+                        )
+                    }
+                }
+                .onFailure(::showError)
+        }
     }
 
     fun openTerminal() = repository.openTerminal()
