@@ -16,7 +16,7 @@ SHARED_ROOT="$HOME/storage/shared/LinuxDesktop"
 SELF="$BIN_DIR/ldfa-host"
 BOOTSTRAP_LOG="$LOG_ROOT/bootstrap.log"
 CHROME_LAUNCHER_MARKER="# LDFA_CHROME_LAUNCHER_VERSION=8"
-DESKTOP_RUNTIME_MARKER="# LDFA_SESSION_RUNTIME_VERSION=24"
+DESKTOP_RUNTIME_MARKER="# LDFA_SESSION_RUNTIME_VERSION=25"
 AUDIO_CLIENT_MARKER="# LDFA_AUDIO_CLIENT_VERSION=3"
 PULSE_BRIDGE_MARKER="# LDFA_PULSE_BRIDGE_VERSION=1"
 # Modern Node.js runtime provisioned into the guest so Node-based CLIs (Claude
@@ -493,7 +493,7 @@ guest_audio_ready() {
 desktop_session_script() {
     cat <<'SESSION'
 #!/bin/bash
-# LDFA_SESSION_RUNTIME_VERSION=24
+# LDFA_SESSION_RUNTIME_VERSION=25
 # Hardened LDFA Session Script
 set -Eeuo pipefail
 
@@ -558,9 +558,12 @@ _ldfa_dpi=$(( LDFA_SCALE * 96 / 100 ))
 _ldfa_cursor=$(( LDFA_SCALE * 24 / 100 ))
 _ldfa_panel=$(( LDFA_SCALE * 28 / 100 ))
 _ldfa_icon=$(( LDFA_SCALE * 48 / 100 ))
-export GDK_DPI_SCALE="$_ldfa_factor"
+# One font-DPI lever per toolkit — do NOT combine GDK_DPI_SCALE with the
+# xsettings /Xft/DPI below (GTK multiplies them: 150% would become 2.25x), and
+# do NOT combine QT_FONT_DPI with QT_SCALE_FACTOR (same double-apply for Qt).
+# GTK fonts are owned by /Xft/DPI (applied via xsettings + xrdb in
+# apply_desktop_scale); Qt whole-UI scale is owned by QT_SCALE_FACTOR.
 export QT_SCALE_FACTOR="$_ldfa_factor"
-export QT_FONT_DPI="$_ldfa_dpi"
 export XCURSOR_SIZE="$_ldfa_cursor"
 # GDK_SCALE is integer-only: use the crisp 2x path at 200%, plain 1 otherwise
 # (a fractional GDK_SCALE blurs and half-positions windows).
@@ -700,6 +703,14 @@ ldfa_xfconf_set() {
         timeout 3 xfconf-query -c "$1" -p "$2" -s "$3" 2>/dev/null || true
 }
 apply_desktop_scale() {
+    # xrdb: put Xft.dpi into RESOURCE_MANAGER so clients that IGNORE xsettings —
+    # notably Chrome/Electron and libXft/Qt apps — still scale. xfsettingsd only
+    # feeds GTK via the XSETTINGS protocol; the X resource is a separate channel
+    # nothing in LDFA populated before, which is the main reason scaling looked
+    # like "nothing happened". Must run before the components launch so they
+    # inherit it; timeout-bounded so it can never stall startup.
+    printf 'Xft.dpi: %s\nXft.hinting: 1\nXft.autohint: 0\n' "$_ldfa_dpi" |
+        timeout 3 xrdb -merge 2>/dev/null || true
     ldfa_xfconf_set xsettings     /Xft/DPI                 "$_ldfa_dpi"
     ldfa_xfconf_set xsettings     /Gtk/CursorThemeSize     "$_ldfa_cursor"
     ldfa_xfconf_set xfce4-panel   /panels/panel-1/size     "$_ldfa_panel"
@@ -772,21 +783,27 @@ scan_and_fix_electron() {
         done
         ldfa_electron_pkgdir "$prog" || continue
         local dst="$out_dir/$name"
-        # Our own previous override — skip (idempotent across restarts).
-        if [[ -f "$dst" ]] && grep -Fqx "$LDFA_ELECTRON_STAMP" "$dst" 2>/dev/null; then
+        # The stamp encodes the current scale, so the override is regenerated when
+        # the user changes the display scale (a plain LDFA_ELECTRON_STAMP match
+        # would keep a stale --force-device-scale-factor forever). Skip only when
+        # the stamp AND the scale already match.
+        local stamp="$LDFA_ELECTRON_STAMP scale=$LDFA_SCALE"
+        if [[ -f "$dst" ]] && grep -Fqx "$stamp" "$dst" 2>/dev/null; then
             continue
         fi
-        # A user-level .desktop shadows the system one (XDG precedence), so we
-        # never touch root-owned /usr/share and an apt upgrade cannot clobber it.
-        # Insert --no-sandbox right after the program token on every Exec line,
-        # preserving %U/%F and other field codes verbatim.
+        # Extra Chromium flags: Electron apps ignore XSETTINGS/Xft.dpi, so the
+        # ONLY way to zoom their whole UI is --force-device-scale-factor. Add it
+        # (and --no-sandbox) after the program token, preserving %U/%F field
+        # codes. A user-level .desktop shadows the system one (XDG precedence).
+        local extra="--no-sandbox"
+        [[ "$LDFA_SCALE" != 100 ]] && extra="$extra --force-device-scale-factor=$_ldfa_factor"
         {
-            printf '%s\n' "$LDFA_ELECTRON_STAMP"
-            awk '
+            printf '%s\n' "$stamp"
+            awk -v extra="$extra" '
                 /^Exec=/ {
                     rest = substr($0, 6); n = index(rest, " ")
-                    if (n == 0) { print "Exec=" rest " --no-sandbox"; next }
-                    print "Exec=" substr(rest, 1, n - 1) " --no-sandbox" substr(rest, n)
+                    if (n == 0) { print "Exec=" rest " " extra; next }
+                    print "Exec=" substr(rest, 1, n - 1) " " extra substr(rest, n)
                     next
                 }
                 { print }
@@ -917,15 +934,17 @@ wait_for_wm() {
     return 1
 }
 
+# Apply the display scale BEFORE the components launch, so xfsettingsd
+# broadcasts the right XSETTINGS DPI from the first frame, the xrdb Xft.dpi
+# resource is present before Chrome/Electron/panel/xfdesktop start (they read it
+# only at launch), and the panel/icon SIZES are set before the panel and
+# xfdesktop read them. Every write is timeout-bounded so this cannot stall
+# startup. Runs foreground so the values are in place when the daemons come up.
+apply_desktop_scale
 launch_settings
 launch_wm
 launch_panel
 launch_desktop
-# Apply the display scale now that xfsettingsd + panel + xfdesktop own their
-# channels (so the writes hit an existing store and never take the slow -n
-# create path). Backgrounded and timeout-bounded so it can never delay the
-# desktop from presenting its first frame.
-apply_desktop_scale &
 wait_for_wm || {
     printf '[%s] xfwm4 did not publish a root window manager\n' "$(date -Iseconds)" >&2
     exit 71
@@ -1090,7 +1109,7 @@ ensure_desktop_runtime() {
         # side effects); -p prepends so ~/.local/bin wins, matching bash.
         install -d -m 0755 /etc/fish/conf.d
         cat > /etc/fish/conf.d/00-ldfa.fish <<'"'"'LDFA_FISH'"'"'
-# LDFA_SESSION_RUNTIME_VERSION=24
+# LDFA_SESSION_RUNTIME_VERSION=25
 # Managed by LDFA. fish ignores ~/.profile and ~/.bashrc, so the PATH and env
 # LDFA sets for bash are re-applied here for fish users. conf.d is sourced in
 # every fish mode (login, interactive, script), so no status guard is needed.
@@ -2501,6 +2520,11 @@ cmd_set_scale() {
             [[ -s "$addr_file" ]] && export DBUS_SESSION_BUS_ADDRESS="$(cat "$addr_file")"
             xq() { timeout 3 xfconf-query -c "$1" -p "$2" -n -t int -s "$3" 2>/dev/null ||
                    timeout 3 xfconf-query -c "$1" -p "$2" -s "$3" 2>/dev/null || true; }
+            # Update the X resource too so newly launched Chrome/Electron/Qt apps
+            # pick up the DPI (they ignore XSETTINGS). Already-running apps keep
+            # their scale until relaunched; a stop/start reapplies everything.
+            printf "Xft.dpi: %s\nXft.hinting: 1\nXft.autohint: 0\n" "$LDFA_APPLY_DPI" |
+                timeout 3 xrdb -merge 2>/dev/null || true
             xq xsettings     /Xft/DPI                 "$LDFA_APPLY_DPI"
             xq xsettings     /Gtk/CursorThemeSize     "$LDFA_APPLY_CUR"
             xq xsettings     /Gdk/WindowScalingFactor "$LDFA_APPLY_GSF"
