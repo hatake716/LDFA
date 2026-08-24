@@ -16,7 +16,7 @@ SHARED_ROOT="$HOME/storage/shared/LinuxDesktop"
 SELF="$BIN_DIR/ldfa-host"
 BOOTSTRAP_LOG="$LOG_ROOT/bootstrap.log"
 CHROME_LAUNCHER_MARKER="# LDFA_CHROME_LAUNCHER_VERSION=8"
-DESKTOP_RUNTIME_MARKER="# LDFA_SESSION_RUNTIME_VERSION=25"
+DESKTOP_RUNTIME_MARKER="# LDFA_SESSION_RUNTIME_VERSION=26"
 AUDIO_CLIENT_MARKER="# LDFA_AUDIO_CLIENT_VERSION=3"
 PULSE_BRIDGE_MARKER="# LDFA_PULSE_BRIDGE_VERSION=1"
 # Modern Node.js runtime provisioned into the guest so Node-based CLIs (Claude
@@ -493,7 +493,7 @@ guest_audio_ready() {
 desktop_session_script() {
     cat <<'SESSION'
 #!/bin/bash
-# LDFA_SESSION_RUNTIME_VERSION=25
+# LDFA_SESSION_RUNTIME_VERSION=26
 # Hardened LDFA Session Script
 set -Eeuo pipefail
 
@@ -552,7 +552,7 @@ export ELECTRON_DISABLE_SANDBOX=1
 # reads at startup here; the xsettings/xfconf keys (panel/icon/font sizes) are
 # applied just below, before xfsettingsd starts. Everything degrades to 100%.
 LDFA_SCALE="${LDFA_SCALE:-100}"
-case "$LDFA_SCALE" in 100|125|150|175|200) : ;; *) LDFA_SCALE=100 ;; esac
+case "$LDFA_SCALE" in 100|125|150|175|200|225|250) : ;; *) LDFA_SCALE=100 ;; esac
 _ldfa_factor="$(awk "BEGIN{printf \"%.2f\", $LDFA_SCALE/100}")"
 _ldfa_dpi=$(( LDFA_SCALE * 96 / 100 ))
 _ldfa_cursor=$(( LDFA_SCALE * 24 / 100 ))
@@ -1109,7 +1109,7 @@ ensure_desktop_runtime() {
         # side effects); -p prepends so ~/.local/bin wins, matching bash.
         install -d -m 0755 /etc/fish/conf.d
         cat > /etc/fish/conf.d/00-ldfa.fish <<'"'"'LDFA_FISH'"'"'
-# LDFA_SESSION_RUNTIME_VERSION=25
+# LDFA_SESSION_RUNTIME_VERSION=26
 # Managed by LDFA. fish ignores ~/.profile and ~/.bashrc, so the PATH and env
 # LDFA sets for bash are re-applied here for fish users. conf.d is sourced in
 # every fish mode (login, interactive, script), so no status guard is needed.
@@ -2491,7 +2491,7 @@ cmd_set_scale() {
     local id="${1:-}" percent="${2:-100}" display
     validate_id "$id"
     case "$percent" in
-        100|125|150|175|200) : ;;
+        100|125|150|175|200|225|250) : ;;
         *) die "無効な表示スケールです（100/125/150/175/200のいずれか）: $percent" ;;
     esac
     write_meta "$id" scale "$percent"

@@ -5,6 +5,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
@@ -341,13 +343,14 @@ private fun SettingsIcon(icon: ImageVector) {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun DesktopScaleRow(
     current: Int,
     enabled: Boolean,
     onSelect: (Int) -> Unit,
 ) {
-    val presets = listOf(100, 125, 150, 175, 200)
+    val presets = listOf(100, 125, 150, 175, 200, 225, 250)
     Column(Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             SettingsIcon(Icons.Rounded.ZoomIn)
@@ -366,7 +369,11 @@ private fun DesktopScaleRow(
             }
         }
         Spacer(Modifier.size(12.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        // Seven presets don't fit one row on a phone, so wrap them.
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
             presets.forEach { percent ->
                 FilterChip(
                     selected = percent == current,

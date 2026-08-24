@@ -1258,7 +1258,7 @@ class LinuxDesktopRepository(private val context: Context) {
         private const val KEY_ACTIVE_BACKEND = "active_display_backend"
         private const val KEY_DESKTOP_SCALE = "desktop_scale_percent"
         private const val DEFAULT_DESKTOP_SCALE = 100
-        val DESKTOP_SCALE_PRESETS = listOf(100, 125, 150, 175, 200)
+        val DESKTOP_SCALE_PRESETS = listOf(100, 125, 150, 175, 200, 225, 250)
         private const val PRESERVE_CHROME_RESTORE = "1"
         private const val LIVE_LOG_LINE_COUNT = 40
 
