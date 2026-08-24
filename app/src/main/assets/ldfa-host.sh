@@ -25,7 +25,7 @@ PULSE_BRIDGE_MARKER="# LDFA_PULSE_BRIDGE_VERSION=1"
 # installs the official upstream static build into /usr/local instead. The build
 # is glibc-based and self-contained (no apt dependencies) and runs cleanly under
 # PRoot. SHA-256 sums are the upstream SHASUMS256.txt values, pinned per arch.
-NODEJS_MARKER="# LDFA_NODEJS_VERSION=3"
+NODEJS_MARKER="# LDFA_NODEJS_VERSION=4"
 NODEJS_VERSION="v22.23.2"
 NODEJS_SHA256_x64="d60acfe00a2932254bb0ad20e01b0d74397a0875595de719654b214f4b03f307"
 NODEJS_SHA256_arm64="fff4078c5def658577f92c88db7db3bc0072924bfb93fe52c1e744a54e94abb8"
@@ -1201,6 +1201,10 @@ nodejs_ready() {
          # Global npm installs must land in /usr/local/bin (on every shell PATH);
          # the builtin npm config layer carries that default.
          grep -Fqx "prefix=/usr/local" /opt/nodejs/lib/node_modules/npm/npmrc &&
+         # Vendor curl installers (Claude Code'"'"'s install.sh, pip --user, ...) put
+         # launchers in ~/.local/bin, so it must be on PATH in every shell.
+         grep -Fq ".local/bin" /home/desktop/.bashrc &&
+         grep -Fq ".local/bin" /home/desktop/.profile &&
          # Legacy-compat PATH for ~/.npm-global installs from older LDFA versions.
          grep -Fq ".npm-global/bin" /home/desktop/.bashrc &&
          /opt/nodejs/bin/node -e "process.exit(parseInt(process.versions.node) >= 22 ? 0 : 1)"' \
@@ -1259,11 +1263,25 @@ if [[ -x /opt/nodejs/bin/node ]] && \
     [[ "$(/opt/nodejs/bin/node --version 2>/dev/null)" == "$NODEJS_VERSION" ]]; then
     printf '\n[%s] Node.js %s は導入済みです。設定のみ更新します\n' \
         "$(date -Iseconds)" "$NODEJS_VERSION"
+    # Runtime already current, but an existing container may predate the guest
+    # curl requirement. Add it if missing; a network failure here must not fail
+    # the whole step, so this is best-effort.
+    if ! command -v curl >/dev/null 2>&1 || \
+        [[ "$(command -v curl)" != /usr/bin/curl ]]; then
+        "${APT[@]}" update || true
+        "${APT[@]}" install -y --no-install-recommends ca-certificates curl || true
+    fi
 else
     printf '\n[%s] Node.js %s (%s)を準備しています\n' \
         "$(date -Iseconds)" "$NODEJS_VERSION" "$node_arch"
     "${APT[@]}" update
-    "${APT[@]}" install -y --no-install-recommends ca-certificates wget xz-utils
+    # curl is not needed by this script (it uses wget), but vendor install
+    # scripts users run afterwards — including Claude Code's own
+    # `curl -fsSL https://claude.ai/install.sh | bash` — assume a real curl in
+    # the guest. Without it PATH falls through to Termux's curl, which resolves
+    # against Android rather than the container.
+    "${APT[@]}" install -y --no-install-recommends \
+        ca-certificates wget xz-utils curl
 
     node_tarball="$(mktemp /tmp/nodejs.XXXXXX.tar.xz)"
     cleanup_node_tarball() { rm -f "$node_tarball"; }
@@ -1318,15 +1336,28 @@ if [[ -f /home/desktop/.npmrc ]] && \
     rm -f /home/desktop/.npmrc
 fi
 
-# Legacy-compat PATH for ~/.npm-global (installs made by older LDFA versions).
-# .profile covers login shells; .bashrc covers the interactive non-login shells
-# that xfce4-terminal opens. Both edits are idempotent.
-node_path_line='export PATH="$HOME/.npm-global/bin:$PATH"'
+# Two more PATH entries, in .profile (login shells) and .bashrc (the interactive
+# non-login shells xfce4-terminal opens), both idempotent:
+#
+#   ~/.local/bin    the XDG/systemd user bin dir. Vendor curl installers put
+#                   their launcher here — Claude Code's own
+#                   `curl -fsSL https://claude.ai/install.sh | bash` runs
+#                   `claude install`, which lands in ~/.local/bin. LDFA replaces
+#                   Debian's stock .profile, which would otherwise have added
+#                   this directory, so without re-adding it those installers
+#                   succeed but leave a "command not found" shell.
+#   ~/.npm-global/bin  legacy compat for global installs made by older LDFA
+#                   versions, before the npm prefix moved to /usr/local.
+install -d -m 0755 -o desktop -g desktop /home/desktop/.local/bin
 for shell_rc in /home/desktop/.profile /home/desktop/.bashrc; do
     [[ -f "$shell_rc" ]] || { : > "$shell_rc"; chown desktop:desktop "$shell_rc"; }
+    if ! grep -Fq '.local/bin' "$shell_rc"; then
+        printf '\n# LDFA: expose user-installed CLIs (curl installers, pip --user) on PATH\n%s\n' \
+            'export PATH="$HOME/.local/bin:$PATH"' >> "$shell_rc"
+    fi
     if ! grep -Fq '.npm-global/bin' "$shell_rc"; then
-        printf '\n# LDFA: expose npm global CLIs (claude, codex, ...) on PATH\n%s\n' \
-            "$node_path_line" >> "$shell_rc"
+        printf '\n# LDFA: expose npm global CLIs installed by older versions on PATH\n%s\n' \
+            'export PATH="$HOME/.npm-global/bin:$PATH"' >> "$shell_rc"
     fi
 done
 

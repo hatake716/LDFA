@@ -264,6 +264,15 @@ codex --version
 
 これらのCLIは実行時にプラットフォーム別のネイティブバイナリを取得します。LDFAのDebianはglibcベースのため、`linux-x64`／`linux-arm64`（glibc）ビルドが選ばれ、PRoot上で動作します。導入にはネットワーク接続が必要です。32-bit環境ではNode.jsの自動導入をスキップし、デスクトップは通常どおり起動します。
 
+公式サイトのcurlインストーラも利用できます。こちらはnpmを使わず、ランチャーを`~/.local/bin`へ配置します。
+
+```bash
+curl -fsSL https://claude.ai/install.sh | bash
+claude --version
+```
+
+LDFAは`~/.local/bin`と`~/.npm-global/bin`を`.profile`（ログインシェル）と`.bashrc`（XFCEターミナルの非ログインシェル）の両方でPATHへ追加するため、npm版・curl版のどちらで入れてもターミナルからそのまま実行できます。ゲスト側の`curl`と`ca-certificates`もNode.jsと同時に導入します。
+
 `command not found: claude`となる場合は、まず`node --version`を確認してください。表示されない場合はNode.js自動導入がまだ実行されていません（旧版APKのままか、導入時にネットワークへ到達できなかった）。**更新版APKを上書きインストールした後、環境を一度停止→起動**すると自動導入が走ります（導入済みならNode本体は再ダウンロードせず設定のみ更新）。それでも見つからない場合は`npm install -g @anthropic-ai/claude-code`を再実行してください。旧版で`~/.npm-global`へ入れたCLIも、`.profile`／`.bashrc`のPATH設定によりそのまま使えます。
 
 ## 日本語入力
