@@ -16,7 +16,7 @@ SHARED_ROOT="$HOME/storage/shared/LinuxDesktop"
 SELF="$BIN_DIR/ldfa-host"
 BOOTSTRAP_LOG="$LOG_ROOT/bootstrap.log"
 CHROME_LAUNCHER_MARKER="# LDFA_CHROME_LAUNCHER_VERSION=8"
-DESKTOP_RUNTIME_MARKER="# LDFA_SESSION_RUNTIME_VERSION=23"
+DESKTOP_RUNTIME_MARKER="# LDFA_SESSION_RUNTIME_VERSION=24"
 AUDIO_CLIENT_MARKER="# LDFA_AUDIO_CLIENT_VERSION=3"
 PULSE_BRIDGE_MARKER="# LDFA_PULSE_BRIDGE_VERSION=1"
 # Modern Node.js runtime provisioned into the guest so Node-based CLIs (Claude
@@ -493,7 +493,7 @@ guest_audio_ready() {
 desktop_session_script() {
     cat <<'SESSION'
 #!/bin/bash
-# LDFA_SESSION_RUNTIME_VERSION=23
+# LDFA_SESSION_RUNTIME_VERSION=24
 # Hardened LDFA Session Script
 set -Eeuo pipefail
 
@@ -690,8 +690,14 @@ xfconf-query -c xfwm4 -p /general/sync_to_vblank -s false 2>/dev/null || true
 # after the panel/desktop channels already exist (so the plain `-s` succeeds and
 # the slow `-n` create path is never taken). This keeps startup unblockable.
 ldfa_xfconf_set() {
-    timeout 3 xfconf-query -c "$1" -p "$2" -t int -s "$3" 2>/dev/null ||
-        timeout 3 xfconf-query -c "$1" -p "$2" -n -t int -s "$3" 2>/dev/null || true
+    # Create-with-value first (-n -t int -s), then fall back to updating an
+    # existing property (-s). Order matters: a plain `-t int -s` on a MISSING
+    # property does NOT store the value (it leaves an empty/typeless entry that
+    # never reaches xsettings.xml), so the scale silently had no effect. `-n`
+    # writes a real typed value on first run; the `-s` fallback updates it on
+    # later runs when the property already exists.
+    timeout 3 xfconf-query -c "$1" -p "$2" -n -t int -s "$3" 2>/dev/null ||
+        timeout 3 xfconf-query -c "$1" -p "$2" -s "$3" 2>/dev/null || true
 }
 apply_desktop_scale() {
     ldfa_xfconf_set xsettings     /Xft/DPI                 "$_ldfa_dpi"
@@ -1084,7 +1090,7 @@ ensure_desktop_runtime() {
         # side effects); -p prepends so ~/.local/bin wins, matching bash.
         install -d -m 0755 /etc/fish/conf.d
         cat > /etc/fish/conf.d/00-ldfa.fish <<'"'"'LDFA_FISH'"'"'
-# LDFA_SESSION_RUNTIME_VERSION=23
+# LDFA_SESSION_RUNTIME_VERSION=24
 # Managed by LDFA. fish ignores ~/.profile and ~/.bashrc, so the PATH and env
 # LDFA sets for bash are re-applied here for fish users. conf.d is sourced in
 # every fish mode (login, interactive, script), so no status guard is needed.
@@ -2493,8 +2499,8 @@ cmd_set_scale() {
         /bin/bash -c '
             addr_file=/tmp/runtime-desktop/dbus_address
             [[ -s "$addr_file" ]] && export DBUS_SESSION_BUS_ADDRESS="$(cat "$addr_file")"
-            xq() { timeout 3 xfconf-query -c "$1" -p "$2" -t int -s "$3" 2>/dev/null ||
-                   timeout 3 xfconf-query -c "$1" -p "$2" -n -t int -s "$3" 2>/dev/null || true; }
+            xq() { timeout 3 xfconf-query -c "$1" -p "$2" -n -t int -s "$3" 2>/dev/null ||
+                   timeout 3 xfconf-query -c "$1" -p "$2" -s "$3" 2>/dev/null || true; }
             xq xsettings     /Xft/DPI                 "$LDFA_APPLY_DPI"
             xq xsettings     /Gtk/CursorThemeSize     "$LDFA_APPLY_CUR"
             xq xsettings     /Gdk/WindowScalingFactor "$LDFA_APPLY_GSF"
