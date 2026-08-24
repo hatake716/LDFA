@@ -10,7 +10,7 @@ bash -n "$vnc_controller"
 
 # Termux-side native X11 script is prerequisites/diagnostics only. Android owns process lifecycle.
 for pattern in \
-  'VERSION="0.9.0"' \
+  'VERSION="1.0.0"' \
   'DISPLAY_NUMBER=1' \
   '[[ -S "$SOCKET" ]]' \
   '--shared-tmp' \
@@ -137,7 +137,7 @@ assert block.index("stopSelfResult(stopStartId)") < block.index("stopForeground(
 PY
 
 # Host worker must follow whichever backend is active: native :1 or compatibility :2.
-grep -Fq -- 'CURRENT_VERSION = "VERSION=\"0.9.0\""' "$host_compat"
+grep -Fq -- 'CURRENT_VERSION = "VERSION=\"1.0.0\""' "$host_compat"
 grep -Fq -- 'DEFAULT_DISPLAY_NUMBER=1' "$host_compat"
 grep -Fq -- 'detect_active_display()' "$host_compat"
 grep -Fq -- '.X11-unix/X2' "$host_compat"
@@ -395,8 +395,8 @@ app_build="$repository/app/build.gradle.kts"
 ! grep -Fq -- 'include(":embedded-x11-loader")' "$settings"
 ! grep -Fq -- 'embedded-x11-loader' "$app_build"
 ! grep -Fq -- 'x11-loader-assets' "$app_build"
-grep -Fq -- 'versionName = "0.9.0"' "$app_build"
-grep -Fq -- 'HOST_SCRIPT_VERSION", "\"0.9.0\""' "$app_build"
+grep -Fq -- 'versionName = "1.0.0"' "$app_build"
+grep -Fq -- 'HOST_SCRIPT_VERSION", "\"1.0.0\""' "$app_build"
 
 dialogs="$repository/app/src/main/java/com/hatake716/linuxdesktop/ui/Dialogs.kt"
 main_view_model="$repository/app/src/main/java/com/hatake716/linuxdesktop/ui/MainViewModel.kt"

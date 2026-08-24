@@ -24,7 +24,7 @@ class HostScriptCompatibilityTest {
 
         val normalized = HostScriptCompatibility.normalize(legacy)
 
-        assertTrue(normalized.contains("VERSION=\"0.9.0\""))
+        assertTrue(normalized.contains("VERSION=\"1.0.0\""))
         assertFalse(normalized.contains("update-locale LANG=ja_JP.UTF-8 LANGUAGE=ja_JP:ja"))
         assertFalse(normalized.contains("dbus-uuidgen --ensure=/etc/machine-id"))
         assertTrue(normalized.contains("/etc/default/locale"))
@@ -39,7 +39,7 @@ class HostScriptCompatibilityTest {
         for (version in listOf("0.3.1", "0.3.2", "0.3.3", "0.3.4", "0.4.0", "0.5.0")) {
             val previous = "VERSION=\"$version\"\ncmd_list() { :; }\n"
             val normalized = HostScriptCompatibility.normalize(previous)
-            assertTrue(normalized.contains("VERSION=\"0.9.0\""))
+            assertTrue(normalized.contains("VERSION=\"1.0.0\""))
             assertFalse(normalized.contains("VERSION=\"$version\""))
         }
     }

@@ -9,7 +9,7 @@ package com.hatake716.linuxdesktop.data
  * X11 probe, and the worker follows the display number selected by the active backend.
  */
 internal object HostScriptCompatibility {
-    private const val CURRENT_VERSION = "VERSION=\"0.9.0\""
+    private const val CURRENT_VERSION = "VERSION=\"1.0.0\""
     private const val LEGACY_LOCALE_COMMAND =
         "update-locale LANG=ja_JP.UTF-8 LANGUAGE=ja_JP:ja"
     private const val LEGACY_MACHINE_ID_COMMAND =

@@ -127,9 +127,8 @@ bash ./gradlew --no-daemon \
 ```
 
 Debug APKは`app/build/outputs/apk/debug/app-debug.apk`に生成され、GitHub Actionsでは
-`LDFA-v0.9.0-debug-apk`として保存されます。2026-08-23の音声修正はまだ未commitのため、
-その修正を含むcommitがpushされてCIに成功するまでは、既存の`main` artifactを音声修正版と
-みなさないでください。
+APK artifactとして保存されます。音声出力・表示倍率・起動高速化を含む最新の状態は`main`と
+[Releases v1.0.0](https://github.com/hatake716/LDFA/releases/tag/v1.0.0)に反映済みです。
 
 ## ライセンス
 

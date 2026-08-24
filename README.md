@@ -1,7 +1,7 @@
 # LDFA — Linux Desktop for Android
 
 [![LDFA Android CI](https://github.com/hatake716/LDFA/actions/workflows/android.yml/badge.svg?branch=main)](https://github.com/hatake716/LDFA/actions/workflows/android.yml)
-[![Release](https://img.shields.io/github/v/release/hatake716/LDFA?include_prereleases&label=release)](https://github.com/hatake716/LDFA/releases/tag/v0.9.0)
+[![Release](https://img.shields.io/github/v/release/hatake716/LDFA?label=release)](https://github.com/hatake716/LDFA/releases/tag/v1.0.0)
 [![License: GPL-3.0-only](https://img.shields.io/badge/License-GPL--3.0--only-blue.svg)](LICENSE)
 
 **LDFA** は、Android端末の中にDebian 12（Bookworm）とXFCEデスクトップを構築し、1つのAndroidアプリ内で操作するためのプロジェクトです。
@@ -50,36 +50,40 @@ Androidの管理画面から環境をワンタップで起動し、そのまま�
   <sub>横向き表示 — 同じセッションのまま画面の向きに追従</sub>
 </p>
 
-### ⬇️ 入手（v0.9.0 プレリリース）
+### ⬇️ 入手（v1.0.0 正式版）
 
-**[▶ Releases から `LDFA-v0.9.0-debug.apk` をダウンロード](https://github.com/hatake716/LDFA/releases/tag/v0.9.0)**
+**[▶ Releases から `LDFA-v1.0.0-debug.apk` をダウンロード](https://github.com/hatake716/LDFA/releases/tag/v1.0.0)**
 
 1. 上のリンクから APK をダウンロードします（提供元不明アプリの許可が必要な場合があります）。
 2. アプリを開き、案内に沿って内蔵ランタイム・ストレージ権限・Debian 環境の初回セットアップを完了します（初回は数分）。
 3. 環境を追加し「Debian XFCE を開く」でデスクトップを起動します。
 
-> 詳しい手順は [APKの入手方法](#apkの入手方法) と [初回セットアップ](#初回セットアップ) を参照してください。v0.9.0 はプレリリース（デバッグ署名）版です。
+> 詳しい手順は [APKの入手方法](#apkの入手方法) と [初回セットアップ](#初回セットアップ) を参照してください。配布 APK はデバッグ署名です。上書き更新できるよう、署名鍵は固定してリポジトリに含めています。
 
 ## 現在のステータス
 
 | 項目 | 状態 |
 | --- | --- |
-| バージョン | `0.9.0` / versionCode `16` |
-| リリース段階 | **プレリリース公開済み**。[Releases v0.9.0](https://github.com/hatake716/LDFA/releases/tag/v0.9.0) からAPKを入手できます |
+| バージョン | `1.0.0` / versionCode `17` |
+| リリース段階 | **正式版公開済み**。[Releases v1.0.0](https://github.com/hatake716/LDFA/releases/tag/v1.0.0) からAPKを入手できます |
 | Linux環境 | Debian 12（Bookworm）+ XFCE |
 | 通常表示 | 内蔵native X11、`DISPLAY=:1` |
 | 最終フォールバック | TigerVNC + noVNC、`DISPLAY=:2` |
-| ローカル／AVD検証 | 2026-08-23 clean build、158 unit tests（app 13）、3 module lint、4 ABI APK、音声bridgeのstatic／stateful controller／APK asset gateを確認。API 35 x86_64・4 GB RAM・4 KB page AVDではChrome + Gboard、履歴からの通常復帰、Chrome／XFCE強制終了後の自動復旧を確認 |
-| 実機検証 | Pixel 10a（ARM64・8 GB RAM）でnative起動、Chromeログインのパスワード入力まで確認済み。ARM64 16 KB pageは未完了 |
-| 音声受け入れ | **実機で可聴出力を確認済み**（動画音声がAndroidスピーカーから再生）。SHM無効化＋socket隔離による修正版がmainへ反映済み |
-| 起動時間 | プロビジョニング確認を4→1 PRoot loginへ削減。2回目以降の起動を高速化（実機で確認済み） |
+| ローカル／AVD検証 | clean build、158 unit tests（app 13）、3 module lint、4 ABI APK、host／X11スクリプトの静的gateを確認。API 35 x86_64・4 KB page AVDではChrome + Gboard、履歴からの通常復帰、Chrome／XFCE強制終了後の自動復旧を確認 |
+| 実機検証 | Pixel 10a（ARM64・8 GB RAM）でnative起動・表示倍率の拡大・上書き更新インストールまで確認済み。ARM64 16 KB pageは未完了 |
+| 音声受け入れ | **実機で可聴出力を確認済み**（動画音声がAndroidスピーカーから再生）。SHM無効化＋socket隔離による修正版を反映 |
+| 表示・入力 | デスクトップ全体の**表示倍率 100〜250%（25%刻み）**、画面下部の**特殊キーバー（ESC/CTRL/ALT/矢印など）のON/OFF**を設定から切り替え可能。実機で拡大表示を確認済み |
+| 起動時間 | プロビジョニング確認を4→1 PRoot loginへ削減、さらに成功時の冗長なPRoot login1回と固定待ちを削減。2回目以降の起動を高速化 |
+| 上書き更新 | デバッグ署名鍵をリポジトリに固定し、どの環境でビルドしても同じ鍵で署名。既存インストールへ上書き更新できることを実機で確認済み |
 
-音声修正と起動高速化は `origin/main`（`01d8da7`）へ反映済みで、[v0.9.0 プレリリース](https://github.com/hatake716/LDFA/releases/tag/v0.9.0)として公開しています。物理ARM64での長時間運用とARM64 16 KB page端末のE2Eは継続検証中のため、日常データを置く唯一のLinux環境としてではなく、バックアップを取ったテスト環境として使用してください。
+物理ARM64での長時間運用とARM64 16 KB page端末のE2Eは継続検証中のため、日常データを置く唯一のLinux環境としてではなく、バックアップを取ったテスト環境として使用してください。
 
 ## 主な機能
 
 - Android上に複数のDebian 12環境を作成、保存、切り替え
 - XFCEデスクトップを内蔵X11 viewerへ直接表示
+- デスクトップ全体の表示倍率を100〜250%（25%刻み）から選択（文字・アイコン・パネル・ウィンドウを一律拡大）
+- 画面下部の特殊キーバー（ESC／CTRL／ALT／矢印など）を設定からON/OFF
 - Debian／XFCE／Chromeの音声を内蔵PulseAudio bridgeからAndroidスピーカーへ出力
 - タッチ、マウス、物理キーボード、ソフトウェアキーボードで操作
 - 日本語ロケール、Noto CJK、日本語キーボード、Fcitx5 + Mozcを自動設定
@@ -164,22 +168,22 @@ Webコンテンツ用rendererの上限は、Googleログインとの互換性を
 
 ### 1. GitHub Releases から入手（推奨）
 
-**[Releases v0.9.0](https://github.com/hatake716/LDFA/releases/tag/v0.9.0)** から `LDFA-v0.9.0-debug.apk` をダウンロードします。音声修正と起動高速化を含む、CIで検証済みのビルドです。v0.9.0 はプレリリース（デバッグ署名）版です。
+**[Releases v1.0.0](https://github.com/hatake716/LDFA/releases/tag/v1.0.0)** から `LDFA-v1.0.0-debug.apk` をダウンロードします。音声出力・表示倍率・起動高速化を含む、CIで検証済みのビルドです。配布 APK はデバッグ署名ですが、署名鍵をリポジトリに固定しているため、旧バージョンからの上書き更新が可能です。
 
 ### 2. GitHub Actions の artifact から入手
 
-最新の `main` の[CI run](https://github.com/hatake716/LDFA/actions/workflows/android.yml)から `LDFA-v0.9.0-debug-apk` artifactを取得できます。Actions artifactには保存期限があります。
+最新の `main` の[CI run](https://github.com/hatake716/LDFA/actions/workflows/android.yml)から APK artifactを取得できます。Actions artifactには保存期限があります。
 
 ### 3. ローカルにAPKがある場合のインストール例
 
 ```bash
-adb install -r LDFA-v0.9.0-debug.apk
+adb install -r LDFA-v1.0.0-debug.apk
 ```
 
 端末やADBの設定によってtest APKとしての許可を求められる場合は、`-t`を追加します。
 
 ```bash
-adb install -r -t LDFA-v0.9.0-debug.apk
+adb install -r -t LDFA-v1.0.0-debug.apk
 ```
 
 ## 初回セットアップ
@@ -300,11 +304,24 @@ sudo apt install ./chatgpt_arm64.deb
 
 導入後にアプリが起動しない場合は、更新版APKを上書きインストールしてから**環境を一度停止→起動**してください。デスクトップ起動時に上書きエントリが作成され、アプリメニューから起動できるようになります。
 
-## 表示倍率
+## 表示倍率と特殊キーバー
 
-高DPIの端末ではXFCEデスクトップが小さく表示されることがあります。アプリの**設定 → 表示 → 表示倍率**から、デスクトップ全体（文字・アイコン・パネル・ウィンドウ）の大きさを**100%〜250%（25%刻み）**から選べます。内蔵X11サーバー（Termux:X11）自身の表示スケール機能で、論理解像度を縮小してAndroid画面いっぱいに引き伸ばすため、フォント・アイコン・パネル・Chromeなどが一律に拡大されます。
+アプリの**設定 → 表示**から、デスクトップの見え方を2つ調整できます。
+
+<p align="center">
+  <img src="docs/screenshots/settings-display.png" alt="設定 → 表示。表示倍率のプリセット（100〜250%）と、特殊キーバーのON/OFFスイッチ" width="300"><br>
+  <sub><b>設定 → 表示</b> — 表示倍率（100〜250%）と特殊キーバーの切り替え</sub>
+</p>
+
+### 表示倍率（100〜250%）
+
+高DPIの端末ではXFCEデスクトップが小さく表示されることがあります。**表示倍率**から、デスクトップ全体（文字・アイコン・パネル・ウィンドウ）の大きさを**100%〜250%（25%刻み）**から選べます。内蔵X11サーバー（Termux:X11）自身の表示スケール機能で、論理解像度を縮小してAndroid画面いっぱいに引き伸ばすため、フォント・アイコン・パネル・Chromeなどが一律に拡大されます。
 
 倍率は`Xft/DPI`（フォントとウィンドウ枠）、パネル高さ、デスクトップアイコンサイズ、カーソルサイズ、およびGTK/Qtアプリ向けの環境変数（`QT_SCALE_FACTOR`など）へまとめて反映されます。**デスクトップ起動中は即時**に反映され（パネルは自動で再読み込み）、**停止中に変更した場合は次回起動時**に適用されます。設定は環境ごとに保存され、再起動後も維持されます。
+
+### 特殊キーバー（ESC／CTRL／ALT／矢印など）
+
+タッチ操作でも `Ctrl+C` や矢印キー、`ESC`、`HOME`／`END` などを送れるよう、画面下部に特殊キーの行を表示できます。物理キーボードを使う場合や画面を広く使いたい場合は、**特殊キーバー**のスイッチでOFFにして非表示にできます。切り替えはデスクトップ起動中でも即時に反映されます。
 
 Debian側では次の環境変数を設定し、XFCE session開始時にFcitx5を自動起動します。
 
@@ -416,16 +433,17 @@ adb logcat -s LorieNative gles-renderer MainActivity
 
 ## 現在の検証状況
 
-2026-08-23時点のv0.9.0候補に対する結果です。
+v1.0.0（versionCode 17）に対する結果です。
 
 | 検証項目 | 結果 |
 | --- | --- |
 | host controller static/integration gates | PASS |
-| clean Gradle build | PASS、377 tasks |
+| X11 controller static gates | PASS |
+| clean Gradle build | PASS |
 | unit tests | 全体 158 / 158 PASS（app 13 / 13） |
 | app / termux-runtime / embedded-x11 lint | PASS、error 0 |
 | `arm64-v8a` / `armeabi-v7a` / `x86` / `x86_64` build | PASS |
-| APK v2 signature | PASS、debug certificate |
+| APK v2 signature | PASS、固定debug certificate（`2c53b411…`） |
 | APK zipalign 16 KB check | PASS |
 | arm64-v8a / x86_64 `.so` PT_LOAD alignment | 全対象`0x4000`以上 |
 | API 35 x86_64・4 KB AVDでDebian 12 clean install | PASS |
@@ -434,19 +452,23 @@ adb logcat -s LorieNative gles-renderer MainActivity
 | Android共有ストレージ往復 | PASS |
 | Google Chromeの起動とHTTPSページ描画 | PASS |
 | app-private PulseAudio Unix bridge | source／生成session／stateful controller／APK内assetの各gate PASS。旧TCP endpointと公開listenerは不在 |
-| Androidからの可聴音声 | **修正版APKで実機再確認待ち**。buildと`pactl`だけではspeaker／Bluetoothの実音を証明しない |
+| Androidからの可聴音声 | **実機で可聴出力を確認済み**（動画音声がAndroidスピーカーから再生） |
+| 表示倍率（100〜250%） | 実機でデスクトップ全体の拡大表示を確認済み |
+| 特殊キーバーのON/OFF | 起動中の即時切り替えを実装、AVDで動作確認 |
+| 上書き更新インストール | 固定署名鍵により、旧バージョンへの上書き更新が成功することを実機で確認済み |
+| 起動高速化 | 成功パスの冗長なPRoot login1回・close時の固定待ち・pkill／dbusの固定sleepを削減。worst-caseはソース上不変を維持 |
 | native failureからVNC `:2`へのfallback | PASS |
 | stop後のX11/XFCE/PRoot/socket cleanup | PASS |
 | 物理ARM64端末のnative起動 | PASS |
-| Googleログイン + Androidソフトウェアキーボード | API 35 x86_64・4 GB RAM AVDでGboard表示、`test`のcomposition／候補確定、コンテンツrenderer上限2（UI用を含む総renderer 3）を確認。Gmailへ移動して戻る操作は10 / 10回黒画面なし。Pixel 10aではパスワード入力までPASS、本修正版でGmail本人確認後の復帰を再テスト予定 |
+| Googleログイン + Androidソフトウェアキーボード | API 35 x86_64・4 GB RAM AVDでGboard表示、`test`のcomposition／候補確定、コンテンツrenderer上限2（UI用を含む総renderer 3）を確認。Gmailへ移動して戻る操作は10 / 10回黒画面なし。Pixel 10aではパスワード入力までPASS |
 | ARM64 16 KB page端末 | **未検証** |
 | process個別終了からの復旧 | main processだけの再生成と既存`:x11`への再接続にPASS。さらに履歴表示中にChrome全プロセスとXFCE 4要素を同時終了する試験を3回実行し、必要要素は1.24〜2.03秒で再生成、約3〜4秒でChrome内容を自動復元し、永久黒画面なし。`ldfa-session` PIDは全回不変で二度目のsession再構築なし |
 
 APKの16 KB alignment成功は、Debian userlandとXFCEを含むARM64 16 KB実機E2Eの成功を意味しません。この二つは別の受け入れ条件です。
 
-## v0.9.0プレリリース前の実機確認項目
+## 実機での確認項目
 
-物理ARM64端末で少なくとも次を確認してから、GitHubプレリリースを作成します。
+物理ARM64端末では少なくとも次を確認しています（16 KB page端末は継続検証中）。
 
 1. 既存の必要なTermuxデータをバックアップする。
 2. LDFAをclean installし、Debian 12の構築を完了する。
@@ -483,9 +505,8 @@ APKの16 KB alignment成功は、Debian userlandとXFCEを含むARM64 16 KB実�
 
 ### cloneと検証
 
-2026-08-23時点では音声修正は未pushです。次のclone手順は、音声修正commitが
-`main`へ公開された後に使用してください。それまでは本作業ツリーと上記SHA-256の
-ローカルAPKを使用します。
+音声出力・表示倍率・起動高速化を含む最新の状態は `main` に反映済みです。次の手順で
+clone してビルド・検証できます。
 
 ```bash
 git clone --recurse-submodules https://github.com/hatake716/LDFA.git

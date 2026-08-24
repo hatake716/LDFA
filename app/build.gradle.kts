@@ -13,12 +13,12 @@ android {
         applicationId = "com.termux"
         minSdk = 26
         targetSdk = 28
-        versionCode = 16
-        versionName = "0.9.0"
+        versionCode = 17
+        versionName = "1.0.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
-        buildConfigField("String", "HOST_SCRIPT_VERSION", "\"0.9.0\"")
+        buildConfigField("String", "HOST_SCRIPT_VERSION", "\"1.0.0\"")
     }
 
     signingConfigs {

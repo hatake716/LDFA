@@ -68,7 +68,7 @@ CIはさらに次を検証します。
 - Gradle 8.13 wrapper JARとdistributionのSHA-256
 - `arm64-v8a`、`armeabi-v7a`、`x86`、`x86_64`の`libXlorie.so`
 - Manifestの非公開`:x11` Foreground Service
-- `com.termux` application ID、versionCode 16、versionName 0.9.0、LDFA label
+- `com.termux` application ID、versionCode 17、versionName 1.0.0、LDFA label
 - `ToolsScreen`、X11/VNC assets
 - APK内`ldfa-host.sh`とsourceのbyte一致、同じ音声static gateの再実行
 - 再生専用buildに不要な`RECORD_AUDIO`／microphone foreground permissionがないこと
@@ -218,7 +218,7 @@ Bluetooth／イヤホンで人が音を確認します。
 
 ## Chrome／Gboard回帰試験
 
-2026-08-22のv0.9.0候補は、API 35 x86_64・4 GB RAM AVDの既存Debian環境へ更新インストールして次を確認しています。
+v1.0.0は、API 35 x86_64・4 GB RAM AVDの既存Debian環境へ更新インストールして次を確認しています。
 
 - Chrome launcher v8とXFCE session runtime v17への自動移行
 - Googleログイン画面のメール入力欄でGboardを表示
@@ -237,4 +237,4 @@ Bluetooth／イヤホンで人が音を確認します。
 - Chrome launcherと全Chrome processだけを同時終了する試験では、`xfsettingsd`だけを監視wake用に交換してChromeを復元し、`xfwm4`、Panel、DesktopのPIDを維持
 - Gmailを前面にしてLDFA main processだけを強制終了する試験でも、`:x11`とChromeを維持したまま再生成viewerが既存セッションへ再接続
 
-Pixel 10aではnative起動とGoogleログインのパスワード入力までは確認済みです。このAVD結果は、Gmail本人確認から戻る物理端末での受け入れを置き換えません。プレリリース前に本修正版で同じ復帰手順を複数回実行します。
+Pixel 10aではnative起動・表示倍率の拡大・上書き更新インストール・Googleログインのパスワード入力までは確認済みです。このAVD結果は、Gmail本人確認から戻る物理端末での受け入れを置き換えません。ARM64 16 KB page端末のE2Eは継続検証中です。
