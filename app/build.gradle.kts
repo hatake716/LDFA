@@ -21,7 +21,27 @@ android {
         buildConfigField("String", "HOST_SCRIPT_VERSION", "\"0.9.0\"")
     }
 
+    signingConfigs {
+        // Pin the debug signing key to a keystore committed in the repo so EVERY
+        // build (any machine, regardless of ANDROID_USER_HOME/ANDROID_SDK_HOME)
+        // signs with the SAME key. Without this, the debug key is resolved from
+        // ~/.android or ~/.config/.android depending on the environment; when
+        // that path changed, the new APK's signature no longer matched the one
+        // already installed on devices and over-install failed with "app not
+        // installed". A debug keystore holds no secret (standard android/
+        // androiddebugkey credentials), so committing it is safe.
+        getByName("debug") {
+            storeFile = file("keystore/ldfa-debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
+
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("debug")
+        }
         release {
             isMinifyEnabled = false
             proguardFiles(
