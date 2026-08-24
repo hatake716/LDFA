@@ -537,6 +537,40 @@ class LinuxDesktopRepository(private val context: Context) {
     // call is best-effort (a not-yet-updated host script simply ignores it).
     suspend fun setDesktopScale(percent: Int): Unit = withContext(Dispatchers.IO) {
         preferences.edit().putInt(KEY_DESKTOP_SCALE, percent).apply()
+
+        // The ONLY lever that visibly enlarges the WHOLE desktop on this stack is
+        // the embedded X server's (Termux:X11/Xlorie) own display-scale: it shrinks
+        // the logical X screen to physical*100/percent and stretches it onto the
+        // Android Surface, so panel + icons + text + Chrome all grow uniformly.
+        // Xft/DPI (fonts only) and RandR --scale (Xlorie discards the CRTC
+        // transform) do NOT work, which is why earlier attempts had no effect.
+        // Drive it via the X server's own prefs (default SharedPreferences, read by
+        // LorieView.getDimensionsFromSettings) and the reload broadcast.
+        // The X server reads its prefs from the process default SharedPreferences
+        // (PreferenceManager.getDefaultSharedPreferences => "<pkg>_preferences").
+        // Open that exact file directly so no androidx/android preference import is
+        // needed and we write where LorieView reads.
+        val loriePrefs = context.getSharedPreferences(
+            "${context.packageName}_preferences",
+            Context.MODE_PRIVATE,
+        )
+        loriePrefs.edit()
+            .putString("displayResolutionMode", if (percent == 100) "native" else "scaled")
+            .putInt("displayScale", percent)
+            .apply()
+        // Tell the running X server to re-read the prefs and resize the screen.
+        for (key in listOf("displayResolutionMode", "displayScale")) {
+            context.sendBroadcast(
+                Intent("com.termux.x11.ACTION_PREFERENCES_CHANGED").apply {
+                    setPackage(context.packageName)
+                    putExtra("key", key)
+                    putExtra("fromBroadcast", true)
+                },
+            )
+        }
+
+        // Also apply the guest-side font/panel scale for crispness; harmless and
+        // complements the X-screen scale. Best-effort — a stale host script no-ops.
         val id = activeContainerId() ?: return@withContext
         runCatching {
             commandClient.runInstalledHost(
