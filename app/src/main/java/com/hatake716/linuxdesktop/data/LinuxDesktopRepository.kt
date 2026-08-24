@@ -546,15 +546,7 @@ class LinuxDesktopRepository(private val context: Context) {
         // transform) do NOT work, which is why earlier attempts had no effect.
         // Drive it via the X server's own prefs (default SharedPreferences, read by
         // LorieView.getDimensionsFromSettings) and the reload broadcast.
-        // The X server reads its prefs from the process default SharedPreferences
-        // (PreferenceManager.getDefaultSharedPreferences => "<pkg>_preferences").
-        // Open that exact file directly so no androidx/android preference import is
-        // needed and we write where LorieView reads.
-        val loriePrefs = context.getSharedPreferences(
-            "${context.packageName}_preferences",
-            Context.MODE_PRIVATE,
-        )
-        loriePrefs.edit()
+        loriePrefs().edit()
             .putString("displayResolutionMode", if (percent == 100) "native" else "scaled")
             .putInt("displayScale", percent)
             .apply()
@@ -576,6 +568,37 @@ class LinuxDesktopRepository(private val context: Context) {
             commandClient.runInstalledHost(
                 action = "set-scale",
                 arguments = listOf(id, percent.toString()),
+            )
+        }
+        Unit
+    }
+
+    // The X server (Termux:X11) reads its prefs from the process default
+    // SharedPreferences ("<pkg>_preferences"); open that exact file so getters/
+    // setters below write where LorieView/MainActivity read.
+    private fun loriePrefs() =
+        context.getSharedPreferences("${context.packageName}_preferences", Context.MODE_PRIVATE)
+
+    // The on-screen extra-keys row (ESC/CTRL/ALT/arrows) is shown only when BOTH
+    // showAdditionalKbd (the user toggle) AND additionalKbdVisible are true
+    // (MainActivity: showNow = ... && showAdditionalKbd && additionalKbdVisible).
+    // Default is true, matching the X server's own default.
+    fun extraKeysVisible(): Boolean = loriePrefs().getBoolean("showAdditionalKbd", true)
+
+    suspend fun setExtraKeysVisible(visible: Boolean): Unit = withContext(Dispatchers.IO) {
+        loriePrefs().edit()
+            // Also set additionalKbdVisible so turning it back ON actually reveals
+            // the row (a prior hide could have left the runtime-visible flag false).
+            .putBoolean("showAdditionalKbd", visible)
+            .putBoolean("additionalKbdVisible", visible)
+            .apply()
+        for (key in listOf("showAdditionalKbd", "additionalKbdVisible")) {
+            context.sendBroadcast(
+                Intent("com.termux.x11.ACTION_PREFERENCES_CHANGED").apply {
+                    setPackage(context.packageName)
+                    putExtra("key", key)
+                    putExtra("fromBroadcast", true)
+                },
             )
         }
         Unit

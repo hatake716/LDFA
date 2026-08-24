@@ -26,6 +26,7 @@ import androidx.compose.material.icons.rounded.Computer
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.Gavel
 import androidx.compose.material.icons.rounded.Info
+import androidx.compose.material.icons.rounded.Keyboard
 import androidx.compose.material.icons.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Schedule
@@ -36,6 +37,7 @@ import androidx.compose.material.icons.rounded.ZoomIn
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -60,6 +62,7 @@ internal fun SettingsScreen(
     onAppSettings: () -> Unit,
     onRepair: () -> Unit,
     onSelectDesktopScale: (Int) -> Unit,
+    onToggleExtraKeys: (Boolean) -> Unit,
 ) {
     LazyColumn(
         modifier = modifier
@@ -125,6 +128,11 @@ internal fun SettingsScreen(
                     current = state.setup.desktopScalePercent,
                     enabled = state.setup.hostReady && !state.operationInProgress,
                     onSelect = onSelectDesktopScale,
+                )
+                HorizontalDivider(Modifier.padding(start = 58.dp))
+                ExtraKeysToggleRow(
+                    checked = state.setup.extraKeysVisible,
+                    onToggle = onToggleExtraKeys,
                 )
             }
         }
@@ -394,5 +402,35 @@ private fun DesktopScaleRow(
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun ExtraKeysToggleRow(
+    checked: Boolean,
+    onToggle: (Boolean) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        SettingsIcon(Icons.Rounded.Keyboard)
+        Spacer(Modifier.size(14.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                "特殊キーバー",
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.Medium,
+            )
+            Text(
+                "画面下部の ESC / CTRL / ALT / 矢印キーなどの行を表示",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Spacer(Modifier.size(12.dp))
+        Switch(checked = checked, onCheckedChange = onToggle)
     }
 }

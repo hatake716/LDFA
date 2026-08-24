@@ -40,6 +40,7 @@ internal fun MainShell(
     onBatterySettings: () -> Unit,
     onAppSettings: () -> Unit,
     onSelectDesktopScale: (Int) -> Unit,
+    onToggleExtraKeys: (Boolean) -> Unit,
 ) {
     var selectedTab by rememberSaveable {
         mutableStateOf(
@@ -118,6 +119,7 @@ internal fun MainShell(
                 onAppSettings = onAppSettings,
                 onRepair = onRepair,
                 onSelectDesktopScale = onSelectDesktopScale,
+                onToggleExtraKeys = onToggleExtraKeys,
             )
         }
     }

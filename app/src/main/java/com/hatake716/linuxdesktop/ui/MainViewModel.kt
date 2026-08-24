@@ -28,6 +28,7 @@ data class SetupSnapshot(
     val runtime: RuntimeStatus = RuntimeStatus(terminalReady = false),
     val doctor: DoctorReport? = null,
     val desktopScalePercent: Int = 100,
+    val extraKeysVisible: Boolean = true,
 ) {
     val terminalReady: Boolean get() = runtime.terminalReady
     val x11Ready: Boolean get() = runtime.x11Embedded
@@ -115,6 +116,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         runtime = runtime,
                         doctor = doctor,
                         desktopScalePercent = repository.desktopScalePercent(),
+                        extraKeysVisible = repository.extraKeysVisible(),
                     ),
                     containers = containers,
                     liveInstallationLogs = liveLogs,
@@ -323,6 +325,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
                 .onFailure(::showError)
+        }
+    }
+
+    fun setExtraKeysVisible(visible: Boolean) {
+        if (visible == _state.value.setup.extraKeysVisible) return
+        viewModelScope.launch {
+            _state.update { it.copy(setup = it.setup.copy(extraKeysVisible = visible)) }
+            runCatching { repository.setExtraKeysVisible(visible) }.onFailure(::showError)
         }
     }
 

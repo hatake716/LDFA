@@ -61,6 +61,7 @@ fun LinuxDesktopRoot(
                 onBatterySettings = viewModel::openBatterySettings,
                 onAppSettings = viewModel::openThisAppSettings,
                 onSelectDesktopScale = viewModel::setDesktopScale,
+                onToggleExtraKeys = viewModel::setExtraKeysVisible,
             )
         }
 
