@@ -275,6 +275,22 @@ LDFAは`~/.local/bin`と`~/.npm-global/bin`を`.profile`（ログインシェル
 
 `command not found: claude`となる場合は、まず`node --version`を確認してください。表示されない場合はNode.js自動導入がまだ実行されていません（旧版APKのままか、導入時にネットワークへ到達できなかった）。**更新版APKを上書きインストールした後、環境を一度停止→起動**すると自動導入が走ります（導入済みならNode本体は再ダウンロードせず設定のみ更新）。それでも見つからない場合は`npm install -g @anthropic-ai/claude-code`を再実行してください。旧版で`~/.npm-global`へ入れたCLIも、`.profile`／`.bashrc`のPATH設定によりそのまま使えます。
 
+## デスクトップアプリ（Claude Desktop など Electron 製アプリ）
+
+Claude Desktop for Linuxをはじめ、VS Code・Slackなど**Electron／Chromium製のGUIアプリ**は、インストールできても**そのままでは起動しません**。これらはChromiumのサンドボックスを初期化するときに、SUIDの`chrome-sandbox`ヘルパー（root遷移が必要）か、非特権のuser namespaceを要求します。Android PRoot環境ではゲストの実uidはAndroidアプリのuidのままで、そのどちらも成立しないため、アプリは画面が出る前にサンドボックス初期化で異常終了します（`zygote … write: Broken pipe`など）。
+
+LDFAは、デスクトップセッションの環境変数に`ELECTRON_DISABLE_SANDBOX=1`を設定します。Electronはこの変数を検出して`--no-sandbox`を自動付与するため、**追加設定なしでElectron製アプリが起動できます**。パネルやアプリメニュー、`.desktop`ランチャーから開くアプリはこの設定を継承します。XFCEターミナルから直接コマンドで起動する場合のために、`.profile`と`.bashrc`にも同じ設定を追加します。Chromeを`--no-sandbox`で動かしているのと同じ扱いで、PRootとこれらのアプリを強いセキュリティ境界として扱わないでください。
+
+Claude Desktop for Linux（`amd64`／`arm64`）は公式のaptリポジトリから導入できます。
+
+```bash
+sudo curl -fsSLo /usr/share/keyrings/claude-desktop-archive-keyring.asc https://downloads.claude.ai/claude-desktop/key.asc
+echo "deb [arch=amd64,arm64 signed-by=/usr/share/keyrings/claude-desktop-archive-keyring.asc] https://downloads.claude.ai/claude-desktop/apt/stable stable main" | sudo tee /etc/apt/sources.list.d/claude-desktop.list
+sudo apt update && sudo apt install claude-desktop
+```
+
+導入後にアプリが起動しない場合は、更新版APKを上書きインストールしてから**環境を一度停止→起動**し、上記のサンドボックス設定を反映させてください。
+
 ## 日本語入力
 
 Debian側では次の環境変数を設定し、XFCE session開始時にFcitx5を自動起動します。

@@ -66,6 +66,8 @@ native通常描画が利用できない場合はlegacy描画を試し、対応�
 
 Google ChromeはAndroid PRootの制約に合わせ、一般ユーザー`desktop`から`--no-sandbox`付きの専用ランチャーで起動します。Android、ソフトウェアキーボード、XFCEの余裕を残すため、Webコンテンツ用rendererを最大2個に制限し、拡張機能とbackground modeを無効化し、glibcのarena数を抑えます。Chrome UI用rendererが別に1個動く場合があります。既存環境の古いlauncherもデスクトップ起動前に自動更新します。PRootとChromeを強いセキュリティ境界として扱わないでください。初回起動時にはGoogleの利用規約確認が表示されます。
 
+Electron／Chromium製のGUIアプリ（Claude Desktopなど）は、PRoot内でsetuidの`chrome-sandbox`もuser namespaceも成立せず、そのままでは起動時のsandbox初期化で異常終了します。デスクトップsessionと`desktop`ユーザーのシェル設定に`ELECTRON_DISABLE_SANDBOX=1`を設定し、Electronが自動で`--no-sandbox`を付けて起動できるようにします。
+
 Debianの音声は`PULSE_SERVER=unix:/tmp/ldfa-pulse/native`から内蔵runtimeへ送る構成です。
 起動時に専用socketとAndroid実sinkを確認しますが、音声はGUIの必須gateではありません。
 失敗時は`audio_ready=0`とhost logを残し、GUIを無音で継続します。Unix bridgeの実装と

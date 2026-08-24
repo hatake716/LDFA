@@ -16,7 +16,7 @@ SHARED_ROOT="$HOME/storage/shared/LinuxDesktop"
 SELF="$BIN_DIR/ldfa-host"
 BOOTSTRAP_LOG="$LOG_ROOT/bootstrap.log"
 CHROME_LAUNCHER_MARKER="# LDFA_CHROME_LAUNCHER_VERSION=8"
-DESKTOP_RUNTIME_MARKER="# LDFA_SESSION_RUNTIME_VERSION=18"
+DESKTOP_RUNTIME_MARKER="# LDFA_SESSION_RUNTIME_VERSION=19"
 AUDIO_CLIENT_MARKER="# LDFA_AUDIO_CLIENT_VERSION=3"
 PULSE_BRIDGE_MARKER="# LDFA_PULSE_BRIDGE_VERSION=1"
 # Modern Node.js runtime provisioned into the guest so Node-based CLIs (Claude
@@ -25,7 +25,7 @@ PULSE_BRIDGE_MARKER="# LDFA_PULSE_BRIDGE_VERSION=1"
 # installs the official upstream static build into /usr/local instead. The build
 # is glibc-based and self-contained (no apt dependencies) and runs cleanly under
 # PRoot. SHA-256 sums are the upstream SHASUMS256.txt values, pinned per arch.
-NODEJS_MARKER="# LDFA_NODEJS_VERSION=4"
+NODEJS_MARKER="# LDFA_NODEJS_VERSION=5"
 NODEJS_VERSION="v22.23.2"
 NODEJS_SHA256_x64="d60acfe00a2932254bb0ad20e01b0d74397a0875595de719654b214f4b03f307"
 NODEJS_SHA256_arm64="fff4078c5def658577f92c88db7db3bc0072924bfb93fe52c1e744a54e94abb8"
@@ -473,7 +473,7 @@ guest_audio_ready() {
 desktop_session_script() {
     cat <<'SESSION'
 #!/bin/bash
-# LDFA_SESSION_RUNTIME_VERSION=18
+# LDFA_SESSION_RUNTIME_VERSION=19
 # Hardened LDFA Session Script
 set -Eeuo pipefail
 
@@ -507,6 +507,20 @@ export GALLIUM_DRIVER=llvmpipe
 export G_SLICE=always-malloc
 export MALLOC_CHECK_=0
 export NO_AT_BRIDGE=1
+
+# Electron/Chromium apps (Claude Desktop, VS Code, Slack, ...) cannot establish
+# their normal sandbox inside Android PRoot: the SUID chrome-sandbox helper needs
+# a real root transition and the namespace sandbox needs unprivileged user
+# namespaces, and PRoot provides neither (the guest's real uid stays the Android
+# app uid regardless of the fake root). Without a way out they abort at startup —
+# exactly the "installs but won't launch" symptom. Electron reads this variable
+# and appends --no-sandbox for us (verified in Electron's
+# electron_main_delegate.cc: HasVar(ELECTRON_DISABLE_SANDBOX) -> AppendSwitch
+# kNoSandbox), so every Electron app inherits the fix from the session
+# environment without a per-app wrapper. This drops Chromium's sandbox, matching
+# how LDFA already runs Chrome with --no-sandbox; treat neither PRoot nor these
+# apps as a security boundary.
+export ELECTRON_DISABLE_SANDBOX=1
 
 export XDG_RUNTIME_DIR="/tmp/runtime-desktop"
 mkdir -p \
@@ -870,6 +884,19 @@ ensure_desktop_runtime() {
         cat > "$temporary"
         chmod 0755 "$temporary"
         mv -f "$temporary" /usr/local/bin/ldfa-session
+
+        # The session script exports ELECTRON_DISABLE_SANDBOX for everything the
+        # desktop launches (panel, menus, .desktop entries). Also add it to the
+        # desktop user shell rc files so an Electron app started by hand from the
+        # XFCE terminal (e.g. `claude-desktop`) inherits it too — .bashrc for the
+        # non-login interactive shells xfce4-terminal opens, .profile for login
+        # shells. Idempotent, and guest-owned so the user can override it.
+        for shell_rc in /home/desktop/.profile /home/desktop/.bashrc; do
+            [[ -f "$shell_rc" ]] || { : > "$shell_rc"; chown desktop:desktop "$shell_rc"; }
+            if ! grep -Fq "ELECTRON_DISABLE_SANDBOX" "$shell_rc"; then
+                printf '\''\n# LDFA: Electron/Chromium apps cannot sandbox under PRoot; run unsandboxed\nexport ELECTRON_DISABLE_SANDBOX=1\n'\'' >> "$shell_rc"
+            fi
+        done
         trap - EXIT HUP INT TERM
     '
 }
@@ -1196,6 +1223,12 @@ nodejs_ready() {
          test -x /opt/nodejs/bin/npm &&
          test -x /usr/local/bin/node &&
          test -x /usr/local/bin/npm &&
+         # Vendor curl installers (Claude Code'"'"'s install.sh, rustup, ...) run
+         # curl INSIDE the guest. Without Debian'"'"'s own curl the container PATH
+         # falls through to Termux'"'"'s curl, which resolves DNS against Android
+         # rather than the container and can fail. Require the real /usr/bin/curl
+         # so a container missing it re-provisions and installs it.
+         test -x /usr/bin/curl &&
          test -f /opt/nodejs/ldfa-nodejs-version &&
          grep -Fqx "$1" /opt/nodejs/ldfa-nodejs-version &&
          # Global npm installs must land in /usr/local/bin (on every shell PATH);
@@ -1264,12 +1297,13 @@ if [[ -x /opt/nodejs/bin/node ]] && \
     printf '\n[%s] Node.js %s は導入済みです。設定のみ更新します\n' \
         "$(date -Iseconds)" "$NODEJS_VERSION"
     # Runtime already current, but an existing container may predate the guest
-    # curl requirement. Add it if missing; a network failure here must not fail
-    # the whole step, so this is best-effort.
-    if ! command -v curl >/dev/null 2>&1 || \
-        [[ "$(command -v curl)" != /usr/bin/curl ]]; then
-        "${APT[@]}" update || true
-        "${APT[@]}" install -y --no-install-recommends ca-certificates curl || true
+    # curl requirement. Install Debian's own curl when /usr/bin/curl is absent.
+    # This is NOT swallowed: nodejs_ready now requires /usr/bin/curl, so a failure
+    # here leaves the marker unrecorded and the next start retries — exactly what
+    # we want when the network was briefly unavailable.
+    if [[ ! -x /usr/bin/curl ]]; then
+        "${APT[@]}" update
+        "${APT[@]}" install -y --no-install-recommends ca-certificates curl
     fi
 else
     printf '\n[%s] Node.js %s (%s)を準備しています\n' \

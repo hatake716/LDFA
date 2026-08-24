@@ -72,6 +72,8 @@ proot-distroのDebian 12（Bookworm）rootfsへ次を導入します。rootfsは
 
 Google ChromeはDebian環境の作成時にGoogle公式パッケージから導入します。既存環境もデスクトップ起動前にChrome本体とlauncher世代を検査し、不足または古いlauncherを補います。PRoot内では通常のChrome sandboxを確立できないため、専用ランチャーが`--no-sandbox`、`--disable-dev-shm-usage`、X11 backendを明示します。さらにWebコンテンツ用rendererを2個へ制限し、拡張機能、background mode、過剰なglibc arenaを抑えます。Chrome UI用rendererが別に1個動く場合があります。ログイン互換性を損ねるsingle-process modeは使用しません。
 
+Electron／Chromium製のGUIアプリ（Claude Desktop、VS Codeなど）も、PRoot内ではsetuidの`chrome-sandbox`やuser namespaceが成立せず、起動時のsandbox初期化で異常終了します。デスクトップsessionは`ELECTRON_DISABLE_SANDBOX=1`を設定し、Electronが自動で`--no-sandbox`を付与するようにします。この設定はpanel・メニュー・`.desktop`ランチャー経由の起動へ継承され、ターミナルからの直接起動のために`.profile`と`.bashrc`にも追加します。PRootとこれらのアプリを強いセキュリティ境界として扱わないでください。
+
 音声は表示backendと独立しており、app-privateなbridge socketからTermux側
 PulseAudioのOpenSL ES／AAudio sinkへ送ります。socketは`$PREFIX/var/run/ldfa-pulse-bridge`
 （`0700`）に置き、各guest loginへ明示的な`--bind`でguestの`/tmp/ldfa-pulse/native`へ
