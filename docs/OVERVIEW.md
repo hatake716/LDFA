@@ -74,6 +74,8 @@ Google ChromeはDebian環境の作成時にGoogle公式パッケージから導�
 
 Electron／Chromium製のGUIアプリ（Claude Desktop、VS Codeなど）も、PRoot内ではsetuidの`chrome-sandbox`やuser namespaceが成立せず、起動時のsandbox初期化で異常終了します。デスクトップsessionは`ELECTRON_DISABLE_SANDBOX=1`を設定し、Electronが自動で`--no-sandbox`を付与するようにします。この設定はpanel・メニュー・`.desktop`ランチャー経由の起動へ継承され、ターミナルからの直接起動のために`.profile`と`.bashrc`にも追加します。PRootとこれらのアプリを強いセキュリティ境界として扱わないでください。
 
+vendor curlインストーラ（Claude Codeの`install.sh`）は`~/.local/bin`へlauncherを置きます。LDFAは`~/.local/bin`と`~/.npm-global/bin`を`.profile`／`.bashrc`のPATHへ追加し、ゲスト自身の`curl`も導入します。`.profile`も`.bashrc`も読まない**fish**をログインシェルにしている場合に備え、同じPATHと`ELECTRON_DISABLE_SANDBOX`を`/etc/fish/conf.d/00-ldfa.fish`にも書き出します。これによりbash・fishのいずれでも、npm版・curl版のCLIとElectronアプリが動作します。
+
 音声は表示backendと独立しており、app-privateなbridge socketからTermux側
 PulseAudioのOpenSL ES／AAudio sinkへ送ります。socketは`$PREFIX/var/run/ldfa-pulse-bridge`
 （`0700`）に置き、各guest loginへ明示的な`--bind`でguestの`/tmp/ldfa-pulse/native`へ

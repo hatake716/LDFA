@@ -271,9 +271,9 @@ curl -fsSL https://claude.ai/install.sh | bash
 claude --version
 ```
 
-LDFAは`~/.local/bin`と`~/.npm-global/bin`を`.profile`（ログインシェル）と`.bashrc`（XFCEターミナルの非ログインシェル）の両方でPATHへ追加するため、npm版・curl版のどちらで入れてもターミナルからそのまま実行できます。ゲスト側の`curl`と`ca-certificates`もNode.jsと同時に導入します。
+LDFAは`~/.local/bin`と`~/.npm-global/bin`を`.profile`（ログインシェル）と`.bashrc`（XFCEターミナルの非ログインシェル）の両方でPATHへ追加するため、npm版・curl版のどちらで入れてもターミナルからそのまま実行できます。ゲスト側の`curl`と`ca-certificates`もNode.jsと同時に導入します。**fish**をログインシェルにしている場合、fishは`.profile`も`.bashrc`も読みませんが、LDFAは`/etc/fish/conf.d/00-ldfa.fish`を用意し、fishでも同じPATH（`~/.local/bin`など）と設定が反映されるようにしています。fishを後から導入した場合も、この設定は自動で有効になります。
 
-`command not found: claude`となる場合は、まず`node --version`を確認してください。表示されない場合はNode.js自動導入がまだ実行されていません（旧版APKのままか、導入時にネットワークへ到達できなかった）。**更新版APKを上書きインストールした後、環境を一度停止→起動**すると自動導入が走ります（導入済みならNode本体は再ダウンロードせず設定のみ更新）。それでも見つからない場合は`npm install -g @anthropic-ai/claude-code`を再実行してください。旧版で`~/.npm-global`へ入れたCLIも、`.profile`／`.bashrc`のPATH設定によりそのまま使えます。
+`command not found: claude`となる場合は、まず`node --version`を確認してください。表示されない場合はNode.js自動導入がまだ実行されていません（旧版APKのままか、導入時にネットワークへ到達できなかった）。**更新版APKを上書きインストールした後、環境を一度停止→起動**すると自動導入が走ります（導入済みならNode本体は再ダウンロードせず設定のみ更新）。それでも見つからない場合は`npm install -g @anthropic-ai/claude-code`を再実行してください。旧版で`~/.npm-global`へ入れたCLIも、`.profile`／`.bashrc`／fish設定のPATHによりそのまま使えます。**シェルの設定は新しいシェルから有効になる**ため、ターミナルを開き直すか、環境を一度停止→起動してください。
 
 ## デスクトップアプリ（Claude Desktop など Electron 製アプリ）
 

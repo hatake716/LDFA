@@ -16,7 +16,7 @@ SHARED_ROOT="$HOME/storage/shared/LinuxDesktop"
 SELF="$BIN_DIR/ldfa-host"
 BOOTSTRAP_LOG="$LOG_ROOT/bootstrap.log"
 CHROME_LAUNCHER_MARKER="# LDFA_CHROME_LAUNCHER_VERSION=8"
-DESKTOP_RUNTIME_MARKER="# LDFA_SESSION_RUNTIME_VERSION=19"
+DESKTOP_RUNTIME_MARKER="# LDFA_SESSION_RUNTIME_VERSION=20"
 AUDIO_CLIENT_MARKER="# LDFA_AUDIO_CLIENT_VERSION=3"
 PULSE_BRIDGE_MARKER="# LDFA_PULSE_BRIDGE_VERSION=1"
 # Modern Node.js runtime provisioned into the guest so Node-based CLIs (Claude
@@ -473,7 +473,7 @@ guest_audio_ready() {
 desktop_session_script() {
     cat <<'SESSION'
 #!/bin/bash
-# LDFA_SESSION_RUNTIME_VERSION=19
+# LDFA_SESSION_RUNTIME_VERSION=20
 # Hardened LDFA Session Script
 set -Eeuo pipefail
 
@@ -865,7 +865,13 @@ SESSION
 desktop_runtime_ready() {
     local id="$1"
     timeout 4s proot-distro login "$id" -- /bin/bash -c \
-        'test -x /usr/local/bin/ldfa-session && grep -Fqx "$1" /usr/local/bin/ldfa-session' \
+        'test -x /usr/local/bin/ldfa-session &&
+         grep -Fqx "$1" /usr/local/bin/ldfa-session &&
+         # fish users need the /etc/fish/conf.d snippet too (fish ignores the bash
+         # rc files); require it at the same marker so a container missing it
+         # re-provisions.
+         test -f /etc/fish/conf.d/00-ldfa.fish &&
+         grep -Fqx "$1" /etc/fish/conf.d/00-ldfa.fish' \
         _ "$DESKTOP_RUNTIME_MARKER" \
         >/dev/null 2>&1
 }
@@ -897,6 +903,34 @@ ensure_desktop_runtime() {
                 printf '\''\n# LDFA: Electron/Chromium apps cannot sandbox under PRoot; run unsandboxed\nexport ELECTRON_DISABLE_SANDBOX=1\n'\'' >> "$shell_rc"
             fi
         done
+
+        # fish is a non-POSIX shell that reads NEITHER .profile NOR .bashrc, so
+        # none of the PATH/env lines above reach a user who set their login shell
+        # to fish (a common choice). fish DOES source every /etc/fish/conf.d/*.fish
+        # on startup for all users and all modes (login, interactive, script), so
+        # a single system snippet there covers fish completely. We create the
+        # directory even when fish is not installed yet, so it applies the moment
+        # the user installs fish. The snippet mirrors what the bash/.profile PATH
+        # lines and the Electron env do:
+        #   - ~/.local/bin   where vendor curl installers (the Claude Code
+        #                    install.sh) put their launcher — the exact directory
+        #                    missing from the fish default PATH that makes claude
+        #                    "not found".
+        #   - ~/.npm-global/bin  legacy compat for older LDFA npm-global installs.
+        #   - ELECTRON_DISABLE_SANDBOX=1  so Electron apps launched from a fish
+        #                    terminal run unsandboxed like everywhere else.
+        # fish_add_path -g keeps this out of universal variables (no persisted
+        # side effects); -p prepends so ~/.local/bin wins, matching bash.
+        install -d -m 0755 /etc/fish/conf.d
+        cat > /etc/fish/conf.d/00-ldfa.fish <<'"'"'LDFA_FISH'"'"'
+# LDFA_SESSION_RUNTIME_VERSION=20
+# Managed by LDFA. fish ignores ~/.profile and ~/.bashrc, so the PATH and env
+# LDFA sets for bash are re-applied here for fish users. conf.d is sourced in
+# every fish mode (login, interactive, script), so no status guard is needed.
+fish_add_path -g -p $HOME/.local/bin $HOME/.npm-global/bin
+set -gx ELECTRON_DISABLE_SANDBOX 1
+LDFA_FISH
+        chmod 0644 /etc/fish/conf.d/00-ldfa.fish
         trap - EXIT HUP INT TERM
     '
 }
@@ -2041,6 +2075,8 @@ apps_combined_ready() {
         grep -Fqx "$audio_marker" /etc/alsa/conf.d/99-ldfa-pulse.conf || exit 1
         test -x /usr/local/bin/ldfa-session || exit 1
         grep -Fqx "$runtime_marker" /usr/local/bin/ldfa-session || exit 1
+        test -f /etc/fish/conf.d/00-ldfa.fish || exit 1
+        grep -Fqx "$runtime_marker" /etc/fish/conf.d/00-ldfa.fish || exit 1
         if test -x /usr/bin/google-chrome-stable &&
             test -x /usr/local/bin/google-chrome-ldfa &&
             test -f /home/desktop/.local/share/applications/google-chrome.desktop &&
