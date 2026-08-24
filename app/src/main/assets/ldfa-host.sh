@@ -16,7 +16,7 @@ SHARED_ROOT="$HOME/storage/shared/LinuxDesktop"
 SELF="$BIN_DIR/ldfa-host"
 BOOTSTRAP_LOG="$LOG_ROOT/bootstrap.log"
 CHROME_LAUNCHER_MARKER="# LDFA_CHROME_LAUNCHER_VERSION=8"
-DESKTOP_RUNTIME_MARKER="# LDFA_SESSION_RUNTIME_VERSION=22"
+DESKTOP_RUNTIME_MARKER="# LDFA_SESSION_RUNTIME_VERSION=23"
 AUDIO_CLIENT_MARKER="# LDFA_AUDIO_CLIENT_VERSION=3"
 PULSE_BRIDGE_MARKER="# LDFA_PULSE_BRIDGE_VERSION=1"
 # Modern Node.js runtime provisioned into the guest so Node-based CLIs (Claude
@@ -493,7 +493,7 @@ guest_audio_ready() {
 desktop_session_script() {
     cat <<'SESSION'
 #!/bin/bash
-# LDFA_SESSION_RUNTIME_VERSION=22
+# LDFA_SESSION_RUNTIME_VERSION=23
 # Hardened LDFA Session Script
 set -Eeuo pipefail
 
@@ -680,24 +680,30 @@ xfconf-query -c xsettings -p /Net/ThemeName -s Adwaita 2>/dev/null || true
 xfconf-query -c xfwm4 -p /general/use_compositing -s false 2>/dev/null || true
 xfconf-query -c xfwm4 -p /general/sync_to_vblank -s false 2>/dev/null || true
 
-# Apply the whole-desktop scale to the xsettings/panel/desktop channels before
-# xfsettingsd starts. /Xft/DPI scales fonts + xfwm4 titlebars; the panel and
-# desktop-icon sizes are absolute pixels so they are set explicitly. Each write
-# is create-or-set (a missing property needs -n) and ends in `|| true`, so a
-# rejected key on a minimal config never breaks startup.
+# Whole-desktop scale is applied AFTER the XFCE components are launched (see the
+# apply_desktop_scale call after launch_settings below), never here on the
+# critical path. Writing the xfce4-panel/xfce4-desktop channels before their
+# daemons exist forces xfconfd to D-Bus-autoactivate and create a brand-new
+# backing store; on a real device that create can stall, and `|| true` does NOT
+# cap a command that never returns — it only rewrites a non-zero EXIT. Each
+# write is therefore `timeout`-bounded, and the whole apply runs backgrounded
+# after the panel/desktop channels already exist (so the plain `-s` succeeds and
+# the slow `-n` create path is never taken). This keeps startup unblockable.
 ldfa_xfconf_set() {
-    xfconf-query -c "$1" -p "$2" -t int -s "$3" 2>/dev/null ||
-        xfconf-query -c "$1" -p "$2" -n -t int -s "$3" 2>/dev/null || true
+    timeout 3 xfconf-query -c "$1" -p "$2" -t int -s "$3" 2>/dev/null ||
+        timeout 3 xfconf-query -c "$1" -p "$2" -n -t int -s "$3" 2>/dev/null || true
 }
-ldfa_xfconf_set xsettings     /Xft/DPI                 "$_ldfa_dpi"
-ldfa_xfconf_set xsettings     /Gtk/CursorThemeSize     "$_ldfa_cursor"
-ldfa_xfconf_set xfce4-panel   /panels/panel-1/size     "$_ldfa_panel"
-ldfa_xfconf_set xfce4-desktop /desktop-icons/icon-size "$_ldfa_icon"
-if [ "$LDFA_SCALE" = 200 ]; then
-    ldfa_xfconf_set xsettings /Gdk/WindowScalingFactor 2
-else
-    ldfa_xfconf_set xsettings /Gdk/WindowScalingFactor 1
-fi
+apply_desktop_scale() {
+    ldfa_xfconf_set xsettings     /Xft/DPI                 "$_ldfa_dpi"
+    ldfa_xfconf_set xsettings     /Gtk/CursorThemeSize     "$_ldfa_cursor"
+    ldfa_xfconf_set xfce4-panel   /panels/panel-1/size     "$_ldfa_panel"
+    ldfa_xfconf_set xfce4-desktop /desktop-icons/icon-size "$_ldfa_icon"
+    if [ "$LDFA_SCALE" = 200 ]; then
+        ldfa_xfconf_set xsettings /Gdk/WindowScalingFactor 2
+    else
+        ldfa_xfconf_set xsettings /Gdk/WindowScalingFactor 1
+    fi
+}
 
 fcitx5 -d --replace >/dev/null 2>&1 || true
 
@@ -909,6 +915,11 @@ launch_settings
 launch_wm
 launch_panel
 launch_desktop
+# Apply the display scale now that xfsettingsd + panel + xfdesktop own their
+# channels (so the writes hit an existing store and never take the slow -n
+# create path). Backgrounded and timeout-bounded so it can never delay the
+# desktop from presenting its first frame.
+apply_desktop_scale &
 wait_for_wm || {
     printf '[%s] xfwm4 did not publish a root window manager\n' "$(date -Iseconds)" >&2
     exit 71
@@ -1073,7 +1084,7 @@ ensure_desktop_runtime() {
         # side effects); -p prepends so ~/.local/bin wins, matching bash.
         install -d -m 0755 /etc/fish/conf.d
         cat > /etc/fish/conf.d/00-ldfa.fish <<'"'"'LDFA_FISH'"'"'
-# LDFA_SESSION_RUNTIME_VERSION=22
+# LDFA_SESSION_RUNTIME_VERSION=23
 # Managed by LDFA. fish ignores ~/.profile and ~/.bashrc, so the PATH and env
 # LDFA sets for bash are re-applied here for fish users. conf.d is sourced in
 # every fish mode (login, interactive, script), so no status guard is needed.
@@ -2482,8 +2493,8 @@ cmd_set_scale() {
         /bin/bash -c '
             addr_file=/tmp/runtime-desktop/dbus_address
             [[ -s "$addr_file" ]] && export DBUS_SESSION_BUS_ADDRESS="$(cat "$addr_file")"
-            xq() { xfconf-query -c "$1" -p "$2" -t int -s "$3" 2>/dev/null ||
-                   xfconf-query -c "$1" -p "$2" -n -t int -s "$3" 2>/dev/null || true; }
+            xq() { timeout 3 xfconf-query -c "$1" -p "$2" -t int -s "$3" 2>/dev/null ||
+                   timeout 3 xfconf-query -c "$1" -p "$2" -n -t int -s "$3" 2>/dev/null || true; }
             xq xsettings     /Xft/DPI                 "$LDFA_APPLY_DPI"
             xq xsettings     /Gtk/CursorThemeSize     "$LDFA_APPLY_CUR"
             xq xsettings     /Gdk/WindowScalingFactor "$LDFA_APPLY_GSF"
