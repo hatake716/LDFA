@@ -1160,18 +1160,23 @@ class LinuxDesktopRepository(private val context: Context) {
             EmbeddedX11Display.close(context)
         }
         var stableClosedPolls = 0
+        // Start with the fast threshold; the first observation of open==true
+        // permanently upgrades this call to the full debounce (a real teardown
+        // flap is in progress, so ride it out).
+        var requiredStablePolls = DISPLAY_CLOSE_STABLE_POLLS_WHEN_ALREADY_CLOSED
         repeat(NATIVE_X11_ACTIVITY_CLOSE_ATTEMPTS) {
             val open = withContext(Dispatchers.Main.immediate) {
                 EmbeddedX11Display.isOpen()
             }
             if (open) {
                 stableClosedPolls = 0
+                requiredStablePolls = DISPLAY_CLOSE_STABLE_POLLS
                 withContext(Dispatchers.Main.immediate) {
                     EmbeddedX11Display.close(context)
                 }
             } else {
                 stableClosedPolls++
-                if (stableClosedPolls >= DISPLAY_CLOSE_STABLE_POLLS) return
+                if (stableClosedPolls >= requiredStablePolls) return
             }
             delay(NATIVE_X11_ACTIVITY_CLOSE_POLL_MILLIS)
         }
@@ -1190,18 +1195,20 @@ class LinuxDesktopRepository(private val context: Context) {
             VncFallbackActivity.close()
         }
         var stableClosedPolls = 0
+        var requiredStablePolls = DISPLAY_CLOSE_STABLE_POLLS_WHEN_ALREADY_CLOSED
         repeat(COMPATIBILITY_ACTIVITY_CLOSE_ATTEMPTS) {
             val open = withContext(Dispatchers.Main.immediate) {
                 VncFallbackActivity.isOpen()
             }
             if (open) {
                 stableClosedPolls = 0
+                requiredStablePolls = DISPLAY_CLOSE_STABLE_POLLS
                 withContext(Dispatchers.Main.immediate) {
                     VncFallbackActivity.close()
                 }
             } else {
                 stableClosedPolls++
-                if (stableClosedPolls >= DISPLAY_CLOSE_STABLE_POLLS) return
+                if (stableClosedPolls >= requiredStablePolls) return
             }
             delay(COMPATIBILITY_ACTIVITY_CLOSE_POLL_MILLIS)
         }
@@ -1301,6 +1308,17 @@ class LinuxDesktopRepository(private val context: Context) {
         private const val COMPATIBILITY_ACTIVITY_CLOSE_POLL_MILLIS = 100L
         private const val COMPATIBILITY_ACTIVITY_CLOSE_ATTEMPTS = 50
         private const val DISPLAY_CLOSE_STABLE_POLLS = 10
+
+        // Fast-exit for the common start case where NOTHING is open yet (cold or
+        // warm start: the previous run's viewer is already gone). When the very
+        // first poll of a close-and-wait already observes open==false, only this
+        // many confirmations are needed instead of the full debounce. The full
+        // DISPLAY_CLOSE_STABLE_POLLS debounce exists to ride out the teardown
+        // flap of a LIVE viewer (finishAffinity called but the Activity lingers
+        // and isOpen can bounce non-null->null->non-null); that flap cannot
+        // happen when nothing was ever open. The instant any poll sees open==true
+        // the code reverts to the full debounce for the rest of that call.
+        private const val DISPLAY_CLOSE_STABLE_POLLS_WHEN_ALREADY_CLOSED = 2
         private const val LIFECYCLE_LOG_TAG = "LDFA-Lifecycle"
     }
 }

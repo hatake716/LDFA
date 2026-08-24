@@ -16,7 +16,7 @@ SHARED_ROOT="$HOME/storage/shared/LinuxDesktop"
 SELF="$BIN_DIR/ldfa-host"
 BOOTSTRAP_LOG="$LOG_ROOT/bootstrap.log"
 CHROME_LAUNCHER_MARKER="# LDFA_CHROME_LAUNCHER_VERSION=8"
-DESKTOP_RUNTIME_MARKER="# LDFA_SESSION_RUNTIME_VERSION=26"
+DESKTOP_RUNTIME_MARKER="# LDFA_SESSION_RUNTIME_VERSION=27"
 AUDIO_CLIENT_MARKER="# LDFA_AUDIO_CLIENT_VERSION=3"
 PULSE_BRIDGE_MARKER="# LDFA_PULSE_BRIDGE_VERSION=1"
 # Modern Node.js runtime provisioned into the guest so Node-based CLIs (Claude
@@ -493,7 +493,7 @@ guest_audio_ready() {
 desktop_session_script() {
     cat <<'SESSION'
 #!/bin/bash
-# LDFA_SESSION_RUNTIME_VERSION=26
+# LDFA_SESSION_RUNTIME_VERSION=27
 # Hardened LDFA Session Script
 set -Eeuo pipefail
 
@@ -603,7 +603,14 @@ if [[ ! -f "$DBUS_PID_FILE" ]]; then
     dbus-daemon --session --fork --print-address 5 --print-pid 6 \
         --address="unix:path=$DBUS_SOCK" \
         5> "$DBUS_ADDRESS_FILE" 6> "$DBUS_PID_FILE"
-    sleep 0.5
+    # The forked daemon writes its bus address to fd 5 once it is ready. Poll for
+    # that file to become non-empty instead of a flat 0.5s sleep; the ceiling
+    # (25 * 0.02s = 0.5s) keeps the original worst case so a genuinely stuck
+    # daemon still cannot hang startup, but the common case returns in tens of ms.
+    for _dbus_wait in $(seq 1 25); do
+        [[ -s "$DBUS_ADDRESS_FILE" ]] && break
+        sleep 0.02
+    done
 fi
 export DBUS_SESSION_BUS_ADDRESS="$(cat "$DBUS_ADDRESS_FILE")"
 
@@ -679,9 +686,13 @@ if [[ -f "$PANEL_CONFIG" ]] && [[ ! -f "$PANEL_MOBILE_MARKER" ]]; then
 fi
 
 setxkbmap -layout jp >/dev/null 2>&1 || true
-xfconf-query -c xsettings -p /Net/ThemeName -s Adwaita 2>/dev/null || true
-xfconf-query -c xfwm4 -p /general/use_compositing -s false 2>/dev/null || true
-xfconf-query -c xfwm4 -p /general/sync_to_vblank -s false 2>/dev/null || true
+# These three run before xfsettingsd/xfwm4 exist, so xfconfd D-Bus-autoactivates
+# and may create a fresh backing store — the exact stall the apply_desktop_scale
+# comment warns about, where `|| true` does NOT cap a hung command. Bound each
+# with `timeout 3` so a stalled xfconfd cannot wedge startup here either.
+timeout 3 xfconf-query -c xsettings -p /Net/ThemeName -s Adwaita 2>/dev/null || true
+timeout 3 xfconf-query -c xfwm4 -p /general/use_compositing -s false 2>/dev/null || true
+timeout 3 xfconf-query -c xfwm4 -p /general/sync_to_vblank -s false 2>/dev/null || true
 
 # Whole-desktop scale is applied AFTER the XFCE components are launched (see the
 # apply_desktop_scale call after launch_settings below), never here on the
@@ -812,8 +823,12 @@ scan_and_fix_electron() {
     done
 }
 
-scan_and_fix_electron \
-    >>"${XDG_STATE_HOME:-$HOME/.local/state}/ldfa/electron-fix.log" 2>&1 || true
+# NOTE: the sweep itself is invoked AFTER the window manager is up (see the
+# backgrounded call following wait_for_wm), not here. It only rewrites user-level
+# .desktop overrides that the launcher reads when an app is started by hand, so
+# nothing on the critical path to a usable desktop depends on it having finished.
+# Running it foreground here spent dozens of in-PRoot spawns (grep/sed/readlink
+# per .desktop) before the first frame; deferring it removes that from startup.
 # --- end Electron sandbox auto-fix ----------------------------------------
 
 chrome_running() {
@@ -883,10 +898,16 @@ COMPONENT_LOG="$XDG_RUNTIME_DIR/xfce-components.log"
 
 # Clean only volatile desktop components from a partially killed generation.
 # User applications and the persistent Chrome profile are not touched here.
+# The 0.25s settle only matters when we ACTUALLY signalled a lingering component
+# (a restart of an interrupted generation); on the common first-open of the day
+# nothing matches, pkill returns non-zero for every component, and the sleep is
+# pure dead time. pkill exits 0 only when >=1 process matched, so keying the
+# sleep on that preserves the original behaviour exactly.
+killed_any=0
 for component in xfce4-session xfwm4 xfsettingsd xfce4-panel xfdesktop Thunar xfce4-notifyd; do
-    pkill -TERM -x "$component" >/dev/null 2>&1 || true
+    pkill -TERM -x "$component" >/dev/null 2>&1 && killed_any=1 || true
 done
-sleep 0.25
+[[ "$killed_any" == 1 ]] && sleep 0.25 || true
 
 launch_settings() {
     xfsettingsd --disable-wm-check --replace >>"$COMPONENT_LOG" 2>&1 &
@@ -940,7 +961,24 @@ wait_for_wm() {
 # only at launch), and the panel/icon SIZES are set before the panel and
 # xfdesktop read them. Every write is timeout-bounded so this cannot stall
 # startup. Runs foreground so the values are in place when the daemons come up.
-apply_desktop_scale
+#
+# Fast path: at the default 100% the xrdb/xfconf writes here produce the stock
+# 96 DPI / default sizes — identical to a guest that was never scaled — yet they
+# still cost several in-session xfconf spawns plus a possible first-run xfconfd
+# autoactivation on the critical path. Skip the apply ONLY when the current scale
+# is 100 AND the last applied scale was already 100 (recorded in a persisted
+# marker). The first ever run, and every transition (including any change back
+# to 100, which must undo a previous non-100), still runs the full apply and then
+# records the value. Any non-100 scale always applies.
+LDFA_APPLIED_SCALE_MARKER="${XDG_STATE_HOME:-$HOME/.local/state}/ldfa/applied-scale"
+if [ "$LDFA_SCALE" = 100 ] && \
+   [ "$(cat "$LDFA_APPLIED_SCALE_MARKER" 2>/dev/null || true)" = 100 ]; then
+    printf '[%s] display scale already 100%%; skipping xfconf/xrdb apply\n' \
+        "$(date -Iseconds)"
+else
+    apply_desktop_scale
+    printf '%s' "$LDFA_SCALE" > "$LDFA_APPLIED_SCALE_MARKER" 2>/dev/null || true
+fi
 launch_settings
 launch_wm
 launch_panel
@@ -949,6 +987,14 @@ wait_for_wm || {
     printf '[%s] xfwm4 did not publish a root window manager\n' "$(date -Iseconds)" >&2
     exit 71
 }
+
+# Now that the desktop is usable, run the Electron sandbox/scale .desktop sweep
+# off the critical path. It is fire-and-forget: it only rewrites user-level
+# launcher overrides for the NEXT time an Electron app is started by hand, so a
+# freshly opened desktop never waits on it. The component supervisor loop below
+# tolerates this extra background child (its no-arg `wait -n` handles the reap).
+scan_and_fix_electron \
+    >>"${XDG_STATE_HOME:-$HOME/.local/state}/ldfa/electron-fix.log" 2>&1 &
 
 CHROME_RESTORE_REQUEST="${XDG_STATE_HOME:-$HOME/.local/state}/ldfa/chrome-restore-request"
 if [[ -f "${XDG_STATE_HOME:-$HOME/.local/state}/ldfa/chrome-running" ]]; then
@@ -1109,7 +1155,7 @@ ensure_desktop_runtime() {
         # side effects); -p prepends so ~/.local/bin wins, matching bash.
         install -d -m 0755 /etc/fish/conf.d
         cat > /etc/fish/conf.d/00-ldfa.fish <<'"'"'LDFA_FISH'"'"'
-# LDFA_SESSION_RUNTIME_VERSION=26
+# LDFA_SESSION_RUNTIME_VERSION=27
 # Managed by LDFA. fish ignores ~/.profile and ~/.bashrc, so the PATH and env
 # LDFA sets for bash are re-applied here for fish users. conf.d is sourced in
 # every fish mode (login, interactive, script), so no status guard is needed.
