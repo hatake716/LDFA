@@ -25,7 +25,7 @@ PULSE_BRIDGE_MARKER="# LDFA_PULSE_BRIDGE_VERSION=1"
 # installs the official upstream static build into /usr/local instead. The build
 # is glibc-based and self-contained (no apt dependencies) and runs cleanly under
 # PRoot. SHA-256 sums are the upstream SHASUMS256.txt values, pinned per arch.
-NODEJS_MARKER="# LDFA_NODEJS_VERSION=2"
+NODEJS_MARKER="# LDFA_NODEJS_VERSION=3"
 NODEJS_VERSION="v22.23.2"
 NODEJS_SHA256_x64="d60acfe00a2932254bb0ad20e01b0d74397a0875595de719654b214f4b03f307"
 NODEJS_SHA256_arm64="fff4078c5def658577f92c88db7db3bc0072924bfb93fe52c1e744a54e94abb8"
@@ -1198,8 +1198,10 @@ nodejs_ready() {
          test -x /usr/local/bin/npm &&
          test -f /opt/nodejs/ldfa-nodejs-version &&
          grep -Fqx "$1" /opt/nodejs/ldfa-nodejs-version &&
-         # The npm global bin must be on PATH for interactive terminal (non-login)
-         # shells too, not just login shells; xfce4-terminal opens non-login bash.
+         # Global npm installs must land in /usr/local/bin (on every shell PATH);
+         # the builtin npm config layer carries that default.
+         grep -Fqx "prefix=/usr/local" /opt/nodejs/lib/node_modules/npm/npmrc &&
+         # Legacy-compat PATH for ~/.npm-global installs from older LDFA versions.
          grep -Fq ".npm-global/bin" /home/desktop/.bashrc &&
          /opt/nodejs/bin/node -e "process.exit(parseInt(process.versions.node) >= 22 ? 0 : 1)"' \
         _ "$NODEJS_MARKER" \
@@ -1296,19 +1298,29 @@ for tool in node npm npx corepack; do
     fi
 done
 
-# Point npm's global prefix at the user's home so `npm install -g` never needs
-# root, and expose those bins on PATH. This is what lets
-# `npm install -g @anthropic-ai/claude-code` (and similar) work from the terminal.
-install -d -m 0755 -o desktop -g desktop /home/desktop/.npm-global
-cat > /home/desktop/.npmrc <<'NPMRC'
-prefix=/home/desktop/.npm-global
-NPMRC
-chown desktop:desktop /home/desktop/.npmrc
+# Point npm's global prefix at /usr/local via npm's BUILTIN config layer. With
+# this, `npm install -g` places launchers directly into /usr/local/bin — already
+# on the default PATH of every shell, login or not — so `claude`/`codex` work in
+# the XFCE terminal with no shell-rc dependency at all. Under PRoot the desktop
+# user can write there (the same real Android uid owns the whole rootfs), so no
+# sudo is needed either. The builtin layer is what distributions use for this;
+# a user's own ~/.npmrc still overrides it if they want a different prefix.
+install -d -m 0755 /usr/local/lib/node_modules
+printf 'prefix=/usr/local\n' > /opt/nodejs/lib/node_modules/npm/npmrc
 
-# Put ~/.npm-global/bin on PATH for BOTH shell kinds. .profile covers login
-# shells; .bashrc covers the interactive non-login shells that xfce4-terminal
-# opens — without the .bashrc entry, a globally installed `claude`/`codex` is
-# installed but "command not found" in the terminal. Both edits are idempotent.
+# Earlier LDFA versions steered installs to ~/.npm-global via ~/.npmrc, which
+# was fragile (the PATH line lived in shell rc files the terminal did not always
+# read). Remove that file only when it is byte-for-byte ours; a user-authored
+# ~/.npmrc is never touched. Keep the PATH lines below so anything already
+# installed under ~/.npm-global keeps working.
+if [[ -f /home/desktop/.npmrc ]] && \
+    cmp -s /home/desktop/.npmrc <(printf 'prefix=/home/desktop/.npm-global\n'); then
+    rm -f /home/desktop/.npmrc
+fi
+
+# Legacy-compat PATH for ~/.npm-global (installs made by older LDFA versions).
+# .profile covers login shells; .bashrc covers the interactive non-login shells
+# that xfce4-terminal opens. Both edits are idempotent.
 node_path_line='export PATH="$HOME/.npm-global/bin:$PATH"'
 for shell_rc in /home/desktop/.profile /home/desktop/.bashrc; do
     [[ -f "$shell_rc" ]] || { : > "$shell_rc"; chown desktop:desktop "$shell_rc"; }

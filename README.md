@@ -249,7 +249,7 @@ Chromeの初回起動時には、Google Chromeの利用規約確認が表示さ�
 
 ## Node.jsとコマンドラインツール（Claude Code / Codex など）
 
-Debian 12のaptが提供するNode.jsは18系で、Claude Code（Node 22以上が必要）など最近のCLIには古すぎます。そのためLDFAは、環境作成時にNode.jsの**公式静的ビルド（22 LTS）**をSHA-256検証のうえ`/opt/nodejs`へ導入し、`node`／`npm`／`npx`を`/usr/local/bin`へリンクします。グローバルなnpmパッケージはユーザーの`~/.npm-global`へ入るよう設定してあるため、`sudo`なしで導入できます。`~/.npm-global/bin`は`.profile`（ログインシェル）と`.bashrc`（XFCEターミナルの非ログインシェル）の両方でPATHに追加されるので、`claude`などのCLIはターミナルからそのまま実行できます。
+Debian 12のaptが提供するNode.jsは18系で、Claude Code（Node 22以上が必要）など最近のCLIには古すぎます。そのためLDFAは、環境作成時にNode.jsの**公式静的ビルド（22 LTS）**をSHA-256検証のうえ`/opt/nodejs`へ導入し、`node`／`npm`／`npx`を`/usr/local/bin`へリンクします。npmのグローバルprefixは`/usr/local`に設定してあり、`npm install -g`したCLI（`claude`など）は`/usr/local/bin`へ入ります。ここはログイン・非ログインを問わずすべてのシェルのPATHに含まれるため、インストール直後からターミナルでそのまま実行できます（PRoot環境ではrootfs全体を同じAndroid uidが所有するため`sudo`も不要です）。
 
 内蔵ターミナルまたはXFCEのターミナルから、通常どおりインストールできます。
 
@@ -264,7 +264,7 @@ codex --version
 
 これらのCLIは実行時にプラットフォーム別のネイティブバイナリを取得します。LDFAのDebianはglibcベースのため、`linux-x64`／`linux-arm64`（glibc）ビルドが選ばれ、PRoot上で動作します。導入にはネットワーク接続が必要です。32-bit環境ではNode.jsの自動導入をスキップし、デスクトップは通常どおり起動します。
 
-`command not found: claude`となる場合は、インストールに使ったターミナルを一度閉じて開き直してください（PATHはシェル設定ファイルに追記されるため、新しいシェルで有効になります）。既存環境をこの版へ更新した場合は、一度停止→起動すると`.bashrc`のPATH設定が自動で追加されます（Node.js本体は再ダウンロードしません）。
+`command not found: claude`となる場合は、まず`node --version`を確認してください。表示されない場合はNode.js自動導入がまだ実行されていません（旧版APKのままか、導入時にネットワークへ到達できなかった）。**更新版APKを上書きインストールした後、環境を一度停止→起動**すると自動導入が走ります（導入済みならNode本体は再ダウンロードせず設定のみ更新）。それでも見つからない場合は`npm install -g @anthropic-ai/claude-code`を再実行してください。旧版で`~/.npm-global`へ入れたCLIも、`.profile`／`.bashrc`のPATH設定によりそのまま使えます。
 
 ## 日本語入力
 
