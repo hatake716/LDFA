@@ -97,6 +97,9 @@ required=(
   'proot-distro install "$legacy_distro" --override-alias "$id"'
   'unset PROOT_NO_SECCOMP'
   'proot-distro login "$id" --bind "$shared:/mnt/android" --'
+  'storage_linked() {'
+  'storage_linked "$HOME/storage/shared" && storage_ok=1'
+  'storage_linked "$HOME/storage/shared" || \'
   'Acquire::Retries=3'
   'ensure_google_chrome()'
   'google-chrome-stable_current_${architecture}.deb'
@@ -309,5 +312,9 @@ done
 ! grep -Fq 'cat > /home/desktop/.config/pulse/client.conf' "$script"
 
 ! grep -Fq 'cat > /home/desktop/.asoundrc' "$script"
+
+# The storage readiness check must not depend on traversing into the FUSE mount
+# (a bare `-d` on the symlink stats /storage/emulated/0 and races the grant).
+! grep -Fq '[[ -d "$HOME/storage/shared" ]] && storage_ok=1' "$script"
 
 echo "Debian XFCE host script checks passed"

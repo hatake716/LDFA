@@ -180,7 +180,12 @@ public final class EmbeddedTermuxRuntime {
             return false;
         }
 
-        return sharedLink.isDirectory();
+        // The symlink was created; report success based on that rather than on
+        // sharedLink.isDirectory(). isDirectory() follows the link and stat()s
+        // /storage/emulated/0, which can momentarily fail (FUSE mount racing the
+        // storage grant) even though the link is correct — matching the shell
+        // doctor's link-existence semantics keeps setup item 3 from latching.
+        return true;
     }
 
     public static void openTerminal(Context context) {

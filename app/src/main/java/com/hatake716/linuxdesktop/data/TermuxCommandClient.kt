@@ -9,13 +9,14 @@ import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import android.os.IBinder
-import android.util.Base64
 import com.termux.app.EmbeddedTermuxRuntime
 import com.termux.app.RunCommandService
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withTimeout
+import java.io.File
+import java.security.MessageDigest
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.time.Duration
@@ -94,6 +95,11 @@ class TermuxResultService : Service() {
 }
 
 class TermuxCommandClient(private val context: Context) {
+    // Serializes installScript() so concurrent commands never race writing the
+    // same controller file (the atomic rename + sha stamp must be one critical
+    // section).
+    private val installLock = Any()
+
     fun isRuntimeInstalled(): Boolean = EmbeddedTermuxRuntime.isBootstrapInstalled()
 
     suspend fun runBundledHostScript(
@@ -179,23 +185,63 @@ class TermuxCommandClient(private val context: Context) {
         label: String,
         timeout: Duration,
     ): String {
-        val encodedScript = Base64.encodeToString(script.toByteArray(), Base64.NO_WRAP)
-        val commandArguments = buildList {
-            add("-lc")
-            add(INSTALL_AND_EXECUTE_SCRIPT)
-            add("ldfa")
-            add(installedName)
-            add(encodedScript)
-            add(action)
-            addAll(arguments)
-        }
+        // Write the controller script to its installed path directly from the app
+        // process, then exec that path with a tiny argv. The app runs as the same
+        // uid that owns /data/data/com.termux (applicationId = "com.termux"), so a
+        // plain file write to the Termux data dir succeeds without the shell.
+        //
+        // The previous approach base64-encoded the whole script and passed it as a
+        // single argv element to a bash wrapper. Once the script grew past ~97 KB
+        // its base64 (~131 KB) exceeded Linux's per-argument limit MAX_ARG_STRLEN
+        // (128 KB, independent of ARG_MAX), so execve failed with E2BIG
+        // ("Argument list too long") and EVERY host command — doctor included —
+        // silently failed. Writing the file and passing only its path keeps the
+        // argv tiny at any script size, so this can never regress on growth.
+        val installedPath = installScript(installedName, script)
 
         return execute(
-            commandPath = TERMUX_BASH,
-            arguments = commandArguments,
+            commandPath = installedPath,
+            arguments = listOf(action) + arguments,
             label = label,
             timeout = timeout,
         ).checkedStdout()
+    }
+
+    // Write the bundled script to its installed path (atomically, then chmod 0700)
+    // and return that path. Skips the rewrite when the content is byte-identical to
+    // what is already installed, keyed on a SHA-256 sidecar so an edited script body
+    // is always re-installed even if the version string did not change.
+    private fun installScript(installedName: String, script: String): String {
+        val binDir = File(INSTALLED_BIN_DIR)
+        val target = File(binDir, installedName)
+        val bytes = script.toByteArray()
+        val digest = MessageDigest.getInstance("SHA-256").digest(bytes)
+            .joinToString("") { "%02x".format(it) }
+        val stamp = File(binDir, ".$installedName.sha256")
+
+        synchronized(installLock) {
+            val current = runCatching { stamp.readText().trim() }.getOrNull()
+            if (current == digest && target.canExecute()) {
+                return target.absolutePath
+            }
+            if (!binDir.isDirectory && !binDir.mkdirs()) {
+                throw TermuxCommandException("内蔵コマンドの配置先を作成できませんでした。")
+            }
+            val temporary = File(binDir, ".$installedName.tmp")
+            try {
+                temporary.outputStream().use { it.write(bytes) }
+                if (!temporary.setExecutable(true, true) || !temporary.setReadable(true, true)) {
+                    throw TermuxCommandException("内蔵コマンドの実行権限を設定できませんでした。")
+                }
+                if (!temporary.renameTo(target)) {
+                    throw TermuxCommandException("内蔵コマンドを配置できませんでした。")
+                }
+                stamp.writeText(digest)
+            } finally {
+                temporary.delete()
+            }
+        }
+        return target.absolutePath
     }
 
     private suspend fun execute(
@@ -299,29 +345,10 @@ class TermuxCommandClient(private val context: Context) {
         private const val EXTRA_PENDING_INTENT = "com.termux.RUN_COMMAND_PENDING_INTENT"
         private const val RESULT_ACTION_PREFIX = "com.hatake716.linuxdesktop.TERMUX_RESULT"
         private const val TERMUX_HOME = "/data/data/com.termux/files/home"
-        private const val TERMUX_BASH = "/data/data/com.termux/files/usr/bin/bash"
-        private const val INSTALLED_HOST_SCRIPT =
-            "/data/data/com.termux/files/home/.local/share/linux-desktop-for-android/bin/ldfa-host"
-        private const val INSTALLED_X11_SCRIPT =
-            "/data/data/com.termux/files/home/.local/share/linux-desktop-for-android/bin/ldfa-x11"
-        private const val INSTALLED_VNC_SCRIPT =
-            "/data/data/com.termux/files/home/.local/share/linux-desktop-for-android/bin/ldfa-vnc"
-
-        private val INSTALL_AND_EXECUTE_SCRIPT = """
-            set -e
-            BASE="${'$'}HOME/.local/share/linux-desktop-for-android"
-            mkdir -p "${'$'}BASE/bin"
-            NAME="${'$'}1"
-            ENCODED="${'$'}2"
-            shift 2
-            TARGET="${'$'}BASE/bin/${'$'}NAME"
-            TEMP="${'$'}BASE/bin/.${'$'}NAME.tmp.${'$'}${'$'}"
-            trap 'rm -f "${'$'}TEMP"' EXIT HUP INT TERM
-            printf '%s' "${'$'}ENCODED" | base64 -d > "${'$'}TEMP"
-            chmod 700 "${'$'}TEMP"
-            mv -f "${'$'}TEMP" "${'$'}TARGET"
-            trap - EXIT HUP INT TERM
-            exec "${'$'}TARGET" "${'$'}@"
-        """.trimIndent()
+        private const val INSTALLED_BIN_DIR =
+            "/data/data/com.termux/files/home/.local/share/linux-desktop-for-android/bin"
+        private const val INSTALLED_HOST_SCRIPT = "$INSTALLED_BIN_DIR/ldfa-host"
+        private const val INSTALLED_X11_SCRIPT = "$INSTALLED_BIN_DIR/ldfa-x11"
+        private const val INSTALLED_VNC_SCRIPT = "$INSTALLED_BIN_DIR/ldfa-vnc"
     }
 }

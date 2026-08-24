@@ -167,17 +167,37 @@ container_exists() {
     fi
 }
 
+storage_linked() {
+    # Report whether ~/storage/shared is a correct symlink into Android shared
+    # storage WITHOUT traversing into it. A Termux/app-shell-spawned process may
+    # lack a traversable FUSE view of /storage/emulated/0 (the storage grant can
+    # race the fork, or the process may not carry the storage GIDs), so a bare
+    # `-d` on the symlink stats the resolved target and can be false forever even
+    # though the link is correct. Reading the link value only ($? of readlink)
+    # never touches the target, so this reflects that the link is established.
+    local link="$1" target
+    if [[ -L "$link" ]]; then
+        target="$(readlink "$link" 2>/dev/null || true)"
+        [[ "$target" == /storage/emulated/0 || "$target" == /storage/self/primary ]] && return 0
+    fi
+    # Fallback: a real directory we can actually stat (bind mount, or a process
+    # that does hold traversal permission). Never a false positive when unlinked.
+    [[ -d "$link" ]]
+}
+
 ensure_storage() {
     mkdir -p "$HOME/storage"
-    if [[ ! -d "$HOME/storage/shared" ]]; then
+    if ! storage_linked "$HOME/storage/shared"; then
         termux-setup-storage >/dev/null 2>&1 || true
     fi
     if [[ ! -e "$HOME/storage/shared" ]] && [[ -d /storage/emulated/0 ]]; then
         ln -s /storage/emulated/0 "$HOME/storage/shared" 2>/dev/null || true
     fi
-    [[ -d "$HOME/storage/shared" ]] || \
+    storage_linked "$HOME/storage/shared" || \
         die "Android共有ストレージへアクセスできません。アプリのストレージ権限を確認してください。"
-    mkdir -p "$SHARED_ROOT"
+    # Creating LinuxDesktop/ requires traversing into shared storage, which this
+    # exact process may not yet be able to do; do not abort setup on it.
+    mkdir -p "$SHARED_ROOT" 2>/dev/null || true
 }
 
 retry_command() {
@@ -1556,7 +1576,7 @@ cmd_doctor() {
     has tmux && tmux_ok=1
     has proot-distro && proot_ok=1
     has pulseaudio && has pactl && audio_tools_ok=1
-    [[ -d "$HOME/storage/shared" ]] && storage_ok=1
+    storage_linked "$HOME/storage/shared" && storage_ok=1
     [[ $tmux_ok -eq 1 && $proot_ok -eq 1 && $storage_ok -eq 1 && \
         $audio_tools_ok -eq 1 ]] && host_ok=1
 
