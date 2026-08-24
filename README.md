@@ -2,6 +2,7 @@
 
 [![LDFA Android CI](https://github.com/hatake716/LDFA/actions/workflows/android.yml/badge.svg?branch=main)](https://github.com/hatake716/LDFA/actions/workflows/android.yml)
 [![Release](https://img.shields.io/github/v/release/hatake716/LDFA?label=release)](https://github.com/hatake716/LDFA/releases/tag/v1.0.0)
+[![Website](https://img.shields.io/badge/Website-hatake716.github.io%2FLDFA-blue)](https://hatake716.github.io/LDFA/)
 [![License: GPL-3.0-only](https://img.shields.io/badge/License-GPL--3.0--only-blue.svg)](LICENSE)
 
 **LDFA** は、Android端末の中にDebian 12（Bookworm）とXFCEデスクトップを構築し、1つのAndroidアプリ内で操作するためのプロジェクトです。
@@ -9,6 +10,8 @@
 Termux互換ランタイム、X11サーバー、X11 viewer、ターミナル、Debian PRoot、XFCE、日本語入力環境をアプリに統合しています。通常利用では、外部Termux、外部Termux:X11、外部VNCクライアントを別々にインストールする必要はありません。
 
 > **スマホの中に、Debian の PC を。** 追加アプリも root も要りません。1つのアプリを開くだけで、Debian XFCE デスクトップが起動します。
+
+🌐 **ホームページ: <https://hatake716.github.io/LDFA/>**
 
 ### 📸 スクリーンショット
 
