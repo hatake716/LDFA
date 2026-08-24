@@ -279,7 +279,7 @@ LDFAは`~/.local/bin`と`~/.npm-global/bin`を`.profile`（ログインシェル
 
 Claude Desktop for Linuxをはじめ、VS Code・Slackなど**Electron／Chromium製のGUIアプリ**は、インストールできても**そのままでは起動しません**。これらはChromiumのサンドボックスを初期化するときに、SUIDの`chrome-sandbox`ヘルパー（root遷移が必要）か、非特権のuser namespaceを要求します。Android PRoot環境ではゲストの実uidはAndroidアプリのuidのままで、そのどちらも成立しないため、アプリは画面が出る前にサンドボックス初期化で異常終了します（`zygote … write: Broken pipe`など）。
 
-LDFAは、デスクトップセッションの環境変数に`ELECTRON_DISABLE_SANDBOX=1`を設定します。Electronはこの変数を検出して`--no-sandbox`を自動付与するため、**追加設定なしでElectron製アプリが起動できます**。パネルやアプリメニュー、`.desktop`ランチャーから開くアプリはこの設定を継承します。XFCEターミナルから直接コマンドで起動する場合のために、`.profile`と`.bashrc`にも同じ設定を追加します。Chromeを`--no-sandbox`で動かしているのと同じ扱いで、PRootとこれらのアプリを強いセキュリティ境界として扱わないでください。
+LDFAはこれを2段構えで自動的に解消します。まずデスクトップセッションと`desktop`ユーザーのシェル設定に`ELECTRON_DISABLE_SANDBOX=1`を設定します。多くのElectronアプリ（Claude Desktopなど）はこの変数を検出して`--no-sandbox`を付与するため、追加設定なしで起動できます。ただし一部の硬化されたアプリ（**OpenAIのChatGPTアプリ**など）は内部でサンドボックスを再強制するため、この環境変数を無視します。そこでLDFAは**デスクトップ起動のたびに、インストール済みのElectronアプリを自動検出**し、各アプリの`.desktop`ランチャーへ`--no-sandbox`を付けたユーザー用の上書きエントリを作成します。これにより、手動で後からインストールしたElectronアプリも、次回のデスクトップ起動で自動的に起動できるようになります（LDFA同梱のChromeは対象外。既に専用ランチャーで動作します）。Chromeを`--no-sandbox`で動かしているのと同じ扱いで、PRootとこれらのアプリを強いセキュリティ境界として扱わないでください。
 
 Claude Desktop for Linux（`amd64`／`arm64`）は公式のaptリポジトリから導入できます。
 
@@ -289,7 +289,16 @@ echo "deb [arch=amd64,arm64 signed-by=/usr/share/keyrings/claude-desktop-archive
 sudo apt update && sudo apt install claude-desktop
 ```
 
-導入後にアプリが起動しない場合は、更新版APKを上書きインストールしてから**環境を一度停止→起動**し、上記のサンドボックス設定を反映させてください。
+OpenAIのChatGPTデスクトップアプリ（`amd64`／`arm64`）は公式の`.deb`から導入できます。
+
+```bash
+# arm64端末の場合（Intel/AMDなら chatgpt_amd64.deb）
+cd ~/Downloads
+wget https://persistent.oaistatic.com/codex-app-prod/linux/deb/latest/chatgpt_arm64.deb
+sudo apt install ./chatgpt_arm64.deb
+```
+
+導入後にアプリが起動しない場合は、更新版APKを上書きインストールしてから**環境を一度停止→起動**してください。デスクトップ起動時に上書きエントリが作成され、アプリメニューから起動できるようになります。
 
 ## 日本語入力
 

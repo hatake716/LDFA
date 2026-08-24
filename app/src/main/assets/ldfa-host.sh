@@ -16,7 +16,7 @@ SHARED_ROOT="$HOME/storage/shared/LinuxDesktop"
 SELF="$BIN_DIR/ldfa-host"
 BOOTSTRAP_LOG="$LOG_ROOT/bootstrap.log"
 CHROME_LAUNCHER_MARKER="# LDFA_CHROME_LAUNCHER_VERSION=8"
-DESKTOP_RUNTIME_MARKER="# LDFA_SESSION_RUNTIME_VERSION=20"
+DESKTOP_RUNTIME_MARKER="# LDFA_SESSION_RUNTIME_VERSION=21"
 AUDIO_CLIENT_MARKER="# LDFA_AUDIO_CLIENT_VERSION=3"
 PULSE_BRIDGE_MARKER="# LDFA_PULSE_BRIDGE_VERSION=1"
 # Modern Node.js runtime provisioned into the guest so Node-based CLIs (Claude
@@ -493,7 +493,7 @@ guest_audio_ready() {
 desktop_session_script() {
     cat <<'SESSION'
 #!/bin/bash
-# LDFA_SESSION_RUNTIME_VERSION=20
+# LDFA_SESSION_RUNTIME_VERSION=21
 # Hardened LDFA Session Script
 set -Eeuo pipefail
 
@@ -534,12 +534,16 @@ export NO_AT_BRIDGE=1
 # namespaces, and PRoot provides neither (the guest's real uid stays the Android
 # app uid regardless of the fake root). Without a way out they abort at startup —
 # exactly the "installs but won't launch" symptom. Electron reads this variable
-# and appends --no-sandbox for us (verified in Electron's
-# electron_main_delegate.cc: HasVar(ELECTRON_DISABLE_SANDBOX) -> AppendSwitch
-# kNoSandbox), so every Electron app inherits the fix from the session
-# environment without a per-app wrapper. This drops Chromium's sandbox, matching
-# how LDFA already runs Chrome with --no-sandbox; treat neither PRoot nor these
-# apps as a security boundary.
+# and appends --no-sandbox (electron_main_delegate.cc:
+# HasVar(ELECTRON_DISABLE_SANDBOX) -> AppendSwitch kNoSandbox). This is enough
+# for apps that never call app.enableSandbox() (e.g. Claude Desktop). It is NOT
+# enough for hardened builds that DO call it (e.g. the OpenAI ChatGPT app): that
+# API runs RemoveNoSandboxSwitch() and re-forces the sandbox, so the env var is
+# undone and the app still zygote-crashes. Those need --no-sandbox on the real
+# command line, which the scan_and_fix_electron sweep below injects per app via a
+# user-level .desktop override. Keep this export as belt-and-suspenders (harmless
+# where the flag also applies, and it covers terminal launches before the sweep
+# has run). Treat neither PRoot nor these apps as a security boundary.
 export ELECTRON_DISABLE_SANDBOX=1
 
 export XDG_RUNTIME_DIR="/tmp/runtime-desktop"
@@ -656,6 +660,92 @@ xfconf-query -c xsettings -p /Net/ThemeName -s Adwaita 2>/dev/null || true
 xfconf-query -c xfwm4 -p /general/use_compositing -s false 2>/dev/null || true
 xfconf-query -c xfwm4 -p /general/sync_to_vblank -s false 2>/dev/null || true
 fcitx5 -d --replace >/dev/null 2>&1 || true
+
+# --- LDFA Electron sandbox auto-fix ---------------------------------------
+# Electron/Chromium GUI apps cannot establish their sandbox under Android PRoot.
+# ELECTRON_DISABLE_SANDBOX (exported above) only helps apps that never call
+# app.enableSandbox(); hardened builds such as the OpenAI ChatGPT app strip the
+# env-var-injected switch and re-force the sandbox, then die at the Chromium
+# zygote with a "Broken pipe" before any window appears. The only reliable lever
+# is --no-sandbox on the real command line. This sweep runs on every desktop
+# start, so an Electron app the user installed BY HAND after provisioning is
+# fixed on the next launch with no user action. It is idempotent and reversible
+# (overrides live only in the user's own applications dir).
+LDFA_ELECTRON_STAMP="# LDFA_ELECTRON_FIX=1"
+
+# Is the package directory of an Exec program token an Electron app? Detected by
+# fingerprinting the directory rather than parsing the launcher script, because
+# vendor wrappers (e.g. ChatGPT's) compute their target path at runtime from $0,
+# so there is no static path to follow. Requires BOTH a Chromium .pak AND an
+# Electron asar (or the icudtl+v8-snapshot pair) so ordinary GTK/Qt apps, which
+# have neither, are never matched.
+ldfa_electron_pkgdir() {
+    local prog="$1" resolved dir d
+    case "$prog" in
+        /*) resolved="$prog" ;;
+        *)  resolved="$(command -v "$prog" 2>/dev/null || true)" ;;
+    esac
+    [[ -n "$resolved" ]] || return 1
+    resolved="$(readlink -f "$resolved" 2>/dev/null || printf '%s' "$resolved")"
+    dir="$(dirname "$resolved")"
+    for d in "$dir" "$dir/.."; do
+        [[ -d "$d" ]] || continue
+        if [[ ( -f "$d/resources.pak" || -f "$d/chrome_100_percent.pak" ) &&
+              ( -f "$d/resources/app.asar" || -f "$d/resources/electron.asar" ||
+                ( -f "$d/icudtl.dat" && -f "$d/v8_context_snapshot.bin" ) ) ]]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+scan_and_fix_electron() {
+    local out_dir="$HOME/.local/share/applications" src name exec_line prog
+    install -d -m 0755 "$out_dir"
+    for src in /usr/share/applications/*.desktop; do
+        [[ -f "$src" ]] || continue
+        name="$(basename "$src")"
+        exec_line="$(grep -m1 '^Exec=' "$src" 2>/dev/null | sed 's/^Exec=//')"
+        [[ -n "$exec_line" ]] || continue
+        # Already unsandboxed, or Chrome (LDFA ships its own --no-sandbox chrome
+        # launcher already): leave untouched.
+        case "$exec_line" in
+            *--no-sandbox*|*google-chrome*|*/opt/google/chrome/*) continue ;;
+        esac
+        # Program token = first word, skipping an env prefix / VAR=val assignments.
+        set -- $exec_line
+        prog="$1"
+        while [[ "$prog" == env || "$prog" == *=* ]] && [[ $# -gt 1 ]]; do
+            shift; prog="$1"
+        done
+        ldfa_electron_pkgdir "$prog" || continue
+        local dst="$out_dir/$name"
+        # Our own previous override — skip (idempotent across restarts).
+        if [[ -f "$dst" ]] && grep -Fqx "$LDFA_ELECTRON_STAMP" "$dst" 2>/dev/null; then
+            continue
+        fi
+        # A user-level .desktop shadows the system one (XDG precedence), so we
+        # never touch root-owned /usr/share and an apt upgrade cannot clobber it.
+        # Insert --no-sandbox right after the program token on every Exec line,
+        # preserving %U/%F and other field codes verbatim.
+        {
+            printf '%s\n' "$LDFA_ELECTRON_STAMP"
+            awk '
+                /^Exec=/ {
+                    rest = substr($0, 6); n = index(rest, " ")
+                    if (n == 0) { print "Exec=" rest " --no-sandbox"; next }
+                    print "Exec=" substr(rest, 1, n - 1) " --no-sandbox" substr(rest, n)
+                    next
+                }
+                { print }
+            ' "$src"
+        } > "$dst.tmp.$$" && mv -f "$dst.tmp.$$" "$dst" || rm -f "$dst.tmp.$$"
+    done
+}
+
+scan_and_fix_electron \
+    >>"${XDG_STATE_HOME:-$HOME/.local/state}/ldfa/electron-fix.log" 2>&1 || true
+# --- end Electron sandbox auto-fix ----------------------------------------
 
 chrome_running() {
     pgrep -x chrome >/dev/null 2>&1 || \
@@ -943,7 +1033,7 @@ ensure_desktop_runtime() {
         # side effects); -p prepends so ~/.local/bin wins, matching bash.
         install -d -m 0755 /etc/fish/conf.d
         cat > /etc/fish/conf.d/00-ldfa.fish <<'"'"'LDFA_FISH'"'"'
-# LDFA_SESSION_RUNTIME_VERSION=20
+# LDFA_SESSION_RUNTIME_VERSION=21
 # Managed by LDFA. fish ignores ~/.profile and ~/.bashrc, so the PATH and env
 # LDFA sets for bash are re-applied here for fish users. conf.d is sourced in
 # every fish mode (login, interactive, script), so no status guard is needed.

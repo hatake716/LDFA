@@ -72,7 +72,7 @@ proot-distroのDebian 12（Bookworm）rootfsへ次を導入します。rootfsは
 
 Google ChromeはDebian環境の作成時にGoogle公式パッケージから導入します。既存環境もデスクトップ起動前にChrome本体とlauncher世代を検査し、不足または古いlauncherを補います。PRoot内では通常のChrome sandboxを確立できないため、専用ランチャーが`--no-sandbox`、`--disable-dev-shm-usage`、X11 backendを明示します。さらにWebコンテンツ用rendererを2個へ制限し、拡張機能、background mode、過剰なglibc arenaを抑えます。Chrome UI用rendererが別に1個動く場合があります。ログイン互換性を損ねるsingle-process modeは使用しません。
 
-Electron／Chromium製のGUIアプリ（Claude Desktop、VS Codeなど）も、PRoot内ではsetuidの`chrome-sandbox`やuser namespaceが成立せず、起動時のsandbox初期化で異常終了します。デスクトップsessionは`ELECTRON_DISABLE_SANDBOX=1`を設定し、Electronが自動で`--no-sandbox`を付与するようにします。この設定はpanel・メニュー・`.desktop`ランチャー経由の起動へ継承され、ターミナルからの直接起動のために`.profile`と`.bashrc`にも追加します。PRootとこれらのアプリを強いセキュリティ境界として扱わないでください。
+Electron／Chromium製のGUIアプリ（Claude Desktop、ChatGPT、VS Codeなど）も、PRoot内ではsetuidの`chrome-sandbox`やuser namespaceが成立せず、起動時のsandbox初期化（zygote）で異常終了します。デスクトップsessionは`ELECTRON_DISABLE_SANDBOX=1`を設定し、Electronが`--no-sandbox`を付与するようにします。ただし`app.enableSandbox()`を呼ぶ硬化ビルド（ChatGPTアプリなど）はこの環境変数を無効化するため、確実な対処にはコマンドラインの`--no-sandbox`が必要です。そこでdesktop session起動のたびに`scan_and_fix_electron`が、インストール済みElectronアプリ（`.pak`＋asarで判定）を検出し、各`.desktop`の`Exec`に`--no-sandbox`を付けたユーザーレベルの上書きエントリを`~/.local/share/applications`へ生成します。手動で後から入れたアプリも次回起動で自動対応し、field code（`%U`等）は保持、LDFA同梱のChromeは除外します。PRootとこれらのアプリを強いセキュリティ境界として扱わないでください。
 
 vendor curlインストーラ（Claude Codeの`install.sh`）は`~/.local/bin`へlauncherを置きます。LDFAは`~/.local/bin`と`~/.npm-global/bin`を`.profile`／`.bashrc`のPATHへ追加し、ゲスト自身の`curl`も導入します。`.profile`も`.bashrc`も読まない**fish**をログインシェルにしている場合に備え、同じPATHと`ELECTRON_DISABLE_SANDBOX`を`/etc/fish/conf.d/00-ldfa.fish`にも書き出します。これによりbash・fishのいずれでも、npm版・curl版のCLIとElectronアプリが動作します。
 
