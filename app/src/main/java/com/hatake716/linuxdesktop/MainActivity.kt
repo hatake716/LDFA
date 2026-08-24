@@ -1,6 +1,7 @@
 package com.hatake716.linuxdesktop
 
 import android.Manifest
+import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -8,6 +9,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Environment
 import android.provider.Settings
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -98,11 +100,7 @@ class MainActivity : ComponentActivity() {
     private fun requestStorageAccess() {
         when {
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !Environment.isExternalStorageManager() -> {
-                val intent = Intent(
-                    Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
-                    Uri.parse("package:$packageName"),
-                )
-                allFilesAccessLauncher.launch(intent)
+                launchAllFilesAccessSettings()
             }
 
             Build.VERSION.SDK_INT < Build.VERSION_CODES.R &&
@@ -113,13 +111,53 @@ class MainActivity : ComponentActivity() {
                 storagePermissionLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
             }
 
-            else -> finalizeSharedStorageSetup()
+            // Android reports the permission as granted. Normally this just links the
+            // shared directory and completes. But after an over-install the special
+            // "all files access" appop can be left granted-but-stale: the link cannot
+            // be created and pressing the button would otherwise do nothing at all.
+            // If the link still cannot be established, re-open the settings screen so
+            // the user can toggle the permission off and on to refresh it.
+            else -> {
+                if (!finalizeSharedStorageSetup() &&
+                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
+                ) {
+                    launchAllFilesAccessSettings()
+                }
+            }
         }
     }
 
-    private fun finalizeSharedStorageSetup() {
-        EmbeddedTermuxRuntime.ensureSharedStorageLink()
+    // Open the system "all files access" settings for this app. On some devices the
+    // package-scoped intent has no handler; fall back to the app-list variant, and if
+    // neither resolves, tell the user instead of silently doing nothing.
+    private fun launchAllFilesAccessSettings() {
+        val scoped = Intent(
+            Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+            Uri.parse("package:$packageName"),
+        )
+        try {
+            allFilesAccessLauncher.launch(scoped)
+            return
+        } catch (_: ActivityNotFoundException) {
+            // Fall through to the non-scoped list screen below.
+        }
+        try {
+            allFilesAccessLauncher.launch(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+        } catch (_: ActivityNotFoundException) {
+            Toast.makeText(
+                this,
+                "設定 > アプリ > LDFA > 権限 から「すべてのファイルへのアクセス」を許可してください。",
+                Toast.LENGTH_LONG,
+            ).show()
+        }
+    }
+
+    // Returns true when the shared-storage link is in place. false means Android
+    // still cannot expose external storage (e.g. a stale grant after an over-install).
+    private fun finalizeSharedStorageSetup(): Boolean {
+        val linked = EmbeddedTermuxRuntime.ensureSharedStorageLink()
         viewModel.refreshEnvironment()
+        return linked
     }
 
     private fun hasSharedStoragePermission(): Boolean = when {
