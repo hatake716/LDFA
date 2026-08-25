@@ -158,6 +158,10 @@ section{padding:84px 0}
 .ftext li{display:flex;gap:11px;align-items:flex-start;font-size:.98rem}
 .ftext li .ck{flex:none;width:20px;height:20px;border-radius:6px;background:color-mix(in srgb,var(--signal) 16%,transparent);color:var(--signal);display:grid;place-items:center;margin-top:2px}
 .fmedia{display:flex;justify-content:center}
+.pcard{width:100%;max-width:360px;background:var(--card,#fff);border:1px solid var(--line);border-radius:22px;box-shadow:var(--card-shadow);padding:44px 28px;text-align:center}
+.pcard-ico{font-size:52px;line-height:1;margin-bottom:20px}
+.pcard-t{font-size:20px;font-weight:700;margin-bottom:8px}
+.pcard-s{color:var(--muted);font-size:15px}
 .fmedia .device{width:min(270px,72vw)}
 .fmedia.wide{display:block}
 .shot-wide{border-radius:14px;overflow:hidden;border:1px solid var(--steel-line);box-shadow:var(--device-shadow);background:#16202e}
@@ -236,7 +240,7 @@ section{padding:84px 0}
       <a class="navlink" href="#how">使いかた</a>
       <a class="navlink" href="#install">インストール</a>
     </div>
-    <a class="btn btn-primary" href="https://github.com/hatake716/LDFA/releases/tag/v1.0.2">v1.0.2 を入手</a>
+    <a class="btn btn-primary" href="https://github.com/hatake716/LDFA/releases/tag/v1.1.0">v1.1.0 を入手</a>
   </div>
 </nav>
 
@@ -388,6 +392,25 @@ section{padding:84px 0}
       </div>
     </div>
 
+    <div class="feature flip">
+      <div class="ftext">
+        <span class="eyebrow">機種変更も、こわくない</span>
+        <h3>環境まるごと、バックアップと移行</h3>
+        <p>作り込んだ Debian 環境を、1 つの <span class="mono">.ldfa</span> ファイルに丸ごと保存。別の Android 端末でも、新しい環境として復元できます。機種変更や環境の複製にそのまま使えます。</p>
+        <ul class="checks">
+          <li><span class="ck">✓</span><span>停止中の環境をワンタップでバックアップ（保存先はファイルアプリの LinuxDesktop フォルダ）</span></li>
+          <li><span class="ck">✓</span><span>復元は常に新しい環境として追加。既存の環境は上書きしません</span></li>
+          <li><span class="ck">✓</span><span>SHA-256 で破損を検知。復元先では machine-id を作り直し安全に初期化</span></li>
+        </ul>
+      </div>
+      <div class="fmedia">
+        <div class="pcard">
+          <div class="pcard-ico">🗄️→📱</div>
+          <div class="pcard-t"><span class="mono">.ldfa</span> 1 ファイルで移行</div>
+          <div class="pcard-s">端末 A でバックアップ → 端末 B で復元</div>
+        </div>
+      </div>
+    </div>
   </div>
 </section>
 
@@ -423,17 +446,17 @@ section{padding:84px 0}
     <div class="sec-head">
       <span class="eyebrow">インストール</span>
       <h2>入手して、始める。</h2>
-      <p class="sub">v1.0.2 正式版です。配布 APK はデバッグ署名ですが、署名鍵を固定しているため上書き更新できます。GitHub のリリースページから入手できます。</p>
+      <p class="sub">v1.1.0 正式版です。配布 APK はデバッグ署名ですが、署名鍵を固定しているため上書き更新できます。GitHub のリリースページから入手できます。</p>
     </div>
     <div class="install-grid">
       <div>
         <ol class="steps-num">
-          <li><div><h3>APK をダウンロード</h3><p><a href="https://github.com/hatake716/LDFA/releases/tag/v1.0.2">Releases v1.0.2</a> から <span class="mono">LDFA-v1.0.2-debug.apk</span> を取得します。</p></div></li>
+          <li><div><h3>APK をダウンロード</h3><p><a href="https://github.com/hatake716/LDFA/releases/tag/v1.1.0">Releases v1.1.0</a> から <span class="mono">LDFA-v1.1.0-debug.apk</span> を取得します。</p></div></li>
           <li><div><h3>提供元不明のアプリを許可</h3><p>Play ストア外の APK のため、端末の設定でインストール元の許可が必要な場合があります。</p></div></li>
           <li><div><h3>アプリを開いて初回セットアップ</h3><p>案内に沿って内蔵ランタイム・ストレージ権限・Debian 環境を準備します（初回は数分）。</p></div></li>
           <li><div><h3>環境を追加して起動</h3><p>環境を作成し「Debian XFCE を開く」でデスクトップを起動します。</p></div></li>
         </ol>
-        <a class="btn btn-primary" href="https://github.com/hatake716/LDFA/releases/tag/v1.0.2" style="margin-top:28px">GitHub で v1.0.2 を入手 →</a>
+        <a class="btn btn-primary" href="https://github.com/hatake716/LDFA/releases/tag/v1.1.0" style="margin-top:28px">GitHub で v1.1.0 を入手 →</a>
       </div>
       <div>
         <div class="termcard">
@@ -464,7 +487,7 @@ Download  Pictures  LinuxDesktop</pre>
       <div class="spec"><span class="k">表示</span><span class="v">ネイティブ X11 / VNC fallback</span></div>
       <div class="spec"><span class="k">音声</span><span class="v">PulseAudio → OpenSL ES / AAudio</span></div>
       <div class="spec"><span class="k">対応 ABI</span><span class="v">arm64 · armv7 · x86 · x86_64</span></div>
-      <div class="spec"><span class="k">バージョン</span><span class="v">v1.0.2（正式版）</span></div>
+      <div class="spec"><span class="k">バージョン</span><span class="v">v1.1.0（正式版）</span></div>
     </div>
   </div>
 </section>
@@ -475,10 +498,10 @@ Download  Pictures  LinuxDesktop</pre>
       <div class="brand"><span class="glyph">L</span>LDFA — Linux Desktop for Android</div>
       <div style="display:flex;gap:22px">
         <a href="https://github.com/hatake716/LDFA">GitHub</a>
-        <a href="https://github.com/hatake716/LDFA/releases/tag/v1.0.2">Releases</a>
+        <a href="https://github.com/hatake716/LDFA/releases/tag/v1.1.0">Releases</a>
         <a href="#install">インストール</a>
       </div>
     </div>
-    <p class="disc">LDFA は Debian・XFCE・Termux・Termux:X11 などのオープンソースコンポーネントを利用しています。これは v1.0.2 正式版（デバッグ署名）ビルドで、ARM64 16KB page 端末での長時間検証は継続中です。スクリーンショットは実機および Android API 35 環境で撮影したものです。</p>
+    <p class="disc">LDFA は Debian・XFCE・Termux・Termux:X11 などのオープンソースコンポーネントを利用しています。これは v1.1.0 正式版（デバッグ署名）ビルドで、ARM64 16KB page 端末での長時間検証は継続中です。スクリーンショットは実機および Android API 35 環境で撮影したものです。</p>
   </div>
 </footer>

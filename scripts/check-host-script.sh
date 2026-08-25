@@ -89,7 +89,7 @@ HOME="$fresh_panel_home" XDG_STATE_HOME="$fresh_panel_state" bash "$panel_block"
 cmp "$test_sandbox/fresh-panel-expected.xml" \
   "$fresh_panel_config.ldfa-before-mobile-optimization"
 required=(
-  'VERSION="1.0.2"'
+  'VERSION="1.1.0"'
   'LINUX_IMAGE="debian:12"'
   'install_help="$(proot-distro install --help 2>&1 || true)"'
   '[[ "$install_help" == *"--name"* ]]'

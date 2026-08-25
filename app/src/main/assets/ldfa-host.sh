@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 set -Eeuo pipefail
 
-VERSION="1.0.2"
+VERSION="1.1.0"
 LINUX_IMAGE="debian:12"
 BASE="${XDG_DATA_HOME:-$HOME/.local/share}/linux-desktop-for-android"
 BIN_DIR="$BASE/bin"

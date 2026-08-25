@@ -1,7 +1,7 @@
 # LDFA — Linux Desktop for Android
 
 [![LDFA Android CI](https://github.com/hatake716/LDFA/actions/workflows/android.yml/badge.svg?branch=main)](https://github.com/hatake716/LDFA/actions/workflows/android.yml)
-[![Release](https://img.shields.io/github/v/release/hatake716/LDFA?label=release)](https://github.com/hatake716/LDFA/releases/tag/v1.0.2)
+[![Release](https://img.shields.io/github/v/release/hatake716/LDFA?label=release)](https://github.com/hatake716/LDFA/releases/tag/v1.1.0)
 [![Website](https://img.shields.io/badge/Website-hatake716.github.io%2FLDFA-blue)](https://hatake716.github.io/LDFA/)
 [![License: GPL-3.0-only](https://img.shields.io/badge/License-GPL--3.0--only-blue.svg)](LICENSE)
 
@@ -53,9 +53,9 @@ Androidの管理画面から環境をワンタップで起動し、そのまま�
   <sub>横向き表示 — 同じセッションのまま画面の向きに追従</sub>
 </p>
 
-### ⬇️ 入手（v1.0.2 正式版）
+### ⬇️ 入手（v1.1.0 正式版）
 
-**[▶ Releases から `LDFA-v1.0.2-debug.apk` をダウンロード](https://github.com/hatake716/LDFA/releases/tag/v1.0.2)**
+**[▶ Releases から `LDFA-v1.1.0-debug.apk` をダウンロード](https://github.com/hatake716/LDFA/releases/tag/v1.1.0)**
 
 1. 上のリンクから APK をダウンロードします（提供元不明アプリの許可が必要な場合があります）。
 2. アプリを開き、案内に沿って内蔵ランタイム・ストレージ権限・Debian 環境の初回セットアップを完了します（初回は数分）。
@@ -67,13 +67,13 @@ Androidの管理画面から環境をワンタップで起動し、そのまま�
 
 | 項目 | 状態 |
 | --- | --- |
-| バージョン | `1.0.2` / versionCode `19` |
-| リリース段階 | **正式版公開済み**。[Releases v1.0.2](https://github.com/hatake716/LDFA/releases/tag/v1.0.2) からAPKを入手できます |
+| バージョン | `1.1.0` / versionCode `20` |
+| リリース段階 | **正式版公開済み**。[Releases v1.1.0](https://github.com/hatake716/LDFA/releases/tag/v1.1.0) からAPKを入手できます |
 | Linux環境 | Debian 12（Bookworm）+ XFCE |
 | 通常表示 | 内蔵native X11、`DISPLAY=:1` |
 | 最終フォールバック | TigerVNC + noVNC、`DISPLAY=:2` |
-| ローカル／AVD検証 | clean build、158 unit tests（app 13）、3 module lint、4 ABI APK、host／X11スクリプトの静的gateを確認。API 35 x86_64・4 KB page AVDではChrome + Gboard、履歴からの通常復帰、Chrome／XFCE強制終了後の自動復旧を確認 |
-| 実機検証 | Pixel 10a（ARM64・8 GB RAM）でnative起動・表示倍率の拡大・上書き更新インストールまで確認済み。ARM64 16 KB pageは未完了 |
+| ローカル／AVD検証 | clean build、176 unit tests（app 31）、3 module lint、4 ABI APK、host／X11スクリプトの静的gateを確認。API 35 x86_64・4 KB page AVDではChrome + Gboard、履歴からの通常復帰、Chrome／XFCE強制終了後の自動復旧、新規インストール環境の起動を確認 |
+| 実機検証 | Pixel 10a（ARM64・8 GB RAM）でnative起動・表示倍率の拡大・上書き更新インストールを確認済み。**新規／既存環境のデスクトップ起動（ARM向けにWM待機を延長）、環境まるごとの`.ldfa`バックアップと復元（3.69 GB環境で完走）まで実機で確認**。ARM64 16 KB pageは未完了 |
 | 音声受け入れ | **実機で可聴出力を確認済み**（動画音声がAndroidスピーカーから再生）。SHM無効化＋socket隔離による修正版を反映 |
 | 表示・入力 | デスクトップ全体の**表示倍率 100〜250%（25%刻み）**、画面下部の**特殊キーバー（ESC/CTRL/ALT/矢印など）のON/OFF**、物理キーボードの**配列 JIS / US**を設定から切り替え可能。実機で拡大表示を確認済み |
 | 起動時間 | プロビジョニング確認を4→1 PRoot loginへ削減、さらに成功時の冗長なPRoot login1回と固定待ちを削減。2回目以降の起動を高速化 |
@@ -95,6 +95,7 @@ Androidの管理画面から環境をワンタップで起動し、そのまま�
 - Node.js 22 LTS（公式静的ビルド）を自動導入し、`npm install -g`でClaude CodeやCodexなどのCLIを利用可能に
 - 一般ユーザー`desktop`とパスワードなし`sudo`を構成
 - Android共有ストレージをDebianの`/mnt/android`へ接続
+- 環境まるごとを1つの`.ldfa`ファイルへバックアップし、別のAndroid端末でも新しい環境として復元（機種変更・移行に対応）
 - 内蔵ターミナルからDebianを保守
 - 作成、起動、停止、修復、削除とログ表示をMaterial 3 UIへ統合
 - native X11が利用できない場合にlegacy描画、互換VNCへ段階的にフォールバック
@@ -172,7 +173,7 @@ Webコンテンツ用rendererの上限は、Googleログインとの互換性を
 
 ### 1. GitHub Releases から入手（推奨）
 
-**[Releases v1.0.2](https://github.com/hatake716/LDFA/releases/tag/v1.0.2)** から `LDFA-v1.0.2-debug.apk` をダウンロードします。音声出力・表示倍率・起動高速化を含む、CIで検証済みのビルドです。配布 APK はデバッグ署名ですが、署名鍵をリポジトリに固定しているため、旧バージョンからの上書き更新が可能です。
+**[Releases v1.1.0](https://github.com/hatake716/LDFA/releases/tag/v1.1.0)** から `LDFA-v1.1.0-debug.apk` をダウンロードします。音声出力・表示倍率・起動高速化を含む、CIで検証済みのビルドです。配布 APK はデバッグ署名ですが、署名鍵をリポジトリに固定しているため、旧バージョンからの上書き更新が可能です。
 
 ### 2. GitHub Actions の artifact から入手
 
@@ -181,13 +182,13 @@ Webコンテンツ用rendererの上限は、Googleログインとの互換性を
 ### 3. ローカルにAPKがある場合のインストール例
 
 ```bash
-adb install -r LDFA-v1.0.2-debug.apk
+adb install -r LDFA-v1.1.0-debug.apk
 ```
 
 端末やADBの設定によってtest APKとしての許可を求められる場合は、`-t`を追加します。
 
 ```bash
-adb install -r -t LDFA-v1.0.2-debug.apk
+adb install -r -t LDFA-v1.1.0-debug.apk
 ```
 
 ## 初回セットアップ
@@ -357,6 +358,17 @@ XMODIFIERS=@im=fcitx
 
 XFCEのデスクトップには「Android共有」へのショートカットを作成します。共有ストレージはバックアップやAndroidアプリとの受け渡しに利用できますが、重要データは別の場所にも保存してください。
 
+## バックアップと移行（v1.1.0〜）
+
+環境をまるごと1つの`.ldfa`ファイルに保存し、同じ端末でも別のAndroid端末でも、新しい環境として復元できます。機種変更や環境の複製に利用できます。
+
+- **作成**: ツール →「バックアップを作成」→ 停止中の環境を選ぶ →「バックアップを開始」。保存先は「スマホ本体（内部ストレージ）▸ LinuxDesktop ▸ backups」（フルパス `/storage/emulated/0/LinuxDesktop/backups`）で、Androidの「ファイル」アプリから取り出せます。
+- **復元**: ツール →「バックアップから復元」→ `.ldfa`ファイルを選ぶ → 内容（作成元・アーキテクチャ・作成日時）を確認 →「この内容で復元」。復元は**常に新しい環境として追加**され、既存の環境を上書きしません。同じバックアップを二重に復元しても衝突しません。
+- **形式**: rootfsとメタデータをtar→gzipで1ファイルにまとめ、末尾のSHA-256で破損を検知します。処理は前面サービス（WakeLock付き）で進み、進捗バーを表示します。
+- **除外**: `/proc` `/sys` `/dev` `/tmp` などの揮発ディレクトリ、aptキャッシュ、ChromeのキャッシュとSingletonロック、そしてPRootが作るAndroidマウントポイント（`/apex` `/system` `/vendor` など）は自動で除外されます。復元先では新しいmachine-idを生成し、Chromeや音声・アプリ構成は初回起動時に再検証します。
+
+> 対応アーキテクチャが異なる端末（例: arm64のバックアップをx86_64端末へ）には復元できません。復元画面でアーキテクチャを事前に検証します。
+
 ## 表示アーキテクチャ
 
 通常表示はAndroid所有のX11 serviceと、Termux:X11由来のviewerをアプリへ埋め込んだ構成です。旧`app_process`、loader APK、custom `PathClassLoader`、TCP 7892による通常接続は使用しません。
@@ -447,14 +459,14 @@ adb logcat -s LorieNative gles-renderer MainActivity
 
 ## 現在の検証状況
 
-v1.0.2（versionCode 18）に対する結果です。
+v1.1.0（versionCode 20）に対する結果です。
 
 | 検証項目 | 結果 |
 | --- | --- |
 | host controller static/integration gates | PASS |
 | X11 controller static gates | PASS |
 | clean Gradle build | PASS |
-| unit tests | 全体 158 / 158 PASS（app 13 / 13） |
+| unit tests | 全体 176 / 176 PASS（app 31 / 31、うちバックアップ/復元の往復テスト15件） |
 | app / termux-runtime / embedded-x11 lint | PASS、error 0 |
 | `arm64-v8a` / `armeabi-v7a` / `x86` / `x86_64` build | PASS |
 | APK v2 signature | PASS、固定debug certificate（`2c53b411…`） |
@@ -473,7 +485,8 @@ v1.0.2（versionCode 18）に対する結果です。
 | 起動高速化 | 成功パスの冗長なPRoot login1回・close時の固定待ち・pkill／dbusの固定sleepを削減。worst-caseはソース上不変を維持 |
 | native failureからVNC `:2`へのfallback | PASS |
 | stop後のX11/XFCE/PRoot/socket cleanup | PASS |
-| 物理ARM64端末のnative起動 | PASS |
+| 物理ARM64端末のnative起動 | PASS。**新規インストール環境の初回起動もPASS**（ARM実機ではxfwm4の初期化に3〜5秒かかるため、WM待機を3秒→約25秒へ延長。以前は待機切れで再起動ループし起動できなかった） |
+| 環境の`.ldfa`バックアップと復元 | **実機でPASS**。3.69 GBの既存環境をバックアップして完走し、新しい環境として復元（完全なDebian rootfs、machine-id再生成、state=ready）。復元は常に新規IDで追加し既存を上書きしない。除外（Androidマウントポイント等）と`..`を含む正当なファイル名の往復もunit testで検証 |
 | Googleログイン + Androidソフトウェアキーボード | API 35 x86_64・4 GB RAM AVDでGboard表示、`test`のcomposition／候補確定、コンテンツrenderer上限2（UI用を含む総renderer 3）を確認。Gmailへ移動して戻る操作は10 / 10回黒画面なし。Pixel 10aではパスワード入力までPASS |
 | ARM64 16 KB page端末 | **未検証** |
 | process個別終了からの復旧 | main processだけの再生成と既存`:x11`への再接続にPASS。さらに履歴表示中にChrome全プロセスとXFCE 4要素を同時終了する試験を3回実行し、必要要素は1.24〜2.03秒で再生成、約3〜4秒でChrome内容を自動復元し、永久黒画面なし。`ldfa-session` PIDは全回不変で二度目のsession再構築なし |
