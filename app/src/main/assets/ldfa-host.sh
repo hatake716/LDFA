@@ -16,7 +16,7 @@ SHARED_ROOT="$HOME/storage/shared/LinuxDesktop"
 SELF="$BIN_DIR/ldfa-host"
 BOOTSTRAP_LOG="$LOG_ROOT/bootstrap.log"
 CHROME_LAUNCHER_MARKER="# LDFA_CHROME_LAUNCHER_VERSION=8"
-DESKTOP_RUNTIME_MARKER="# LDFA_SESSION_RUNTIME_VERSION=28"
+DESKTOP_RUNTIME_MARKER="# LDFA_SESSION_RUNTIME_VERSION=29"
 AUDIO_CLIENT_MARKER="# LDFA_AUDIO_CLIENT_VERSION=3"
 PULSE_BRIDGE_MARKER="# LDFA_PULSE_BRIDGE_VERSION=1"
 # Modern Node.js runtime provisioned into the guest so Node-based CLIs (Claude
@@ -546,7 +546,7 @@ guest_audio_ready() {
 desktop_session_script() {
     cat <<'SESSION'
 #!/bin/bash
-# LDFA_SESSION_RUNTIME_VERSION=28
+# LDFA_SESSION_RUNTIME_VERSION=29
 # Hardened LDFA Session Script
 set -Eeuo pipefail
 
@@ -1028,9 +1028,16 @@ component_pid_running() {
     [[ "$stat_pid" == "$pid" ]] && [[ "$state" != Z ]] && [[ "$parent_pid" == "$$" ]]
 }
 
+# Wait for xfwm4 to publish _NET_SUPPORTING_WM_CHECK. On a real ARM device the WM
+# can take 3-5s to finish initializing (measured), so a short 3s budget saw it as
+# "did not publish", exited 71, restarted, and never let the WM finish — the panel
+# flickered and the desktop never came up. wm_ready runs inside the guest session
+# (no per-poll PRoot login), so polling for up to ~25s is cheap and lets a slow
+# first start on ARM succeed instead of looping. x86/fast devices still return in
+# the first few polls.
 wait_for_wm() {
     local attempt
-    for attempt in $(seq 1 30); do
+    for attempt in $(seq 1 250); do
         if wm_ready; then
             return 0
         fi
@@ -1239,7 +1246,7 @@ ensure_desktop_runtime() {
         # side effects); -p prepends so ~/.local/bin wins, matching bash.
         install -d -m 0755 /etc/fish/conf.d
         cat > /etc/fish/conf.d/00-ldfa.fish <<'"'"'LDFA_FISH'"'"'
-# LDFA_SESSION_RUNTIME_VERSION=28
+# LDFA_SESSION_RUNTIME_VERSION=29
 # Managed by LDFA. fish ignores ~/.profile and ~/.bashrc, so the PATH and env
 # LDFA sets for bash are re-applied here for fish users. conf.d is sourced in
 # every fish mode (login, interactive, script), so no status guard is needed.
@@ -2919,13 +2926,22 @@ cmd_health() {
 }
 
 cmd_logs() {
-    local id="${1:-}" file lines="${2:-300}"
+    local id="${1:-}" file lines="${2:-300}" component_log
     validate_id "$id"
     [[ "$lines" =~ ^[0-9]+$ ]] || lines=300
     (( lines > 1000 )) && lines=1000
     file="$(log_file "$id")"
-    [[ -f "$file" ]] || return 0
-    tail -n "$lines" "$file"
+    [[ -f "$file" ]] && tail -n "$lines" "$file"
+
+    # Also surface the in-session XFCE component log. It records WHY a component
+    # (xfwm4/xfsettingsd/panel/xfdesktop) exited — the host log only sees the
+    # "session exited (NN)" outcome. The session runs with --shared-tmp, so the
+    # guest's /tmp/runtime-desktop maps to $PREFIX/tmp/runtime-desktop on the host.
+    component_log="$PREFIX/tmp/runtime-desktop/xfce-components.log"
+    if [[ -f "$component_log" ]]; then
+        printf '\n===== XFCEコンポーネントログ (xfce-components.log) =====\n'
+        tail -n "$lines" "$component_log"
+    fi
 }
 
 cmd_heartbeat() {
