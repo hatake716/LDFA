@@ -248,7 +248,7 @@ grep -q '^host_ready=1$' <<<"$report"
 grep -q '^storage=1$' <<<"$report"
 grep -q '^embedded_x11=1$' <<<"$report"
 grep -q '^audio_tools=1$' <<<"$report"
-grep -q '^version=1.0.0$' <<<"$report"
+grep -q '^version=1.0.1$' <<<"$report"
 
 audio_report="$(bash "$controller" audio-probe)"
 grep -q '^audio_server=1$' <<<"$audio_report"
