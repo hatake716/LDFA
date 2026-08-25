@@ -22,6 +22,8 @@ import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.Memory
 import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.Restore
+import androidx.compose.material.icons.rounded.Save
 import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.material.icons.rounded.Warning
 import androidx.compose.material3.Card
@@ -33,13 +35,21 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.hatake716.linuxdesktop.R
 import com.hatake716.linuxdesktop.data.ContainerState
 import com.hatake716.linuxdesktop.ui.theme.SuccessGreen
+
+private enum class BackupOverlay { NONE, CREATE, RESTORE }
 
 @Composable
 internal fun ToolsScreen(
@@ -48,9 +58,30 @@ internal fun ToolsScreen(
     onOpenTerminal: () -> Unit,
     onOpenDisplay: () -> Unit,
     onRepair: () -> Unit,
+    onRestored: () -> Unit,
 ) {
     val hasRunningDesktop = state.containers.any {
         it.state == ContainerState.RUNNING || it.sessionAlive
+    }
+    var overlay by rememberSaveable { mutableStateOf(BackupOverlay.NONE) }
+
+    when (overlay) {
+        BackupOverlay.CREATE -> {
+            BackupScreen(
+                containers = state.containers,
+                onClose = { overlay = BackupOverlay.NONE },
+            )
+            return
+        }
+        BackupOverlay.RESTORE -> {
+            RestoreScreen(
+                existingNames = state.containers.map { it.name }.toSet(),
+                onRestored = onRestored,
+                onClose = { overlay = BackupOverlay.NONE },
+            )
+            return
+        }
+        BackupOverlay.NONE -> Unit
     }
 
     LazyColumn(
@@ -95,6 +126,33 @@ internal fun ToolsScreen(
                 enabled = state.setup.terminalReady,
                 onClick = onOpenTerminal,
             )
+        }
+
+        item {
+            Column {
+                Text(
+                    text = "バックアップ",
+                    modifier = Modifier.padding(start = 4.dp, bottom = 8.dp),
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    ToolActionCard(
+                        icon = Icons.Rounded.Save,
+                        title = stringResource(R.string.backup_menu_create),
+                        description = "停止中の環境を1つのファイルに保存します",
+                        enabled = state.setup.hostReady,
+                        onClick = { overlay = BackupOverlay.CREATE },
+                    )
+                    ToolActionCard(
+                        icon = Icons.Rounded.Restore,
+                        title = stringResource(R.string.backup_menu_restore),
+                        description = "バックアップから新しい環境として復元します",
+                        enabled = state.setup.hostReady,
+                        onClick = { overlay = BackupOverlay.RESTORE },
+                    )
+                }
+            }
         }
 
         item {

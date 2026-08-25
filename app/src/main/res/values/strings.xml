@@ -4,4 +4,51 @@
     <string name="keep_alive_notification_title">LDFAでLinuxデスクトップを実行中</string>
     <string name="keep_alive_notification_text">Androidによる終了を検知した場合は自動復旧します</string>
     <string name="stop">停止</string>
+
+    <!-- バックアップ / 復元 -->
+    <string name="cancel">キャンセル</string>
+    <string name="close">閉じる</string>
+    <string name="backup_channel_name">バックアップ</string>
+    <string name="backup_channel_desc">環境のバックアップと復元の進捗を表示します</string>
+    <string name="backup_notif_counting">対象を数えています…</string>
+    <string name="backup_notif_creating">バックアップを作成中…</string>
+    <string name="backup_notif_done">%1$s を作成しました（%2$s）</string>
+    <string name="backup_path_label">保存先</string>
+    <string name="backup_skipped_note">特殊ファイル %1$d 件をスキップ、%2$d 件は読み取れませんでした</string>
+    <string name="restore_notif_running">バックアップから復元中…</string>
+    <string name="restore_notif_done">「%1$s」を復元しました</string>
+    <string name="restore_done_detail">ホーム画面の一覧に追加されました。初回起動時に環境を初期化します。</string>
+
+    <!-- バックアップ画面 -->
+    <string name="backup_menu_create">バックアップを作成</string>
+    <string name="backup_menu_restore">バックアップから復元</string>
+    <string name="backup_title">バックアップを作成</string>
+    <string name="backup_subtitle">停止中の環境を 1 つの .ldfa ファイルに保存します。</string>
+    <string name="backup_pick_env">バックアップする環境</string>
+    <string name="backup_no_stopped_env">停止中の環境がありません。実行中の環境は先に停止してください。</string>
+    <string name="backup_dest">保存先</string>
+    <string name="backup_dest_default">内部ストレージ / LinuxDesktop / backups</string>
+    <string name="backup_start">バックアップを開始</string>
+    <string name="backup_running">バックアップ中…</string>
+    <string name="backup_running_files">%1$d / %2$d 項目</string>
+    <string name="backup_done_title">バックアップが完了しました</string>
+    <string name="backup_failed_title">バックアップに失敗しました</string>
+    <string name="backup_cancelled">バックアップをキャンセルしました</string>
+
+    <!-- 復元画面 -->
+    <string name="restore_title">バックアップから復元</string>
+    <string name="restore_subtitle">.ldfa ファイルから新しい環境として復元します。既存の環境は上書きされません。</string>
+    <string name="restore_pick_file">.ldfa ファイルを選択</string>
+    <string name="restore_no_file">ファイルが選択されていません</string>
+    <string name="restore_header_from">作成元</string>
+    <string name="restore_header_app">アプリ版</string>
+    <string name="restore_header_arch">アーキテクチャ</string>
+    <string name="restore_header_created">作成日時</string>
+    <string name="restore_arch_mismatch">この端末（%1$s）には復元できないアーキテクチャ（%2$s）です。</string>
+    <string name="restore_start">この内容で復元</string>
+    <string name="restore_running">復元中…</string>
+    <string name="restore_done_title">復元が完了しました</string>
+    <string name="restore_failed_title">復元に失敗しました</string>
+    <string name="restore_cancelled">復元をキャンセルしました</string>
+    <string name="restore_invalid_file">このファイルは LDFA のバックアップではありません。</string>
 </resources>

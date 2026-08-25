@@ -2831,6 +2831,46 @@ cmd_set_keymap() {
     say "keyboard_layout=$layout"
 }
 
+# Post-restore cleanup (docs §7.4). Called by the app after a backup has been
+# extracted into a fresh container, BEFORE its first boot. Kotlin writes the
+# rootfs + metadata directly; this only scrubs runtime residue that would make
+# the restored environment misbehave on a different device, and clears the meta
+# that must be re-derived (audio + provisioning fingerprint) so the existing
+# ensure-apps path re-verifies on first start rather than trusting stale values.
+cmd_restore_cleanup() {
+    local id="${1:-}"
+    validate_id "$id"
+    [[ -d "$(meta_dir "$id")" ]] || die "環境が見つかりません。"
+    container_exists "$id" || die "復元されたDebian環境が見つかりません。"
+
+    unset PROOT_NO_SECCOMP
+    proot-distro login "$id" -- /bin/bash -c '
+        set +e
+        rm -rf /tmp/* /run/* /var/run/* 2>/dev/null
+        rm -f /tmp/.X*-lock 2>/dev/null
+        rm -rf /tmp/.X11-unix/* 2>/dev/null
+        rm -f /home/desktop/.Xauthority /root/.Xauthority 2>/dev/null
+        # Chrome refuses to start if these encode a foreign host/pid.
+        rm -f /home/desktop/.config/google-chrome/Singleton* 2>/dev/null
+        # A restored XFCE session snapshot points at dead windows; drop it.
+        rm -f /home/desktop/.cache/sessions/* 2>/dev/null
+        # Never carry a machine-id across devices.
+        rm -f /etc/machine-id /var/lib/dbus/machine-id 2>/dev/null
+        dbus-uuidgen --ensure=/etc/machine-id 2>/dev/null
+        mkdir -p /var/lib/dbus 2>/dev/null
+        [ -f /etc/machine-id ] && cp -f /etc/machine-id /var/lib/dbus/machine-id 2>/dev/null
+        true
+    ' >> "$(log_file "$id")" 2>&1 || \
+        printf '[%s] 復元後クリーンアップの一部が失敗しました（起動は継続します）\n' \
+            "$(date -Iseconds)" >&2
+
+    # Force re-verification of audio + provisioning on first boot.
+    write_meta "$id" audio_ready ""
+    write_meta "$id" apps_provisioned ""
+    write_meta "$id" state ready
+    say "restore_cleanup=done"
+}
+
 cmd_probe() {
     local id="${1:-}" display attempt
     validate_id "$id"
@@ -2940,7 +2980,7 @@ cmd_repair() {
 usage() {
     cat <<USAGE
 Usage: ldfa-host <command> [arguments]
-Commands: doctor bootstrap list create ensure-apps start resume health stop delete probe set-scale set-keymap audio-probe timezone logs heartbeat repair
+Commands: doctor bootstrap list create ensure-apps start resume health stop delete probe set-scale set-keymap audio-probe timezone restore-cleanup logs heartbeat repair
 USAGE
 }
 
@@ -2949,7 +2989,7 @@ main() {
     [[ -n "$command" ]] || { usage; exit 2; }
     shift || true
     case "$command" in
-        bootstrap|create|ensure-apps|start|resume|health|stop|delete|audio-probe|heartbeat|repair)
+        bootstrap|create|ensure-apps|start|resume|health|stop|delete|audio-probe|heartbeat|repair|restore-cleanup)
             acquire_controller_lock
             locked=1
             trap release_controller_lock EXIT INT TERM
@@ -2973,6 +3013,7 @@ main() {
         set-keymap) cmd_set_keymap "$@" ;;
         audio-probe) cmd_audio_probe "$@" ;;
         timezone) cmd_timezone "$@" ;;
+        restore-cleanup) cmd_restore_cleanup "$@" ;;
         logs) cmd_logs "$@" ;;
         heartbeat) cmd_heartbeat "$@" ;;
         repair) cmd_repair "$@" ;;

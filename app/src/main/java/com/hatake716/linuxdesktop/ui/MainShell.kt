@@ -111,6 +111,7 @@ internal fun MainShell(
                 onOpenTerminal = onOpenTerminal,
                 onOpenDisplay = onOpenDisplay,
                 onRepair = onRepair,
+                onRestored = onRefresh,
             )
 
             ShellTab.SETTINGS -> SettingsScreen(

@@ -303,6 +303,14 @@ required=(
   'LDFA_KEYBOARD_LAYOUT="${LDFA_KEYBOARD_LAYOUT:-jis}"'
   'setxkbmap -model "$_ldfa_xkb_model" -layout "$_ldfa_xkb_layout"'
   'xkb-data \'
+  'cmd_restore_cleanup() {'
+  'restore-cleanup) cmd_restore_cleanup "$@" ;;'
+  'container_exists "$id" || die "復元されたDebian環境が見つかりません。"'
+  'rm -f /home/desktop/.config/google-chrome/Singleton* 2>/dev/null'
+  'rm -f /etc/machine-id /var/lib/dbus/machine-id 2>/dev/null'
+  'dbus-uuidgen --ensure=/etc/machine-id 2>/dev/null'
+  'write_meta "$id" apps_provisioned ""'
+  'say "restore_cleanup=done"'
 )
 for pattern in "${required[@]}"; do
   grep -Fq -- "$pattern" "$script"
