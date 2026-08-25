@@ -112,10 +112,8 @@ class BackupService : Service() {
             } catch (e: BackupEngine.BackupError) {
                 _state.value = BackupUiState.Failed(BackupUiState.Op.BACKUP, e.message ?: "失敗しました")
             } catch (t: Throwable) {
-                _state.value = BackupUiState.Failed(
-                    BackupUiState.Op.BACKUP,
-                    t.message ?: t::class.simpleName ?: "予期しないエラー",
-                )
+                android.util.Log.e(TAG, "backup failed", t)
+                _state.value = BackupUiState.Failed(BackupUiState.Op.BACKUP, describeFailure(t))
             } finally {
                 finish()
             }
@@ -170,14 +168,29 @@ class BackupService : Service() {
             } catch (e: BackupEngine.BackupError) {
                 _state.value = BackupUiState.Failed(BackupUiState.Op.RESTORE, e.message ?: "失敗しました")
             } catch (t: Throwable) {
-                _state.value = BackupUiState.Failed(
-                    BackupUiState.Op.RESTORE,
-                    t.message ?: t::class.simpleName ?: "予期しないエラー",
-                )
+                android.util.Log.e(TAG, "restore failed", t)
+                _state.value = BackupUiState.Failed(BackupUiState.Op.RESTORE, describeFailure(t))
             } finally {
+                // The picker copies the .ldfa into our cache; it is no longer
+                // needed once the restore ends (either way) and can be huge.
+                val input = File(inputPath)
+                if (input.absolutePath.startsWith(cacheDir.absolutePath)) input.delete()
                 finish()
             }
         }
+    }
+
+    /**
+     * A diagnosable failure message: exception class + message, plus the root
+     * cause when it differs. "restore failed" alone is undebuggable from a
+     * user report; this is what the error card shows.
+     */
+    private fun describeFailure(t: Throwable): String {
+        val root = generateSequence(t) { it.cause }.last()
+        val head = "${t::class.simpleName}: ${t.message ?: ""}".trim().trimEnd(':')
+        return if (root !== t) {
+            "$head\n(${root::class.simpleName}: ${root.message ?: ""})".trim()
+        } else head
     }
 
     private fun onRestorePhase(phase: BackupEngine.Phase) {
@@ -281,6 +294,7 @@ class BackupService : Service() {
     }
 
     companion object {
+        private const val TAG = "LdfaBackup"
         private const val CHANNEL_ID = "linux_desktop_backup"
         private const val NOTIFICATION_ID = 717
         private const val ACTION_BACKUP = "com.hatake716.linuxdesktop.BACKUP_CREATE"
