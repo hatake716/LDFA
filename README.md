@@ -1,7 +1,7 @@
 # LDFA — Linux Desktop for Android
 
 [![LDFA Android CI](https://github.com/hatake716/LDFA/actions/workflows/android.yml/badge.svg?branch=main)](https://github.com/hatake716/LDFA/actions/workflows/android.yml)
-[![Release](https://img.shields.io/github/v/release/hatake716/LDFA?label=release)](https://github.com/hatake716/LDFA/releases/tag/v1.0.1)
+[![Release](https://img.shields.io/github/v/release/hatake716/LDFA?label=release)](https://github.com/hatake716/LDFA/releases/tag/v1.0.2)
 [![Website](https://img.shields.io/badge/Website-hatake716.github.io%2FLDFA-blue)](https://hatake716.github.io/LDFA/)
 [![License: GPL-3.0-only](https://img.shields.io/badge/License-GPL--3.0--only-blue.svg)](LICENSE)
 
@@ -53,9 +53,9 @@ Androidの管理画面から環境をワンタップで起動し、そのまま�
   <sub>横向き表示 — 同じセッションのまま画面の向きに追従</sub>
 </p>
 
-### ⬇️ 入手（v1.0.1 正式版）
+### ⬇️ 入手（v1.0.2 正式版）
 
-**[▶ Releases から `LDFA-v1.0.1-debug.apk` をダウンロード](https://github.com/hatake716/LDFA/releases/tag/v1.0.1)**
+**[▶ Releases から `LDFA-v1.0.2-debug.apk` をダウンロード](https://github.com/hatake716/LDFA/releases/tag/v1.0.2)**
 
 1. 上のリンクから APK をダウンロードします（提供元不明アプリの許可が必要な場合があります）。
 2. アプリを開き、案内に沿って内蔵ランタイム・ストレージ権限・Debian 環境の初回セットアップを完了します（初回は数分）。
@@ -67,8 +67,8 @@ Androidの管理画面から環境をワンタップで起動し、そのまま�
 
 | 項目 | 状態 |
 | --- | --- |
-| バージョン | `1.0.1` / versionCode `18` |
-| リリース段階 | **正式版公開済み**。[Releases v1.0.1](https://github.com/hatake716/LDFA/releases/tag/v1.0.1) からAPKを入手できます |
+| バージョン | `1.0.2` / versionCode `19` |
+| リリース段階 | **正式版公開済み**。[Releases v1.0.2](https://github.com/hatake716/LDFA/releases/tag/v1.0.2) からAPKを入手できます |
 | Linux環境 | Debian 12（Bookworm）+ XFCE |
 | 通常表示 | 内蔵native X11、`DISPLAY=:1` |
 | 最終フォールバック | TigerVNC + noVNC、`DISPLAY=:2` |
@@ -172,7 +172,7 @@ Webコンテンツ用rendererの上限は、Googleログインとの互換性を
 
 ### 1. GitHub Releases から入手（推奨）
 
-**[Releases v1.0.1](https://github.com/hatake716/LDFA/releases/tag/v1.0.1)** から `LDFA-v1.0.1-debug.apk` をダウンロードします。音声出力・表示倍率・起動高速化を含む、CIで検証済みのビルドです。配布 APK はデバッグ署名ですが、署名鍵をリポジトリに固定しているため、旧バージョンからの上書き更新が可能です。
+**[Releases v1.0.2](https://github.com/hatake716/LDFA/releases/tag/v1.0.2)** から `LDFA-v1.0.2-debug.apk` をダウンロードします。音声出力・表示倍率・起動高速化を含む、CIで検証済みのビルドです。配布 APK はデバッグ署名ですが、署名鍵をリポジトリに固定しているため、旧バージョンからの上書き更新が可能です。
 
 ### 2. GitHub Actions の artifact から入手
 
@@ -181,13 +181,13 @@ Webコンテンツ用rendererの上限は、Googleログインとの互換性を
 ### 3. ローカルにAPKがある場合のインストール例
 
 ```bash
-adb install -r LDFA-v1.0.1-debug.apk
+adb install -r LDFA-v1.0.2-debug.apk
 ```
 
 端末やADBの設定によってtest APKとしての許可を求められる場合は、`-t`を追加します。
 
 ```bash
-adb install -r -t LDFA-v1.0.1-debug.apk
+adb install -r -t LDFA-v1.0.2-debug.apk
 ```
 
 ## 初回セットアップ
@@ -447,7 +447,7 @@ adb logcat -s LorieNative gles-renderer MainActivity
 
 ## 現在の検証状況
 
-v1.0.1（versionCode 18）に対する結果です。
+v1.0.2（versionCode 18）に対する結果です。
 
 | 検証項目 | 結果 |
 | --- | --- |

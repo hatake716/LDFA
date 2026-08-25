@@ -8,8 +8,8 @@ Debian環境1つにつき3〜5GB以上の空き容量と、初回セットアッ
 
 ## 2. APKを用意
 
-正式版は [Releases v1.0.1](https://github.com/hatake716/LDFA/releases/tag/v1.0.1) の
-`LDFA-v1.0.1-debug.apk` を使用します。音声出力・表示倍率・起動高速化を含み、CIで検証済みです。
+正式版は [Releases v1.0.2](https://github.com/hatake716/LDFA/releases/tag/v1.0.2) の
+`LDFA-v1.0.2-debug.apk` を使用します。音声出力・表示倍率・起動高速化を含み、CIで検証済みです。
 配布APKはデバッグ署名ですが、署名鍵をリポジトリに固定しているため、旧バージョンへの上書き更新が可能です。
 
 ソースから作る場合は、音声修正を含むworking treeのrootで実行します。修正commitが
