@@ -68,7 +68,7 @@ CIはさらに次を検証します。
 - Gradle 8.13 wrapper JARとdistributionのSHA-256
 - `arm64-v8a`、`armeabi-v7a`、`x86`、`x86_64`の`libXlorie.so`
 - Manifestの非公開`:x11` Foreground Service
-- `com.termux` application ID、versionCode 17、versionName 1.0.0、LDFA label
+- `com.termux` application ID、versionCode 18、versionName 1.0.1、LDFA label
 - `ToolsScreen`、X11/VNC assets
 - APK内`ldfa-host.sh`とsourceのbyte一致、同じ音声static gateの再実行
 - 再生専用buildに不要な`RECORD_AUDIO`／microphone foreground permissionがないこと
@@ -218,7 +218,7 @@ Bluetooth／イヤホンで人が音を確認します。
 
 ## Chrome／Gboard回帰試験
 
-v1.0.0は、API 35 x86_64・4 GB RAM AVDの既存Debian環境へ更新インストールして次を確認しています。
+v1.0.1は、API 35 x86_64・4 GB RAM AVDの既存Debian環境へ更新インストールして次を確認しています。
 
 - Chrome launcher v8とXFCE session runtime v17への自動移行
 - Googleログイン画面のメール入力欄でGboardを表示
