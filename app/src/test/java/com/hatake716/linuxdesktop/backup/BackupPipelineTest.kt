@@ -146,14 +146,65 @@ class BackupPipelineTest {
     @Test
     fun `large file content survives round-trip byte-for-byte`() {
         val src = tmp.newFolder("rootfs3")
-        File(src, "data").mkdirs()
+        // NB: not "/data" — that is an excluded Android mount point. Use a real
+        // Debian path so the payload is actually backed up.
+        File(src, "var/lib/app").mkdirs()
         val payload = ByteArray(2_500_000) { (it * 31 + 7).toByte() }
-        File(src, "data/blob.bin").writeBytes(payload)
+        File(src, "var/lib/app/blob.bin").writeBytes(payload)
 
         val ldfa = writeLdfa(src, null)
         val outRootfs = tmp.newFolder("out-rootfs3")
         extract(ldfa, outRootfs, tmp.newFolder("out-meta3"))
 
-        assertArrayEquals(payload, File(outRootfs, "data/blob.bin").readBytes())
+        assertArrayEquals(payload, File(outRootfs, "var/lib/app/blob.bin").readBytes())
+    }
+
+    @Test
+    fun `filenames containing dot-dot round-trip and are not treated as traversal`() {
+        val src = tmp.newFolder("rootfs5")
+        File(src, "var/lib/foo").mkdirs()
+        // ".." embedded in a name is legitimate (Debian packages/caches have these)
+        // and must survive; earlier a bare contains("..") aborted the whole restore.
+        File(src, "var/lib/foo/pkg..old").writeText("keep-me")
+        File(src, "var/lib/foo/a..b..c").writeText("also-keep")
+
+        val ldfa = writeLdfa(src, null)
+        val outRootfs = tmp.newFolder("out-rootfs5")
+        extract(ldfa, outRootfs, tmp.newFolder("out-meta5"))
+
+        assertEquals("keep-me", File(outRootfs, "var/lib/foo/pkg..old").readText())
+        assertEquals("also-keep", File(outRootfs, "var/lib/foo/a..b..c").readText())
+    }
+
+    @Test
+    fun `existing-env Android dirs are excluded and an unreadable dir does not abort`() {
+        val src = tmp.newFolder("rootfs4")
+        File(src, "etc").mkdirs()
+        File(src, "etc/hostname").writeText("debian")
+        // Android host mount-point dirs an existing environment carries.
+        File(src, "apex/com.android.art").mkdirs()
+        File(src, "apex/com.android.art/marker").writeText("android")
+        File(src, "system/bin").mkdirs()
+        File(src, "system/bin/linker").writeText("android")
+        File(src, "linkerconfig").mkdirs()
+        File(src, "linkerconfig/ld.config.txt").writeText("cfg")
+        // An unreadable directory OUTSIDE the exclusion list must not abort the walk.
+        val locked = File(src, "opt/locked")
+        locked.mkdirs()
+        File(locked, "secret").writeText("x")
+        val madeUnreadable = locked.setReadable(false, false)
+
+        val ldfa = writeLdfa(src, null)
+        val outRootfs = tmp.newFolder("out-rootfs4")
+        extract(ldfa, outRootfs, tmp.newFolder("out-meta4"))
+
+        // Debian content survives; Android mount points are gone.
+        assertTrue(File(outRootfs, "etc/hostname").exists())
+        assertFalse(File(outRootfs, "apex/com.android.art/marker").exists())
+        assertFalse(File(outRootfs, "system/bin/linker").exists())
+        assertFalse(File(outRootfs, "linkerconfig/ld.config.txt").exists())
+        // The key guarantee is simply that writeLdfa+extract completed without
+        // throwing despite the unreadable dir. Restore read permission for cleanup.
+        if (madeUnreadable) locked.setReadable(true, false)
     }
 }

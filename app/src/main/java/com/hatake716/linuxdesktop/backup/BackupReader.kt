@@ -114,7 +114,12 @@ class BackupReader {
      */
     private fun resolveDest(path: String, rootfsCanon: File, metaCanon: File): File? {
         val clean = path.replace('\\', '/')
-        if (clean.contains("..") || clean.startsWith("/")) {
+        // Reject path traversal: an absolute path, or a ".." that is a whole path
+        // SEGMENT (../x, x/../y, x/..). A ".." merely embedded in a name — e.g.
+        // "foo..bar", common in Debian package/cache files — is legitimate and must
+        // NOT be rejected; doing so aborted the restore partway through. `under()`
+        // re-checks the canonical path stays inside the base as a second guard.
+        if (clean.startsWith("/") || clean.split('/').any { it == ".." }) {
             throw BackupFormatException("バックアップファイルが壊れています。")
         }
         return when {

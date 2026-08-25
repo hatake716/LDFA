@@ -216,6 +216,16 @@ class BackupWriter(
                 }
                 return FileVisitResult.CONTINUE
             }
+
+            // SimpleFileVisitor.postVisitDirectory rethrows a non-null exc — which is
+            // exactly what happens for a directory the app uid can list-open but not
+            // read into (e.g. proot's Android /apex, /system mount points, or a
+            // mode-0000 subdir). That would abort the whole backup. Swallow it: the
+            // directory entry itself was already emitted, and its unreadable contents
+            // are not Debian data worth failing over.
+            override fun postVisitDirectory(dir: Path, exc: java.io.IOException?): FileVisitResult {
+                return FileVisitResult.CONTINUE
+            }
         })
     }
 

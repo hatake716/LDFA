@@ -124,6 +124,18 @@ class BackupFormatTest {
         assertTrue(ex.isExcluded("/tmp/x"))
         assertTrue(ex.isExcluded("/var/cache/apt/archives/foo.deb"))
         assertTrue(ex.isExcluded("/home/desktop/.cache/anything"))
+        // Android host mount-point dirs proot creates in the rootfs (existing
+        // environments have the full set; these are unreadable and not Debian data).
+        assertTrue(ex.isExcluded("/apex"))
+        assertTrue(ex.isExcluded("/apex/com.android.art/lib64"))
+        assertTrue(ex.isExcluded("/system/bin/linker"))
+        assertTrue(ex.isExcluded("/vendor/lib"))
+        assertTrue(ex.isExcluded("/linkerconfig/ld.config.txt"))
+        assertTrue(ex.isExcluded("/data/local/tmp"))
+        assertTrue(ex.isExcluded("/sdcard/DCIM"))
+        // But a Debian dir that merely shares a prefix must NOT be excluded.
+        assertFalse(ex.isExcluded("/systemd-thing"))
+        assertFalse(ex.isExcluded("/var/lib/dpkg/status"))
         // Chrome cache under a profile, but keep other profile files.
         assertTrue(ex.isExcluded("/home/desktop/.config/google-chrome/Default/Cache/x"))
         assertTrue(ex.isExcluded("/home/desktop/.config/google-chrome/Default/Service Worker/CacheStorage/y"))

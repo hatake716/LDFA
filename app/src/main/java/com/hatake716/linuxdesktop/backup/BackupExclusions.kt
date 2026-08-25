@@ -71,6 +71,16 @@ class BackupExclusions(
             "/proc", "/sys", "/dev",
             "/tmp", "/run", "/var/run",
             "/mnt/android",
+            // Android host directories proot-distro creates INSIDE the Debian rootfs
+            // as bind-mount points. They are not part of Debian, and several are
+            // root-owned / mode-0000 and unreadable by the app uid — walking into
+            // them would abort the backup (postVisitDirectory rethrows the access
+            // IOException). Older environments have the full set; fresh ones only a
+            // few. Dropping them is both correct and what makes an existing-env
+            // backup restore the same as a fresh-env one.
+            "/apex", "/system", "/system_ext", "/vendor", "/product", "/odm",
+            "/linkerconfig", "/data", "/sdcard", "/storage",
+            "/system_dlkm", "/vendor_dlkm", "/odm_dlkm",
             "/var/cache/apt/archives",
             "/var/lib/apt/lists",
             "/home/desktop/.npm/_cacache",
