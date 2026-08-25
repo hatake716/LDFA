@@ -97,8 +97,9 @@ class BackupService : Service() {
                         humanSize(out.sizeBytes),
                     ),
                     detail = buildString {
-                        append("SHA-256: ").append(out.sha256Prefix).append('\n')
-                        append(getString(R.string.backup_path_label)).append(": ").append(out.file.absolutePath)
+                        append(getString(R.string.backup_done_location)).append("\n\n")
+                        append(getString(R.string.backup_dest_fullpath, out.file.absolutePath)).append('\n')
+                        append("SHA-256: ").append(out.sha256Prefix)
                         if (out.skippedSpecial > 0 || out.unreadableCount > 0) {
                             append('\n').append(
                                 getString(R.string.backup_skipped_note, out.skippedSpecial, out.unreadableCount),

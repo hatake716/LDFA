@@ -14,6 +14,7 @@
     <string name="backup_notif_creating">バックアップを作成中…</string>
     <string name="backup_notif_done">%1$s を作成しました（%2$s）</string>
     <string name="backup_path_label">保存先</string>
+    <string name="backup_done_location">保存先: スマホ本体（内部ストレージ）▸ LinuxDesktop ▸ backups\n「ファイル」アプリから取り出せます。</string>
     <string name="backup_skipped_note">特殊ファイル %1$d 件をスキップ、%2$d 件は読み取れませんでした</string>
     <string name="restore_notif_running">バックアップから復元中…</string>
     <string name="restore_notif_done">「%1$s」を復元しました</string>
@@ -26,8 +27,10 @@
     <string name="backup_subtitle">停止中の環境を 1 つの .ldfa ファイルに保存します。</string>
     <string name="backup_pick_env">バックアップする環境</string>
     <string name="backup_no_stopped_env">停止中の環境がありません。実行中の環境は先に停止してください。</string>
-    <string name="backup_dest">保存先</string>
-    <string name="backup_dest_default">内部ストレージ / LinuxDesktop / backups</string>
+    <string name="backup_dest">保存先フォルダ</string>
+    <string name="backup_dest_default">スマホ本体（内部ストレージ）▸ LinuxDesktop ▸ backups</string>
+    <string name="backup_dest_hint">「ファイル」アプリの内部ストレージにある LinuxDesktop フォルダから取り出せます。</string>
+    <string name="backup_dest_fullpath">フルパス: %1$s</string>
     <string name="backup_start">バックアップを開始</string>
     <string name="backup_running">バックアップ中…</string>
     <string name="backup_running_files">%1$d / %2$d 項目</string>
