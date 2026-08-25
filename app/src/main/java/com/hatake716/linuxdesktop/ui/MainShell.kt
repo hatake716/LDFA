@@ -21,6 +21,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import com.hatake716.linuxdesktop.data.ContainerInfo
+import com.hatake716.linuxdesktop.data.KeyboardLayout
 
 private enum class ShellTab { DESKTOPS, TOOLS, SETTINGS }
 
@@ -41,6 +42,7 @@ internal fun MainShell(
     onAppSettings: () -> Unit,
     onSelectDesktopScale: (Int) -> Unit,
     onToggleExtraKeys: (Boolean) -> Unit,
+    onSelectKeyboardLayout: (KeyboardLayout) -> Unit,
 ) {
     var selectedTab by rememberSaveable {
         mutableStateOf(
@@ -120,6 +122,7 @@ internal fun MainShell(
                 onRepair = onRepair,
                 onSelectDesktopScale = onSelectDesktopScale,
                 onToggleExtraKeys = onToggleExtraKeys,
+                onSelectKeyboardLayout = onSelectKeyboardLayout,
             )
         }
     }

@@ -27,6 +27,7 @@ import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.Gavel
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Keyboard
+import androidx.compose.material.icons.rounded.KeyboardAlt
 import androidx.compose.material.icons.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Schedule
@@ -51,6 +52,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.hatake716.linuxdesktop.BuildConfig
+import com.hatake716.linuxdesktop.data.KeyboardLayout
 import com.hatake716.linuxdesktop.ui.theme.SuccessGreen
 
 @Composable
@@ -63,6 +65,7 @@ internal fun SettingsScreen(
     onRepair: () -> Unit,
     onSelectDesktopScale: (Int) -> Unit,
     onToggleExtraKeys: (Boolean) -> Unit,
+    onSelectKeyboardLayout: (KeyboardLayout) -> Unit,
 ) {
     LazyColumn(
         modifier = modifier
@@ -123,7 +126,7 @@ internal fun SettingsScreen(
         }
 
         item {
-            SettingsSection(title = "表示") {
+            SettingsSection(title = "表示と入力") {
                 DesktopScaleRow(
                     current = state.setup.desktopScalePercent,
                     enabled = state.setup.hostReady && !state.operationInProgress,
@@ -133,6 +136,12 @@ internal fun SettingsScreen(
                 ExtraKeysToggleRow(
                     checked = state.setup.extraKeysVisible,
                     onToggle = onToggleExtraKeys,
+                )
+                HorizontalDivider(Modifier.padding(start = 58.dp))
+                KeyboardLayoutRow(
+                    current = state.setup.keyboardLayout,
+                    enabled = state.setup.hostReady && !state.operationInProgress,
+                    onSelect = onSelectKeyboardLayout,
                 )
             }
         }
@@ -432,5 +441,69 @@ private fun ExtraKeysToggleRow(
         }
         Spacer(Modifier.size(12.dp))
         Switch(checked = checked, onCheckedChange = onToggle)
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun KeyboardLayoutRow(
+    current: KeyboardLayout,
+    enabled: Boolean,
+    onSelect: (KeyboardLayout) -> Unit,
+) {
+    Column(Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            SettingsIcon(Icons.Rounded.KeyboardAlt)
+            Spacer(Modifier.size(14.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    "キーボード配列",
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.Medium,
+                )
+                Text(
+                    "接続した物理キーボードの配列に合わせます",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        Spacer(Modifier.size(12.dp))
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            KeyboardLayout.entries.forEach { layout ->
+                val label = when (layout) {
+                    KeyboardLayout.JIS -> "JIS（日本語）"
+                    KeyboardLayout.US -> "US（英語）"
+                }
+                FilterChip(
+                    selected = layout == current,
+                    onClick = { if (enabled) onSelect(layout) },
+                    enabled = enabled,
+                    label = { Text(label) },
+                    leadingIcon = if (layout == current) {
+                        {
+                            Icon(
+                                Icons.Rounded.CheckCircle,
+                                contentDescription = null,
+                                modifier = Modifier.size(FilterChipDefaults.IconSize),
+                            )
+                        }
+                    } else {
+                        null
+                    },
+                )
+            }
+        }
+        Spacer(Modifier.size(8.dp))
+        // The @ position is the easiest tell for "which layout is my keyboard".
+        val detail = when (current) {
+            KeyboardLayout.JIS -> "半角/全角キーあり。@ は 2 の右上のキー"
+            KeyboardLayout.US -> "半角/全角キーなし。@ は Shift + 2。日本語入力の切り替えは Ctrl + Space"
+        }
+        Text(
+            detail,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }

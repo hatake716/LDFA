@@ -89,7 +89,7 @@ HOME="$fresh_panel_home" XDG_STATE_HOME="$fresh_panel_state" bash "$panel_block"
 cmp "$test_sandbox/fresh-panel-expected.xml" \
   "$fresh_panel_config.ldfa-before-mobile-optimization"
 required=(
-  'VERSION="1.0.1"'
+  'VERSION="1.0.2"'
   'LINUX_IMAGE="debian:12"'
   'install_help="$(proot-distro install --help 2>&1 || true)"'
   '[[ "$install_help" == *"--name"* ]]'
@@ -131,7 +131,7 @@ required=(
   'test -x /usr/bin/curl'
   'ca-certificates wget xz-utils curl'
   'CHROME_LAUNCHER_MARKER="# LDFA_CHROME_LAUNCHER_VERSION=8"'
-  'DESKTOP_RUNTIME_MARKER="# LDFA_SESSION_RUNTIME_VERSION=27"'
+  'DESKTOP_RUNTIME_MARKER="# LDFA_SESSION_RUNTIME_VERSION=28"'
   'AUDIO_CLIENT_MARKER="# LDFA_AUDIO_CLIENT_VERSION=3"'
   'NODEJS_MARKER="# LDFA_NODEJS_VERSION=5"'
   'PULSE_BRIDGE_MARKER="# LDFA_PULSE_BRIDGE_VERSION=1"'
@@ -147,7 +147,7 @@ required=(
   'grep -Fqx "$1" /usr/local/bin/google-chrome-ldfa'
   '/usr/local/bin/google-chrome-ldfa'
   '# LDFA_CHROME_LAUNCHER_VERSION=8'
-  '# LDFA_SESSION_RUNTIME_VERSION=27'
+  '# LDFA_SESSION_RUNTIME_VERSION=28'
   '# LDFA_AUDIO_CLIENT_VERSION=3'
   '# LDFA_PULSE_BRIDGE_VERSION=1'
   'export ELECTRON_DISABLE_SANDBOX=1'
@@ -298,6 +298,11 @@ required=(
   'ln -sfn "/usr/share/zoneinfo/$LDFA_TZ" /etc/localtime'
   'LDFA_TZ="$(host_timezone)"'
   'tzdata \'
+  'set-keymap) cmd_set_keymap "$@" ;;'
+  'cmd_set_keymap() {'
+  'LDFA_KEYBOARD_LAYOUT="${LDFA_KEYBOARD_LAYOUT:-jis}"'
+  'setxkbmap -model "$_ldfa_xkb_model" -layout "$_ldfa_xkb_layout"'
+  'xkb-data \'
 )
 for pattern in "${required[@]}"; do
   grep -Fq -- "$pattern" "$script"
@@ -314,6 +319,11 @@ done
 ! grep -Eq 'apt(-get)?[^\n]*install[^\n]*chromium' "$script"
 
 ! grep -q -- '--single-process' "$script"
+
+# The old JIS hardcode set only the layout; that leaves symbols shifted. The new
+# path always pairs -model with -layout, so a bare "setxkbmap -layout jp" must
+# not survive anywhere.
+! grep -Fq 'setxkbmap -layout jp' "$script"
 
 # Copying the tzfile breaks ICU zone-ID recovery; /etc/localtime must be a symlink.
 ! grep -Eq 'cp[^\n]*zoneinfo[^\n]*/etc/localtime' "$script"

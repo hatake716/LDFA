@@ -604,6 +604,28 @@ class LinuxDesktopRepository(private val context: Context) {
         Unit
     }
 
+    fun keyboardLayout(): KeyboardLayout =
+        KeyboardLayout.fromId(preferences.getString(KEY_KEYBOARD_LAYOUT, null))
+
+    // Persist the chosen physical keyboard layout and, when a container is active,
+    // tell the host to store it per-environment and apply live if a desktop is
+    // running. The layout is decided by the guest's XKB (Xorg :1), not by the X
+    // server's own prefs — so unlike the display scale there is no Lorie pref to
+    // set here; the host script drives setxkbmap / xfconf / Fcitx. The stored
+    // value is reapplied on every desktop start, so the runtime call is
+    // best-effort (a not-yet-updated host script simply ignores it).
+    suspend fun setKeyboardLayout(layout: KeyboardLayout): Unit = withContext(Dispatchers.IO) {
+        preferences.edit().putString(KEY_KEYBOARD_LAYOUT, layout.id).apply()
+        val id = activeContainerId() ?: return@withContext
+        runCatching {
+            commandClient.runInstalledHost(
+                action = "set-keymap",
+                arguments = listOf(id, layout.id),
+            )
+        }
+        Unit
+    }
+
     fun activeDisplayBackend(): DesktopDisplayBackend? {
         activeContainerId() ?: return null
         return DesktopDisplayBackend.fromPreference(preferences.getString(KEY_ACTIVE_BACKEND, null))
@@ -1289,6 +1311,7 @@ class LinuxDesktopRepository(private val context: Context) {
         private const val KEY_DESKTOP_SCALE = "desktop_scale_percent"
         private const val DEFAULT_DESKTOP_SCALE = 100
         val DESKTOP_SCALE_PRESETS = listOf(100, 125, 150, 175, 200, 225, 250)
+        private const val KEY_KEYBOARD_LAYOUT = "keyboard_layout"
         private const val PRESERVE_CHROME_RESTORE = "1"
         private const val LIVE_LOG_LINE_COUNT = 40
 

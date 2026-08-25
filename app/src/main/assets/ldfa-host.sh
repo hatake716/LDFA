@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 set -Eeuo pipefail
 
-VERSION="1.0.1"
+VERSION="1.0.2"
 LINUX_IMAGE="debian:12"
 BASE="${XDG_DATA_HOME:-$HOME/.local/share}/linux-desktop-for-android"
 BIN_DIR="$BASE/bin"
@@ -16,7 +16,7 @@ SHARED_ROOT="$HOME/storage/shared/LinuxDesktop"
 SELF="$BIN_DIR/ldfa-host"
 BOOTSTRAP_LOG="$LOG_ROOT/bootstrap.log"
 CHROME_LAUNCHER_MARKER="# LDFA_CHROME_LAUNCHER_VERSION=8"
-DESKTOP_RUNTIME_MARKER="# LDFA_SESSION_RUNTIME_VERSION=27"
+DESKTOP_RUNTIME_MARKER="# LDFA_SESSION_RUNTIME_VERSION=28"
 AUDIO_CLIENT_MARKER="# LDFA_AUDIO_CLIENT_VERSION=3"
 PULSE_BRIDGE_MARKER="# LDFA_PULSE_BRIDGE_VERSION=1"
 # Modern Node.js runtime provisioned into the guest so Node-based CLIs (Claude
@@ -546,7 +546,7 @@ guest_audio_ready() {
 desktop_session_script() {
     cat <<'SESSION'
 #!/bin/bash
-# LDFA_SESSION_RUNTIME_VERSION=27
+# LDFA_SESSION_RUNTIME_VERSION=28
 # Hardened LDFA Session Script
 set -Eeuo pipefail
 
@@ -606,6 +606,14 @@ export ELECTRON_DISABLE_SANDBOX=1
 # applied just below, before xfsettingsd starts. Everything degrades to 100%.
 LDFA_SCALE="${LDFA_SCALE:-100}"
 case "$LDFA_SCALE" in 100|125|150|175|200|225|250) : ;; *) LDFA_SCALE=100 ;; esac
+# Physical keyboard layout, injected on the launch line from the stored
+# preference. It maps to the Xorg :1 XKB model/layout (and the Fcitx5 layout).
+# model MUST be set — layout alone leaves JIS symbols shifted. Unknown -> jis.
+LDFA_KEYBOARD_LAYOUT="${LDFA_KEYBOARD_LAYOUT:-jis}"
+case "$LDFA_KEYBOARD_LAYOUT" in
+    us) _ldfa_xkb_model=pc105; _ldfa_xkb_layout=us; _ldfa_fcitx_layout=us ;;
+    *)  LDFA_KEYBOARD_LAYOUT=jis; _ldfa_xkb_model=jp106; _ldfa_xkb_layout=jp; _ldfa_fcitx_layout=jp ;;
+esac
 _ldfa_factor="$(awk "BEGIN{printf \"%.2f\", $LDFA_SCALE/100}")"
 _ldfa_dpi=$(( LDFA_SCALE * 96 / 100 ))
 _ldfa_cursor=$(( LDFA_SCALE * 24 / 100 ))
@@ -738,7 +746,18 @@ if [[ -f "$PANEL_CONFIG" ]] && [[ ! -f "$PANEL_MOBILE_MARKER" ]]; then
     : > "$PANEL_MOBILE_MARKER"
 fi
 
-setxkbmap -layout jp >/dev/null 2>&1 || true
+# Physical keyboard layout. Set the XKB model AND layout (model alone omitted
+# leaves JIS symbols shifted). xfsettingsd reads its own keyboard-layout xfconf
+# channel and would otherwise overwrite setxkbmap a few seconds later, so pin the
+# same values there too (XkbDisable=false, XkbModel/XkbLayout/XkbVariant).
+setxkbmap -model "$_ldfa_xkb_model" -layout "$_ldfa_xkb_layout" >/dev/null 2>&1 || true
+timeout 3 xfconf-query -c keyboard-layout -p /Default/XkbDisable -n -t bool -s false 2>/dev/null || true
+timeout 3 xfconf-query -c keyboard-layout -p /Default/XkbModel -n -t string -s "$_ldfa_xkb_model" 2>/dev/null ||
+    timeout 3 xfconf-query -c keyboard-layout -p /Default/XkbModel -s "$_ldfa_xkb_model" 2>/dev/null || true
+timeout 3 xfconf-query -c keyboard-layout -p /Default/XkbLayout -n -t string -s "$_ldfa_xkb_layout" 2>/dev/null ||
+    timeout 3 xfconf-query -c keyboard-layout -p /Default/XkbLayout -s "$_ldfa_xkb_layout" 2>/dev/null || true
+timeout 3 xfconf-query -c keyboard-layout -p /Default/XkbVariant -n -t string -s "" 2>/dev/null ||
+    timeout 3 xfconf-query -c keyboard-layout -p /Default/XkbVariant -s "" 2>/dev/null || true
 # These three run before xfsettingsd/xfwm4 exist, so xfconfd D-Bus-autoactivates
 # and may create a fresh backing store — the exact stall the apply_desktop_scale
 # comment warns about, where `|| true` does NOT cap a hung command. Bound each
@@ -785,6 +804,18 @@ apply_desktop_scale() {
         ldfa_xfconf_set xsettings /Gdk/WindowScalingFactor 1
     fi
 }
+
+# Follow the keyboard layout in the Fcitx5 group profile too, so the non-Japanese
+# ("keyboard") input source matches the physical layout. Only the layout lines
+# are rewritten; the user's other Fcitx settings (trigger keys in ~/.config/
+# fcitx5/config, added input methods) are left untouched.
+_ldfa_fcitx_profile="$HOME/.config/fcitx5/profile"
+if [ -f "$_ldfa_fcitx_profile" ]; then
+    sed -i \
+        -e "s/^Default Layout=.*/Default Layout=$_ldfa_fcitx_layout/" \
+        -e "s/^Name=keyboard-.*/Name=keyboard-$_ldfa_fcitx_layout/" \
+        "$_ldfa_fcitx_profile" 2>/dev/null || true
+fi
 
 fcitx5 -d --replace >/dev/null 2>&1 || true
 
@@ -1208,7 +1239,7 @@ ensure_desktop_runtime() {
         # side effects); -p prepends so ~/.local/bin wins, matching bash.
         install -d -m 0755 /etc/fish/conf.d
         cat > /etc/fish/conf.d/00-ldfa.fish <<'"'"'LDFA_FISH'"'"'
-# LDFA_SESSION_RUNTIME_VERSION=27
+# LDFA_SESSION_RUNTIME_VERSION=28
 # Managed by LDFA. fish ignores ~/.profile and ~/.bashrc, so the PATH and env
 # LDFA sets for bash are re-applied here for fish users. conf.d is sourced in
 # every fish mode (login, interactive, script), so no status guard is needed.
@@ -2108,7 +2139,9 @@ worker_install() {
     # Forcing it off exposes guest syscalls to the app seccomp policy as ENOSYS.
     unset PROOT_NO_SECCOMP
     proot-distro login "$id" --bind "$shared:/mnt/android" -- \
-        /usr/bin/env LDFA_TZ="$(host_timezone)" /bin/bash -s <<'CONTAINER_SETUP'
+        /usr/bin/env LDFA_TZ="$(host_timezone)" \
+            LDFA_KEYBOARD_LAYOUT="$(read_meta "$id" keyboard_layout jis)" \
+            /bin/bash -s <<'CONTAINER_SETUP'
 set -Eeuo pipefail
 export DEBIAN_FRONTEND=noninteractive
 export LC_ALL=C.UTF-8
@@ -2134,6 +2167,7 @@ step "基本パッケージをインストールしています"
     xdg-user-dirs \
     x11-utils \
     x11-xserver-utils \
+    xkb-data \
     mesa-utils \
     libgl1-mesa-dri \
     pulseaudio-utils \
@@ -2220,6 +2254,15 @@ Layout=
 [GroupOrder]
 0=デフォルト
 FCITX_PROFILE
+
+# The profile above is written with the JIS default; follow the chosen layout so
+# a US-keyboard environment starts with the matching non-Japanese input source.
+case "${LDFA_KEYBOARD_LAYOUT:-jis}" in
+    us) sed -i -e 's/^Default Layout=.*/Default Layout=us/' \
+               -e 's/^Name=keyboard-.*/Name=keyboard-us/' \
+               /home/desktop/.config/fcitx5/profile ;;
+esac
+chown desktop:desktop /home/desktop/.config/fcitx5/profile
 
 cat > /home/desktop/.profile <<'PROFILE'
 export LANG=ja_JP.UTF-8
@@ -2649,6 +2692,7 @@ worker_run() {
                 XMODIFIERS=@im=fcitx PULSE_SERVER="$PULSE_GUEST_SERVER" \
                 ${session_env[@]+"${session_env[@]}"} \
                 LDFA_SCALE="$(read_meta "$id" scale 100)" \
+                LDFA_KEYBOARD_LAYOUT="$(read_meta "$id" keyboard_layout jis)" \
                 /usr/local/bin/ldfa-session
         rc=$?
         set -e
@@ -2741,6 +2785,50 @@ cmd_set_scale() {
             xfce4-panel --restart >/dev/null 2>&1 || true
         ' >/dev/null 2>&1 || true
     say "scale=$percent"
+}
+
+cmd_set_keymap() {
+    local id="${1:-}" layout="${2:-jis}" display model xkb fcitx
+    validate_id "$id"
+    case "$layout" in
+        jis) model=jp106; xkb=jp; fcitx=jp ;;
+        us)  model=pc105; xkb=us; fcitx=us ;;
+        *)   die "無効なキーボード配列です（jis / us のいずれか）: $layout" ;;
+    esac
+    write_meta "$id" keyboard_layout "$layout"
+
+    # If a desktop session is live, apply immediately so the layout changes
+    # without a restart. A stop/start reapplies everything from the stored meta.
+    if ! tmux_alive "$(run_session "$id")"; then
+        say "keyboard_layout=$layout"
+        return 0
+    fi
+    display="$(read_meta "$id" display "$DEFAULT_DISPLAY_NUMBER")"
+    unset PROOT_NO_SECCOMP
+    LDFA_KM_MODEL="$model" LDFA_KM_XKB="$xkb" LDFA_KM_FCITX="$fcitx" \
+    proot-distro login "$id" --user desktop -- /usr/bin/env \
+        DISPLAY=":$display" \
+        LDFA_KM_MODEL="$model" LDFA_KM_XKB="$xkb" LDFA_KM_FCITX="$fcitx" \
+        /bin/bash -c '
+            addr_file=/tmp/runtime-desktop/dbus_address
+            [[ -s "$addr_file" ]] && export DBUS_SESSION_BUS_ADDRESS="$(cat "$addr_file")"
+            xq() { timeout 3 xfconf-query -c keyboard-layout -p "$1" -n -t string -s "$2" 2>/dev/null ||
+                   timeout 3 xfconf-query -c keyboard-layout -p "$1" -s "$2" 2>/dev/null || true; }
+            # Pin xfconf so xfsettingsd does not overwrite setxkbmap moments later.
+            timeout 3 xfconf-query -c keyboard-layout -p /Default/XkbDisable -n -t bool -s false 2>/dev/null || true
+            xq /Default/XkbModel "$LDFA_KM_MODEL"
+            xq /Default/XkbLayout "$LDFA_KM_XKB"
+            xq /Default/XkbVariant ""
+            setxkbmap -model "$LDFA_KM_MODEL" -layout "$LDFA_KM_XKB" 2>/dev/null || true
+            profile="$HOME/.config/fcitx5/profile"
+            if [ -f "$profile" ]; then
+                sed -i -e "s/^Default Layout=.*/Default Layout=$LDFA_KM_FCITX/" \
+                       -e "s/^Name=keyboard-.*/Name=keyboard-$LDFA_KM_FCITX/" \
+                       "$profile" 2>/dev/null || true
+                fcitx5 -d --replace >/dev/null 2>&1 || true
+            fi
+        ' >/dev/null 2>&1 || true
+    say "keyboard_layout=$layout"
 }
 
 cmd_probe() {
@@ -2852,7 +2940,7 @@ cmd_repair() {
 usage() {
     cat <<USAGE
 Usage: ldfa-host <command> [arguments]
-Commands: doctor bootstrap list create ensure-apps start resume health stop delete probe set-scale audio-probe timezone logs heartbeat repair
+Commands: doctor bootstrap list create ensure-apps start resume health stop delete probe set-scale set-keymap audio-probe timezone logs heartbeat repair
 USAGE
 }
 
@@ -2882,6 +2970,7 @@ main() {
         delete) cmd_delete "$@" ;;
         probe) cmd_probe "$@" ;;
         set-scale) cmd_set_scale "$@" ;;
+        set-keymap) cmd_set_keymap "$@" ;;
         audio-probe) cmd_audio_probe "$@" ;;
         timezone) cmd_timezone "$@" ;;
         logs) cmd_logs "$@" ;;

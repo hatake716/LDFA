@@ -68,6 +68,7 @@ proot-distroのDebian 12（Bookworm）rootfsへ次を導入します。rootfsは
 - Google公式Chrome stable（amd64／arm64）とPRoot互換ランチャー
 - Node.js 22 LTS（公式静的ビルド、SHA-256検証付き）を`/opt/nodejs`へ導入し、`node`／`npm`／`npx`を`/usr/local/bin`へリンク
 - デスクトップ全体の表示倍率（100〜250%、25%刻み）を設定画面から変更。内蔵X11サーバー（Termux:X11/Xlorie）自身の表示スケール（`displayResolutionMode=scaled` + `displayScale`）で論理解像度を縮小してAndroid Surfaceへ引き伸ばすため、フォント・アイコン・パネル・Chrome等が一律に拡大される（`ACTION_PREFERENCES_CHANGED`で即時反映。ゲスト側の`Xft/DPI`・パネルサイズ適用はフォントの精細化を補完）
+- 物理キーボードの配列（JIS / US）を設定画面から選択。Xorg `:1` の XKB（`setxkbmap` のmodel+layout、XFCEの`keyboard-layout`チャンネル、Fcitx5のレイアウト）をまとめて切り替える。環境ごとに保存し、起動中は`set-keymap`で即時適用、停止中は次回起動時に`LDFA_KEYBOARD_LAYOUT`経由で反映。US選択時の日本語入力切り替えは`Ctrl+Space`。native X11（`:1`）が対象で、VNCフォールバック（`:2`）とAndroidソフトキーボードは影響を受けない
 
 一般ユーザー`desktop`にはパスワードなしsudoを設定します。`.profile`、`.xprofile`、`.xinputrc`へ日本語・Fcitx設定を保存し、`~/Desktop/Android共有`を`/mnt/android`へ接続します。
 

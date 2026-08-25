@@ -7,6 +7,7 @@ import com.hatake716.linuxdesktop.LinuxDesktopApplication
 import com.hatake716.linuxdesktop.data.ContainerInfo
 import com.hatake716.linuxdesktop.data.ContainerState
 import com.hatake716.linuxdesktop.data.DoctorReport
+import com.hatake716.linuxdesktop.data.KeyboardLayout
 import com.hatake716.linuxdesktop.data.LinuxDesktopRepository
 import com.hatake716.linuxdesktop.data.RuntimeStatus
 import com.hatake716.linuxdesktop.service.DesktopKeepAliveService
@@ -29,6 +30,7 @@ data class SetupSnapshot(
     val doctor: DoctorReport? = null,
     val desktopScalePercent: Int = 100,
     val extraKeysVisible: Boolean = true,
+    val keyboardLayout: KeyboardLayout = KeyboardLayout.DEFAULT,
 ) {
     val terminalReady: Boolean get() = runtime.terminalReady
     val x11Ready: Boolean get() = runtime.x11Embedded
@@ -117,6 +119,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         doctor = doctor,
                         desktopScalePercent = repository.desktopScalePercent(),
                         extraKeysVisible = repository.extraKeysVisible(),
+                        keyboardLayout = repository.keyboardLayout(),
                     ),
                     containers = containers,
                     liveInstallationLogs = liveLogs,
@@ -333,6 +336,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             _state.update { it.copy(setup = it.setup.copy(extraKeysVisible = visible)) }
             runCatching { repository.setExtraKeysVisible(visible) }.onFailure(::showError)
+        }
+    }
+
+    fun setKeyboardLayout(layout: KeyboardLayout) {
+        if (layout == _state.value.setup.keyboardLayout) return
+        viewModelScope.launch {
+            _state.update { it.copy(setup = it.setup.copy(keyboardLayout = layout)) }
+            runCatching { repository.setKeyboardLayout(layout) }.onFailure(::showError)
         }
     }
 

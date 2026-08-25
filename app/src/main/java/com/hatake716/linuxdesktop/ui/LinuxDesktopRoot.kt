@@ -62,6 +62,7 @@ fun LinuxDesktopRoot(
                 onAppSettings = viewModel::openThisAppSettings,
                 onSelectDesktopScale = viewModel::setDesktopScale,
                 onToggleExtraKeys = viewModel::setExtraKeysVisible,
+                onSelectKeyboardLayout = viewModel::setKeyboardLayout,
             )
         }
 
