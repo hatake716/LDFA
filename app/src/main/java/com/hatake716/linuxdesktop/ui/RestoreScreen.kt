@@ -25,6 +25,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
@@ -76,6 +77,7 @@ internal fun RestoreScreen(
     var previewError by remember { mutableStateOf<String?>(null) }
     var archOk by remember { mutableStateOf(true) }
     var archMessage by remember { mutableStateOf<String?>(null) }
+    var loadingPreview by remember { mutableStateOf(false) }
 
     val deviceAbi = remember { android.os.Build.SUPPORTED_ABIS.firstOrNull().orEmpty() }
 
@@ -85,6 +87,8 @@ internal fun RestoreScreen(
         if (uri == null) return@rememberLauncherForActivityResult
         previewError = null
         manifest = null
+        picked = null
+        loadingPreview = true
         scope.launch {
             val result = withContext(Dispatchers.IO) {
                 runCatching {
@@ -96,6 +100,7 @@ internal fun RestoreScreen(
                     cached to m
                 }
             }
+            loadingPreview = false
             result.onSuccess { (file, m) ->
                 picked = file
                 manifest = m
@@ -179,11 +184,16 @@ internal fun RestoreScreen(
                 else -> {
                     OutlinedButton(
                         onClick = { picker.launch(arrayOf("*/*")) },
+                        enabled = !loadingPreview,
                         modifier = Modifier.fillMaxWidth(),
                     ) {
                         Icon(Icons.Rounded.FileOpen, contentDescription = null)
                         Spacer(Modifier.width(8.dp))
                         Text(stringResource(R.string.restore_pick_file))
+                    }
+
+                    if (loadingPreview) {
+                        LoadingCard(stringResource(R.string.restore_loading_file))
                     }
 
                     previewError?.let { InfoCard(it) }
@@ -223,6 +233,21 @@ internal fun RestoreScreen(
                 }
             }
             Spacer(Modifier.height(24.dp))
+        }
+    }
+}
+
+@Composable
+private fun LoadingCard(text: String) {
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+        ),
+    ) {
+        Column(Modifier.padding(18.dp)) {
+            Text(text, style = MaterialTheme.typography.bodyLarge)
+            Spacer(Modifier.height(12.dp))
+            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
         }
     }
 }

@@ -162,8 +162,9 @@ class BackupEngine(
         )
         val plan = planner.plan(displayName)
 
-        requireFreeSpace(paths.newRootfsDir(plan.newId).parentFile ?: context.filesDir,
-            (manifest.payload.uncompressedBytes * 1.05).toLong())
+        // The container dir doesn't exist yet; check free space on filesDir, which
+        // is the same filesystem and always present (StatFs rejects missing paths).
+        requireFreeSpace(context.filesDir, (manifest.payload.uncompressedBytes * 1.05).toLong())
 
         // 4. Extract (rootfs + metadata) with hash verification.
         try {
@@ -266,13 +267,22 @@ class BackupEngine(
     }
 
     private fun requireFreeSpace(dir: File, needBytes: Long) {
-        val stat = StatFs(dir.absolutePath)
-        val free = stat.availableBytes
+        // StatFs throws IllegalArgumentException("Invalid path: …") on a missing
+        // directory, so resolve to the nearest existing ancestor first. If even
+        // that can't be stat'd, skip the check rather than abort the operation.
+        val probe = existingAncestor(dir) ?: return
+        val free = runCatching { StatFs(probe.absolutePath).availableBytes }.getOrNull() ?: return
         if (free < needBytes) {
             throw BackupError(
                 "空き容量が不足しています。約 ${humanMb(needBytes)} の空きが必要です（現在 ${humanMb(free)}）。",
             )
         }
+    }
+
+    private fun existingAncestor(dir: File): File? {
+        var cur: File? = dir.absoluteFile
+        while (cur != null && !cur.exists()) cur = cur.parentFile
+        return cur
     }
 
     private fun humanMb(bytes: Long): String {

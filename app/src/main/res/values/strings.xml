@@ -39,6 +39,7 @@
     <string name="restore_title">バックアップから復元</string>
     <string name="restore_subtitle">.ldfa ファイルから新しい環境として復元します。既存の環境は上書きされません。</string>
     <string name="restore_pick_file">.ldfa ファイルを選択</string>
+    <string name="restore_loading_file">ファイルを読み込んでいます…</string>
     <string name="restore_no_file">ファイルが選択されていません</string>
     <string name="restore_header_from">作成元</string>
     <string name="restore_header_app">アプリ版</string>
