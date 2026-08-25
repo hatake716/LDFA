@@ -172,7 +172,7 @@ jobs:
 
           # LDFA branding and Material 3 tools are included.
           grep -Fxq 'com.termux' "$VERIFY_DIR/application-id.txt"
-          grep -Fq "versionCode='16' versionName='0.9.0'" "$VERIFY_DIR/badging.txt"
+          grep -Fq "versionCode='20' versionName='1.1.0'" "$VERIFY_DIR/badging.txt"
           grep -Fq "application-label:'LDFA'" "$VERIFY_DIR/badging.txt"
           grep -Fq 'ToolsScreen' "$VERIFY_DIR/dex-strings.txt"
           grep -Fq 'ProcessExitDiagnostics' "$VERIFY_DIR/dex-strings.txt"
@@ -181,7 +181,7 @@ jobs:
           # Chrome keeps Google sign-in support while bounding its renderer pool.  The launcher
           # marker forces existing Debian environments to receive this update before startup.
           grep -Fq '# LDFA_CHROME_LAUNCHER_VERSION=8' "$VERIFY_DIR/ldfa-host.sh"
-          grep -Fq '# LDFA_SESSION_RUNTIME_VERSION=18' "$VERIFY_DIR/ldfa-host.sh"
+          grep -Fq '# LDFA_SESSION_RUNTIME_VERSION=29' "$VERIFY_DIR/ldfa-host.sh"
           grep -Fq -- '--renderer-process-limit=2' "$VERIFY_DIR/ldfa-host.sh"
           grep -Fq -- '--disable-background-mode' "$VERIFY_DIR/ldfa-host.sh"
           grep -Fq -- '--disable-extensions' "$VERIFY_DIR/ldfa-host.sh"
@@ -194,7 +194,7 @@ jobs:
           "$ANDROID_HOME/build-tools/36.0.0/zipalign" -c -P 16 4 "$APK"
           "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify "$APK"
 
-          cp "$APK" app/build/outputs/apk/debug/LDFA-v0.9.0-debug.apk
+          cp "$APK" app/build/outputs/apk/debug/LDFA-v1.1.0-debug.apk
 
       - name: Upload Gradle diagnostics
         if: always()
@@ -209,7 +209,7 @@ jobs:
         if: success()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: LDFA-v0.9.0-debug-apk
-          path: app/build/outputs/apk/debug/LDFA-v0.9.0-debug.apk
+          name: LDFA-v1.1.0-debug-apk
+          path: app/build/outputs/apk/debug/LDFA-v1.1.0-debug.apk
           if-no-files-found: error
           retention-days: 14
