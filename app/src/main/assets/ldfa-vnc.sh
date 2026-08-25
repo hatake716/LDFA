@@ -182,7 +182,11 @@ stop_vnc() {
 }
 
 write_runner() {
-    local id="$1"
+    local id="$1" tz
+    # The runner heredoc is unquoted, so $tz is expanded here on the host side.
+    # Same IANA-name validation as ldfa-host.sh; fall back to the default zone.
+    tz="$(getprop persist.sys.timezone 2>/dev/null || true)"
+    [[ "$tz" =~ ^[A-Za-z][A-Za-z0-9_+-]*(/[A-Za-z0-9_+-]+){0,2}$ ]] || tz="Asia/Tokyo"
     cat > "$RUNNER" <<RUNNER_SCRIPT
 #!/data/data/com.termux/files/usr/bin/bash
 set -Eeuo pipefail
@@ -193,6 +197,7 @@ set -Eeuo pipefail
 export HOME=/home/desktop
 export USER=desktop
 export LOGNAME=desktop
+export TZ=$tz
 export DISPLAY=:$DISPLAY_NUMBER
 export XDG_RUNTIME_DIR=/tmp/ldfa-runtime-desktop-vnc
 mkdir -p "\$XDG_RUNTIME_DIR" /tmp/.X11-unix "\$HOME/.vnc"

@@ -293,6 +293,11 @@ required=(
   "tmux list-panes -t \"\$session\" -F '#{pane_pid}'"
   'acquire_controller_lock()'
   'bootstrap|create|ensure-apps|start|resume|health|stop|delete|audio-probe|heartbeat|repair'
+  'getprop persist.sys.timezone'
+  'ln -sfn "/usr/share/zoneinfo/$tz" "$rootfs/etc/localtime"'
+  'ln -sfn "/usr/share/zoneinfo/$LDFA_TZ" /etc/localtime'
+  'LDFA_TZ="$(host_timezone)"'
+  'tzdata \'
 )
 for pattern in "${required[@]}"; do
   grep -Fq -- "$pattern" "$script"
@@ -309,6 +314,12 @@ done
 ! grep -Eq 'apt(-get)?[^\n]*install[^\n]*chromium' "$script"
 
 ! grep -q -- '--single-process' "$script"
+
+# Copying the tzfile breaks ICU zone-ID recovery; /etc/localtime must be a symlink.
+! grep -Eq 'cp[^\n]*zoneinfo[^\n]*/etc/localtime' "$script"
+
+# PRoot has no clock-sync mechanism; these would signal a wrong design.
+! grep -Eq 'hwclock|timedatectl|ntpdate' "$script"
 
 ! grep -q -- '--enable-low-end-device-mode' "$script"
 

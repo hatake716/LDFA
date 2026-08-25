@@ -248,7 +248,7 @@ grep -q '^host_ready=1$' <<<"$report"
 grep -q '^storage=1$' <<<"$report"
 grep -q '^embedded_x11=1$' <<<"$report"
 grep -q '^audio_tools=1$' <<<"$report"
-grep -q '^version=0.9.0$' <<<"$report"
+grep -q '^version=1.0.0$' <<<"$report"
 
 audio_report="$(bash "$controller" audio-probe)"
 grep -q '^audio_server=1$' <<<"$audio_report"
@@ -398,5 +398,78 @@ bash "$controller" worker-install pin-test
 [[ "$(cat "$XDG_DATA_HOME/linux-desktop-for-android/containers/pin-test/state")" == ready ]]
 [[ "$(cat "$XDG_DATA_HOME/linux-desktop-for-android/containers/pin-test/installed")" == 1 ]]
 bash "$controller" delete pin-test 1
+
+# --- Timezone sync (HANDOVER-timezone) ---------------------------------------
+# getprop is the source of truth for the Android timezone.
+cat > "$sandbox/bin/getprop" <<'GETPROP'
+#!/usr/bin/env bash
+if [[ "${1:-}" == persist.sys.timezone ]]; then
+  printf '%s\n' "${GETPROP_TZ-Asia/Tokyo}"
+fi
+exit 0
+GETPROP
+chmod +x "$sandbox/bin/getprop"
+
+# A proot-distro login on the timezone hot path would be a regression: when the
+# zoneinfo file already exists, ensure_timezone must only readlink/symlink, never
+# log in. Record login invocations so the test can assert zero.
+cat > "$sandbox/bin/proot-distro" <<'PROOT2'
+#!/usr/bin/env bash
+set -euo pipefail
+state="${PROOT_TEST_STATE:?}"
+case "${1:-}" in
+  login) printf 'login\n' >> "${PROOT_LOGIN_LOG:?}"; exit 0 ;;
+  list) [[ -f "$state" ]] && cat "$state"; exit 0 ;;
+  *) exit 0 ;;
+esac
+PROOT2
+chmod +x "$sandbox/bin/proot-distro"
+export PROOT_LOGIN_LOG="$sandbox/proot-login.log"
+
+# Load the controller's functions without running main (drop the final dispatch).
+tz_lib="$sandbox/ldfa-host-lib.sh"
+sed '/^main "\$@"$/d' "$controller" > "$tz_lib"
+
+run_tz_case() {
+  # $1 = rootfs base subpath under $PREFIX/var/lib/proot-distro
+  local layout="$1" id="tz-$2" rootfs
+  rootfs="$PREFIX/var/lib/proot-distro/$layout"
+  mkdir -p "$rootfs/etc" "$rootfs/usr/share/zoneinfo/Asia"
+  : > "$rootfs/usr/share/zoneinfo/Asia/Tokyo"
+  mkdir -p "$(dirname "$(bash -c "source '$tz_lib'; meta_file '$id' x" 2>/dev/null || echo "$XDG_DATA_HOME/linux-desktop-for-android/containers/$id/x")")"
+  : > "$PROOT_LOGIN_LOG"
+  (
+    source "$tz_lib"
+    # host_timezone resolves from getprop
+    [[ "$(host_timezone)" == "Asia/Tokyo" ]] || { echo "host_timezone FAIL"; exit 1; }
+    # rootfs_dir finds this layout
+    [[ "$(rootfs_dir "$id")" == "$rootfs" ]] || { echo "rootfs_dir FAIL ($layout)"; exit 1; }
+    # Not ready before sync
+    timezone_ready "$id" "Asia/Tokyo" && { echo "timezone_ready should be 0"; exit 1; }
+    # Sync
+    ensure_timezone "$id" >/dev/null 2>&1 || { echo "ensure_timezone FAIL"; exit 1; }
+    [[ "$(readlink "$rootfs/etc/localtime")" == "/usr/share/zoneinfo/Asia/Tokyo" ]] || { echo "localtime link FAIL"; exit 1; }
+    [[ "$(cat "$rootfs/etc/timezone")" == "Asia/Tokyo" ]] || { echo "/etc/timezone FAIL"; exit 1; }
+    timezone_ready "$id" "Asia/Tokyo" || { echo "timezone_ready should be 1"; exit 1; }
+  ) || exit 1
+  # zoneinfo already present -> ensure_timezone must not have logged in
+  [[ ! -s "$PROOT_LOGIN_LOG" ]] || { echo "PRoot login regression ($layout): $(cat "$PROOT_LOGIN_LOG")"; exit 1; }
+}
+
+# New layout and legacy layout must both work (HANDOVER §4.4).
+run_tz_case "containers/tz-new/rootfs" new
+run_tz_case "installed-rootfs/tz-legacy" legacy
+
+# Empty getprop must fall back to the default zone.
+GETPROP_TZ="" bash -c "source '$tz_lib'; [[ \"\$(host_timezone)\" == 'Asia/Tokyo' ]]" \
+  || { echo "empty-getprop fallback FAIL"; exit 1; }
+
+# The diagnostic command reports the synced state.
+mkdir -p "$XDG_DATA_HOME/linux-desktop-for-android/containers/tz-new"
+tz_report="$(bash "$controller" timezone tz-new)"
+grep -q '^android_timezone=Asia/Tokyo$' <<<"$tz_report"
+grep -q '^guest_localtime=/usr/share/zoneinfo/Asia/Tokyo$' <<<"$tz_report"
+grep -q '^guest_timezone=Asia/Tokyo$' <<<"$tz_report"
+grep -q '^timezone_ready=1$' <<<"$tz_report"
 
 echo "Debian XFCE host controller integration test passed"

@@ -52,6 +52,10 @@ PULSE_GUEST_SERVER="unix:$PULSE_GUEST_DIR/native"
 PULSE_GUEST_BIND="$PULSE_HOST_DIR:$PULSE_GUEST_DIR"
 PULSE_CONFIG_DROP_IN="$PREFIX/etc/pulse/default.pa.d/ldfa-audio.pa"
 PULSE_DAEMON_DROP_IN="$PREFIX/etc/pulse/daemon.conf.d/99-ldfa-noshm.conf"
+# Fallback timezone used to sync the guest clock when persist.sys.timezone is
+# unreadable (empty property, or getprop absent). PRoot shares Android's kernel
+# clock, so only the timezone — never the absolute UTC time — can drift.
+DEFAULT_TIMEZONE="Asia/Tokyo"
 DEFAULT_DISPLAY_NUMBER=1
 DISPLAY_NUMBER="${LDFA_DISPLAY_NUMBER:-$DEFAULT_DISPLAY_NUMBER}"
 X11_SOCKET="$PREFIX/tmp/.X11-unix/X${DISPLAY_NUMBER}"
@@ -98,6 +102,55 @@ validate_id() {
 
 validate_display_number() {
     [[ "${1:-}" =~ ^[1-9][0-9]?$ ]] || die "不正なDISPLAY番号です: ${1:-empty}"
+}
+
+# Timezone helpers. The value feeds `ln -sfn` and path assembly, so it must be
+# validated. Disallowing '.' makes ".." unrepresentable (no path traversal).
+# Up to three components are allowed (e.g. America/Argentina/Salta).
+validate_timezone() {
+    [[ "${1:-}" =~ ^[A-Za-z][A-Za-z0-9_+-]*(/[A-Za-z0-9_+-]+){0,2}$ ]]
+}
+
+# Android's current timezone as an IANA name. persist.sys.timezone is the source
+# of truth for the Android setting (and NITZ auto-configuration). getprop is
+# already used in ldfa-x11.sh (ro.build.version.sdk).
+host_timezone() {
+    local tz=""
+    tz="$(getprop persist.sys.timezone 2>/dev/null || true)"
+    [[ -n "$tz" ]] || tz="${TZ:-}"
+    validate_timezone "$tz" || tz="$DEFAULT_TIMEZONE"
+    printf '%s' "$tz"
+}
+
+# POSIX TZ string for guests where tzdata cannot be installed. glibc parses this
+# without any zoneinfo file. POSIX has the sign inverted (UTC+9 -> "JST-9"). It
+# cannot express DST rules, so it is a last resort only.
+host_posix_tz() {
+    local abbr offset sign hours minutes
+    abbr="$(date +%Z 2>/dev/null || true)"
+    offset="$(date +%z 2>/dev/null || true)"
+    [[ "$offset" =~ ^([+-])([0-9]{2})([0-9]{2})$ ]] || return 1
+    sign="${BASH_REMATCH[1]}"; hours="${BASH_REMATCH[2]}"; minutes="${BASH_REMATCH[3]}"
+    [[ "$abbr" =~ ^[A-Za-z]{3,6}$ ]] || abbr="LOC"
+    if [[ "$sign" == "+" ]]; then sign="-"; else sign="+"; fi
+    if [[ "$minutes" == "00" ]]; then
+        printf '%s%s%d' "$abbr" "$sign" "$((10#$hours))"
+    else
+        printf '%s%s%d:%s' "$abbr" "$sign" "$((10#$hours))" "$minutes"
+    fi
+}
+
+# The real proot-distro rootfs. Probe the new and legacy layouts in order. We can
+# write here directly, so updating /etc/localtime needs no PRoot login.
+rootfs_dir() {
+    local id="$1" base="$PREFIX/var/lib/proot-distro" candidate
+    for candidate in "$base/containers/$id/rootfs" "$base/installed-rootfs/$id"; do
+        if [[ -d "$candidate/etc" ]]; then
+            printf '%s' "$candidate"
+            return 0
+        fi
+    done
+    return 1
 }
 
 meta_dir() { printf '%s/%s' "$META_ROOT" "$1"; }
@@ -1167,6 +1220,76 @@ LDFA_FISH
     '
 }
 
+timezone_ready() {
+    local id="$1" tz="$2" rootfs link
+    rootfs="$(rootfs_dir "$id" 2>/dev/null || true)"
+    [[ -n "$rootfs" ]] || return 1
+    # From the host this looks like a dangling symlink (guest-absolute target), so
+    # compare the link string rather than using test -e.
+    link="$(readlink "$rootfs/etc/localtime" 2>/dev/null || true)"
+    [[ "$link" == "/usr/share/zoneinfo/$tz" ]] || return 1
+    [[ -f "$rootfs/usr/share/zoneinfo/$tz" ]] || return 1
+    [[ "$(cat "$rootfs/etc/timezone" 2>/dev/null || true)" == "$tz" ]] || return 1
+}
+
+# Reflect Android's current timezone into the guest rootfs. When already in sync
+# it returns after a single readlink, so it is safe on the startup hot path.
+ensure_timezone() {
+    local id="$1" tz rootfs
+    validate_id "$id"
+    tz="$(host_timezone)"
+    rootfs="$(rootfs_dir "$id" 2>/dev/null || true)"
+    if [[ -z "$rootfs" ]]; then
+        printf '[%s] rootfsが見つからないためタイムゾーン同期をスキップします\n' \
+            "$(date -Iseconds)" >&2
+        return 1
+    fi
+
+    if timezone_ready "$id" "$tz"; then
+        write_meta "$id" timezone "$tz"
+        return 0
+    fi
+
+    # Missing zoneinfo only happens for environments built before this fix. Fresh
+    # builds already install tzdata in CONTAINER_SETUP.
+    if [[ ! -f "$rootfs/usr/share/zoneinfo/$tz" ]]; then
+        unset PROOT_NO_SECCOMP
+        if ! timeout 300s proot-distro login "$id" -- /usr/bin/env \
+            DEBIAN_FRONTEND=noninteractive LC_ALL=C.UTF-8 \
+            /bin/bash -c 'apt-get -o Acquire::Retries=3 -o Dpkg::Use-Pty=0 update &&
+                          apt-get -o Acquire::Retries=3 -o Dpkg::Use-Pty=0 \
+                              install -y --no-install-recommends tzdata'; then
+            printf '[%s] tzdataを導入できませんでした。POSIX TZへfallbackします\n' \
+                "$(date -Iseconds)" >&2
+        fi
+    fi
+
+    if [[ ! -f "$rootfs/usr/share/zoneinfo/$tz" ]]; then
+        write_meta "$id" timezone ""
+        return 1
+    fi
+
+    # Must be a symlink, never a copy: ICU (Chrome/Node) recovers the zone ID from
+    # the /etc/localtime link target string.
+    ln -sfn "/usr/share/zoneinfo/$tz" "$rootfs/etc/localtime"
+    printf '%s\n' "$tz" > "$rootfs/etc/timezone"
+    write_meta "$id" timezone "$tz"
+    printf '[%s] guestのタイムゾーンを%sへ同期しました\n' "$(date -Iseconds)" "$tz"
+}
+
+# TZ value for the session launch line. IANA name when zoneinfo is available,
+# else a POSIX TZ string. Empty when neither is available (caller omits TZ then).
+# Note: TZ="" means UTC to glibc, so an empty string must never be passed as TZ.
+session_timezone() {
+    local id="$1" tz
+    tz="$(read_meta "$id" timezone '')"
+    if [[ -n "$tz" ]] && validate_timezone "$tz"; then
+        printf '%s' "$tz"
+        return 0
+    fi
+    host_posix_tz
+}
+
 audio_client_ready() {
     local id="$1"
     # dpkg-query with -f="${Status}\n" leaves the \n literal when this string is
@@ -1820,6 +1943,17 @@ cmd_audio_probe() {
         die "DebianからAndroid音声出力へ接続できませんでした。"
 }
 
+cmd_timezone() {
+    local id="${1:-}" tz rootfs
+    validate_id "$id"
+    tz="$(host_timezone)"
+    rootfs="$(rootfs_dir "$id" 2>/dev/null || true)"
+    say "android_timezone=$tz"
+    say "guest_localtime=$(readlink "${rootfs:-/nonexistent}/etc/localtime" 2>/dev/null || printf 'unset')"
+    say "guest_timezone=$(cat "${rootfs:-/nonexistent}/etc/timezone" 2>/dev/null || printf 'unset')"
+    if timezone_ready "$id" "$tz"; then say "timezone_ready=1"; else say "timezone_ready=0"; fi
+}
+
 cmd_bootstrap() {
     local requested_version="${1:-$VERSION}"
     : > "$BOOTSTRAP_LOG"
@@ -1974,7 +2108,7 @@ worker_install() {
     # Forcing it off exposes guest syscalls to the app seccomp policy as ENOSYS.
     unset PROOT_NO_SECCOMP
     proot-distro login "$id" --bind "$shared:/mnt/android" -- \
-        /bin/bash -s <<'CONTAINER_SETUP'
+        /usr/bin/env LDFA_TZ="$(host_timezone)" /bin/bash -s <<'CONTAINER_SETUP'
 set -Eeuo pipefail
 export DEBIAN_FRONTEND=noninteractive
 export LC_ALL=C.UTF-8
@@ -1992,6 +2126,7 @@ step "基本パッケージをインストールしています"
 "${APT[@]}" install -y --no-install-recommends \
     ca-certificates \
     locales \
+    tzdata \
     sudo \
     dbus-x11 \
     procps \
@@ -2039,6 +2174,16 @@ elif ! grep -q '^ja_JP.UTF-8 UTF-8' /etc/locale.gen; then
 fi
 locale-gen ja_JP.UTF-8
 update-locale LANG=ja_JP.UTF-8 LANGUAGE=ja_JP:ja
+
+step "タイムゾーンを設定しています"
+# Debian rootfs defaults to UTC. Match Android's current timezone. Chrome and
+# Node (ICU) recover the zone name from the /etc/localtime link target, so this
+# must be a symlink, never a copy of the tzfile.
+LDFA_TZ="${LDFA_TZ:-Asia/Tokyo}"
+if [ -f "/usr/share/zoneinfo/$LDFA_TZ" ]; then
+    ln -sfn "/usr/share/zoneinfo/$LDFA_TZ" /etc/localtime
+    printf '%s\n' "$LDFA_TZ" > /etc/timezone
+fi
 
 dbus-uuidgen --ensure=/etc/machine-id
 if ! id desktop >/dev/null 2>&1; then
@@ -2337,6 +2482,13 @@ cmd_ensure_apps() {
     [[ "$(read_meta "$id" installed 0)" == 1 ]] || \
         die "この環境のインストールは完了していません。"
 
+    # Sync the timezone BEFORE the fingerprint hot path. It drifts just from
+    # moving the device, so it must run even on a cache hit. When already in sync
+    # this is a readlink only — no PRoot login. It is deliberately kept out of the
+    # provisioning fingerprint so existing environments are not re-provisioned.
+    ensure_timezone "$id" >> "$(log_file "$id")" 2>&1 || \
+        printf '警告: タイムゾーンを同期できませんでした。GUI起動は継続します。\n' >&2
+
     # Hot path: when metadata records that this exact provisioning fingerprint was
     # already verified, confirm it with a single guest login. Only fall through to
     # the full per-component migration (3-4 PRoot logins plus optional network) on
@@ -2412,7 +2564,7 @@ cmd_ensure_apps() {
 }
 
 worker_run() {
-    local id="$1" display_number="${2:-${LDFA_DISPLAY_NUMBER:-$(read_meta "$1" display "$DEFAULT_DISPLAY_NUMBER")}}" shared log rc=0 wait_count=0 xset_attempt xset_ready=0 audio_ready=0
+    local id="$1" display_number="${2:-${LDFA_DISPLAY_NUMBER:-$(read_meta "$1" display "$DEFAULT_DISPLAY_NUMBER")}}" shared log rc=0 wait_count=0 xset_attempt xset_ready=0 audio_ready=0 session_tz session_env
     validate_id "$id"
     validate_display_number "$display_number"
     DISPLAY_NUMBER="$display_number"
@@ -2473,6 +2625,14 @@ worker_run() {
     set_status "$id" running 100 "Linuxデスクトップを実行中"
     while [[ ! -f "$(stop_file "$id")" ]]; do
         printf '[%s] launching Linux session\n' "$(date -Iseconds)"
+        # Re-sync on every session start so device moves and DST changes are
+        # picked up. When already in sync this is a single readlink (0 PRoot logins).
+        ensure_timezone "$id" >> "$(log_file "$id")" 2>&1 || true
+        session_env=()
+        session_tz="$(session_timezone "$id" 2>/dev/null || true)"
+        if [[ -n "$session_tz" ]]; then
+            session_env=("TZ=$session_tz")
+        fi
         set +e
         # Clean environment before entering PRoot
         unset LD_PRELOAD
@@ -2487,6 +2647,7 @@ worker_run() {
             /usr/bin/env -u LD_PRELOAD -u LD_LIBRARY_PATH \
                 DISPLAY=":$DISPLAY_NUMBER" GTK_IM_MODULE=fcitx QT_IM_MODULE=fcitx \
                 XMODIFIERS=@im=fcitx PULSE_SERVER="$PULSE_GUEST_SERVER" \
+                ${session_env[@]+"${session_env[@]}"} \
                 LDFA_SCALE="$(read_meta "$id" scale 100)" \
                 /usr/local/bin/ldfa-session
         rc=$?
@@ -2691,7 +2852,7 @@ cmd_repair() {
 usage() {
     cat <<USAGE
 Usage: ldfa-host <command> [arguments]
-Commands: doctor bootstrap list create ensure-apps start resume health stop delete probe set-scale audio-probe logs heartbeat repair
+Commands: doctor bootstrap list create ensure-apps start resume health stop delete probe set-scale audio-probe timezone logs heartbeat repair
 USAGE
 }
 
@@ -2722,6 +2883,7 @@ main() {
         probe) cmd_probe "$@" ;;
         set-scale) cmd_set_scale "$@" ;;
         audio-probe) cmd_audio_probe "$@" ;;
+        timezone) cmd_timezone "$@" ;;
         logs) cmd_logs "$@" ;;
         heartbeat) cmd_heartbeat "$@" ;;
         repair) cmd_repair "$@" ;;
