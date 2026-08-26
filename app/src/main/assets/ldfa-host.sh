@@ -2184,7 +2184,11 @@ worker_install() {
     log="$(log_file "$id")"
     expected_image="$LINUX_IMAGE"
     current_image="$(read_meta "$id" image '')"
-    mkdir -p "$shared"
+    # Under native proot $HOME/storage/shared can be a dangling symlink (Android
+    # shared storage isn't bound into this proot), which makes `mkdir -p` fail
+    # "File exists" and, with `set -e`, would abort the worker. It's non-essential
+    # here, so tolerate the failure — the shared bind is applied per guest login.
+    mkdir -p "$shared" 2>/dev/null || true
 
     exec >>"$log" 2>&1
     trap 'worker_failed "$id" "$?" "$LINENO"' ERR
@@ -2389,6 +2393,15 @@ start_run_worker() {
     session="$(run_session "$id")"
     session_alive "$session" && return 0
     rm -f "$(stop_file "$id")"
+    if native_proot_mode; then
+        # A worker cannot outlive the proot that spawns it (proot kills its tracees
+        # on exit; setsid does not escape that). This `start` command runs in a
+        # short-lived proot, so the APP launches the worker in its OWN persistent
+        # proot and keeps it alive. cmd_start just prepares state and returns; the
+        # app spawns `worker-run` right after. session_alive tracks it by the PID
+        # the app writes to the session pid file.
+        return 0
+    fi
     session_start "$session" \
         env LDFA_DISPLAY_NUMBER="$display_number" "$SELF" worker-run "$id" "$display_number"
 }
@@ -2682,12 +2695,23 @@ worker_run() {
     local id="$1" display_number="${2:-${LDFA_DISPLAY_NUMBER:-$(read_meta "$1" display "$DEFAULT_DISPLAY_NUMBER")}}" shared log rc=0 wait_count=0 xset_attempt xset_ready=0 audio_ready=0 session_tz session_env
     validate_id "$id"
     validate_display_number "$display_number"
+    # Under native proot the app launched this worker in its own persistent proot;
+    # record our PID so session_alive/session_kill (which key off the pid file) can
+    # track and stop us. The tmux backend records the PID itself, so skip there.
+    if native_proot_mode; then
+        mkdir -p "$RUN_ROOT"
+        printf '%s\n' "$$" > "$(session_pid_file "$(run_session "$id")")"
+    fi
     DISPLAY_NUMBER="$display_number"
     X11_SOCKET="$PREFIX/tmp/.X11-unix/X${DISPLAY_NUMBER}"
     write_meta "$id" display "$DISPLAY_NUMBER"
     shared="$(shared_path "$id")"
     log="$(log_file "$id")"
-    mkdir -p "$shared"
+    # Under native proot $HOME/storage/shared can be a dangling symlink (Android
+    # shared storage isn't bound into this proot), which makes `mkdir -p` fail
+    # "File exists" and, with `set -e`, would abort the worker. It's non-essential
+    # here, so tolerate the failure — the shared bind is applied per guest login.
+    mkdir -p "$shared" 2>/dev/null || true
 
     exec >>"$log" 2>&1
     cleanup_run_worker() {

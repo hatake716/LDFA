@@ -46,6 +46,12 @@ enum class DesktopDisplayBackend(val preferenceValue: String) {
 class LinuxDesktopRepository(private val context: Context) {
     private val commandClient = TermuxCommandClient(context)
     private val preferences = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+    // Google-Play / targetSdk-35 path: launches the desktop worker under its own
+    // persistent proot (a worker can't outlive the short-lived `start` proot).
+    // No-op when the proot native libs are absent (legacy targetSdk-28 build).
+    private val prootWorkerLauncher =
+        com.hatake716.linuxdesktop.runtime.ProotWorkerLauncher.from(context)
+    private val prootWorkers = java.util.concurrent.ConcurrentHashMap<String, Process>()
     private val x11LifecycleMutex = GLOBAL_DISPLAY_LIFECYCLE_MUTEX
     private var termuxServiceLease: ServiceConnection? = null
     private val hostScript: String by lazy {
@@ -1052,12 +1058,37 @@ class LinuxDesktopRepository(private val context: Context) {
             timeout = 45.seconds,
         )
         Log.i(LIFECYCLE_LOG_TAG, "host worker command accepted id=$id")
+        // Native-proot path: cmd_start prepared state but deliberately did NOT spawn
+        // the worker (it can't outlive its short-lived proot). Launch it here under
+        // its own persistent proot and hold the process so it stays alive.
+        launchNativeProotWorkerIfNeeded(id)
         commandClient.runInstalledHost(
             action = "probe",
             arguments = listOf(id),
             timeout = 45.seconds,
         )
         Log.i(LIFECYCLE_LOG_TAG, "host desktop probe ready id=$id")
+    }
+
+    private fun launchNativeProotWorkerIfNeeded(id: String) {
+        if (!prootWorkerLauncher.usable) return
+        prootWorkers[id]?.let { if (it.isAlive) return }
+        val display = readMetaDisplay(id)
+        val process = prootWorkerLauncher.start(id, display)
+        if (process != null) {
+            prootWorkers[id] = process
+            Log.i(LIFECYCLE_LOG_TAG, "native-proot worker launched id=$id display=$display")
+        } else {
+            Log.w(LIFECYCLE_LOG_TAG, "native-proot worker launch returned null id=$id")
+        }
+    }
+
+    private fun readMetaDisplay(id: String): Int {
+        val f = File(
+            context.filesDir,
+            "home/.local/share/linux-desktop-for-android/containers/$id/display",
+        )
+        return f.takeIf { it.isFile }?.readText()?.trim()?.toIntOrNull() ?: 1
     }
 
     private suspend fun ensureBundledDesktopApps(id: String) {

@@ -47,11 +47,17 @@ class ProotRuntime internal constructor(
         command: List<String>,
         rootfs: File? = null,
         binds: List<String> = emptyList(),
+        killOnExit: Boolean = true,
     ): List<String> {
         if (!available || command.isEmpty()) return command
         val out = ArrayList<String>(command.size + binds.size * 2 + 6)
         out += proot.absolutePath
-        out += "--kill-on-exit"
+        // --kill-on-exit reaps all tracees when THIS proot exits. That is right for
+        // short-lived commands, but WRONG for the desktop worker: proot kills its
+        // tracees on exit and setsid cannot escape a proot's lifetime, so a worker
+        // must run under its OWN persistent proot with kill-on-exit OFF and be kept
+        // alive by the app (DesktopKeepAliveService).
+        if (killOnExit) out += "--kill-on-exit"
         if (rootfs != null) { out += "-r"; out += rootfs.absolutePath }
         for (bind in binds) { out += "-b"; out += bind }
         out += command
