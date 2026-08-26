@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Scope cleartext (plain http://) to localhost only. The single cleartext consumer is the
+  noVNC fallback display: VncFallbackActivity loads http://127.0.0.1:6080/vnc.html in a
+  WebView, backed by websockify/TigerVNC that bind 127.0.0.1 exclusively. Everything else
+  is denied cleartext. This replaces the app-wide android:usesCleartextTraffic="true", which
+  Play flags, without breaking the local VNC WebView.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">localhost</domain>
+    </domain-config>
+</network-security-config>

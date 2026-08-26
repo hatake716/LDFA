@@ -7,7 +7,17 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
-    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" tools:ignore="ScopedStorage" />
+    <!--
+      MANAGE_EXTERNAL_STORAGE (All files access) is a Play policy-restricted permission
+      that Play rejects when declared but unused. This app never uses the all-files model
+      (grep of isExternalStorageManager/ACTION_MANAGE_APP_ALL_FILES finds only comments in
+      MainActivity.kt): its shared-storage feature rides on the classic WRITE_EXTERNAL_STORAGE
+      runtime permission. The bundled termux-runtime library and the vendor termux-app manifest
+      both declare MANAGE_EXTERNAL_STORAGE, so we strip it from the MERGED manifest here with a
+      remove node (do NOT edit the git submodules). Verify after a build in
+      build/intermediates/merged_manifest/.../AndroidManifest.xml that MANAGE is gone.
+    -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" tools:node="remove" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
@@ -25,8 +35,8 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.LinuxDesktop"
-        android:usesCleartextTraffic="true"
-        tools:replace="android:allowBackup,android:icon,android:label,android:roundIcon,android:supportsRtl,android:theme">
+        android:networkSecurityConfig="@xml/network_security_config"
+        tools:replace="android:allowBackup,android:icon,android:label,android:roundIcon,android:supportsRtl,android:theme,android:networkSecurityConfig">
 
         <activity
             android:name=".MainActivity"
@@ -58,7 +68,7 @@
             android:foregroundServiceType="specialUse">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="Hosts the embedded local X11 server for the Debian XFCE desktop session." />
+                android:value="Runs a local X11/Xorg display server in a dedicated process to render an on-device Linux (Debian XFCE) desktop the user explicitly starts; no standard FGS type applies (no screen capture/MediaProjection, no external/companion device, no data sync)." />
         </service>
 
         <service
@@ -67,7 +77,7 @@
             android:foregroundServiceType="specialUse">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="Maintains the embedded Debian XFCE session, terminal runtime and X11 server." />
+                android:value="Keeps the user-started on-device Linux desktop session (Xorg + terminal runtime) alive and repairs it while in use; no standard FGS type (dataSync/mediaProjection/connectedDevice) matches a persistent local compute session." />
         </service>
 
         <service
