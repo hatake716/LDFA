@@ -27,7 +27,7 @@ SHARED_ROOT="$HOME/storage/shared/LinuxDesktop"
 SELF="$BIN_DIR/ldfa-host"
 BOOTSTRAP_LOG="$LOG_ROOT/bootstrap.log"
 CHROME_LAUNCHER_MARKER="# LDFA_CHROME_LAUNCHER_VERSION=8"
-DESKTOP_RUNTIME_MARKER="# LDFA_SESSION_RUNTIME_VERSION=29"
+DESKTOP_RUNTIME_MARKER="# LDFA_SESSION_RUNTIME_VERSION=36"
 AUDIO_CLIENT_MARKER="# LDFA_AUDIO_CLIENT_VERSION=3"
 PULSE_BRIDGE_MARKER="# LDFA_PULSE_BRIDGE_VERSION=1"
 # Modern Node.js runtime provisioned into the guest so Node-based CLIs (Claude
@@ -229,8 +229,166 @@ tmux_alive() {
 # (which stays inside proot — verified) and track it by PID file. LDFA signals
 # this mode by exporting LDFA_NATIVE_PROOT=1. Everywhere else, tmux is unchanged.
 session_pid_file() { printf '%s/%s.pid' "$RUN_ROOT" "$1"; }
+# Native-proot only: worker_run (outer proot, host prep done) writes the desktop's env
+# here; the app polls it and launches the `session-run` verb as its OWN single native
+# proot layer (ProotWorkerLauncher.startSession), so ldfa-session runs ONE layer deep
+# and composes fast. Removed when the desktop stops.
+session_request_file() { printf '%s/%s.session-request' "$RUN_ROOT" "$1"; }
+# Desktop-ready marker for native-proot mode. Written by the guest session script
+# itself (inside the session's own proot) right after wait_for_wm succeeds, at
+# $XDG_RUNTIME_DIR/ldfa-desktop-ready = /tmp/runtime-desktop/ldfa-desktop-ready in
+# the guest, which --shared-tmp maps to $PREFIX/tmp/runtime-desktop on the host.
+# cmd_probe reads it there instead of probing the desktop from its own, separate
+# proot: `xset` works cross-proot but `pgrep`/`/proc` cannot see the session's
+# components and hangs (proot only exposes its own tracees under /proc).
+desktop_ready_marker() { printf '%s/tmp/runtime-desktop/ldfa-desktop-ready' "$PREFIX"; }
 
 native_proot_mode() { [[ "${LDFA_NATIVE_PROOT:-0}" == 1 ]]; }
+
+# Resolve a container login user name to its uid:gid from the guest's /etc/passwd.
+# Falls back to 0:0 (root) when unknown. Used to translate proot-distro's `--user X`
+# into native proot's `--change-id=uid:gid`.
+pd_login_uidgid() {
+    local rootfs="$1" user="$2" line uid gid
+    [[ -z "$user" || "$user" == root ]] && { printf '0:0'; return 0; }
+    line="$(grep "^$user:" "$rootfs/etc/passwd" 2>/dev/null | head -1)"
+    if [[ -n "$line" ]]; then
+        uid="$(printf '%s' "$line" | cut -d: -f3)"
+        gid="$(printf '%s' "$line" | cut -d: -f4)"
+        [[ "$uid" =~ ^[0-9]+$ && "$gid" =~ ^[0-9]+$ ]] && { printf '%s:%s' "$uid" "$gid"; return 0; }
+    fi
+    printf '0:0'
+}
+
+# Drop-in for `proot-distro login`. On the legacy (tmux/targetSdk-28) path it IS
+# proot-distro login, unchanged. Under the native-library proot it instead drives the
+# rootfs DIRECTLY with a SINGLE proot layer (libpdrt.so -r <rootfs> …), eliminating
+# proot-distro's inner proot — the proot-in-proot double ptrace trap made XFCE's
+# thread-heavy startup ~6x slower (measured: 10-thread spin 4.8s nested vs 0.8s
+# single-layer on-device), which kept the desktop from composing in time. It
+# replicates proot-distro's login binds (see proot_distro/commands/login/proot_cmd.py):
+# --kill-on-exit --link2symlink --sysvipc -L, --change-id for --user, /dev /proc /sys,
+# the Android system dirs, and --shared-tmp / --bind pass-through.
+#
+# Usage mirrors proot-distro login exactly:
+#   pd_login <id> [--user NAME] [--shared-tmp] [--bind SRC:DST]... -- CMD [ARGS...]
+# stdin/stdout/stderr are inherited, so heredocs and pipes work as before.
+# A leading `--timeout N` (in seconds) wraps the whole login in `timeout Ns …`. It is
+# an option of pd_login itself (NOT passed to proot-distro) so callers that used
+# `timeout Ns proot-distro login …` become `pd_login <id> --timeout N …` — `timeout`
+# cannot wrap a shell function, so pd_login applies it internally to the real command.
+pd_login() {
+    local id="$1"; shift
+    local user="" shared_tmp=0 timeout_s=""
+    local -a extra_binds=()
+    while (( $# > 0 )); do
+        case "$1" in
+            --timeout) timeout_s="$2"; shift 2 ;;
+            --user) user="$2"; shift 2 ;;
+            --shared-tmp) shared_tmp=1; shift ;;
+            --bind) extra_binds+=("$2"); shift 2 ;;
+            --) shift; break ;;
+            *) break ;;  # anything else is the start of the command (defensive)
+        esac
+    done
+    local -a tmo=()
+    [[ -n "$timeout_s" ]] && tmo=(timeout "${timeout_s}s")
+
+    if ! native_proot_mode; then
+        local -a pdo=()
+        [[ -n "$user" ]] && pdo+=(--user "$user")
+        (( shared_tmp )) && pdo+=(--shared-tmp)
+        local b; for b in "${extra_binds[@]}"; do pdo+=(--bind "$b"); done
+        "${tmo[@]}" proot-distro login "$id" "${pdo[@]}" -- "$@"
+        return $?
+    fi
+
+    # ---- Native single-layer proot ----
+    local rootfs loader pdrt uidgid cwd
+    rootfs="$(rootfs_dir "$id")" || die "rootfs が見つかりません: $id"
+    loader="${PROOT_LOADER:?PROOT_LOADER 未設定}"
+    pdrt="$(dirname "$loader")/libpdrt.so"
+    [[ -x "$pdrt" ]] || die "native proot ($pdrt) が見つかりません。"
+    uidgid="$(pd_login_uidgid "$rootfs" "$user")"
+    if [[ "$user" == root || -z "$user" ]]; then cwd=/root; else cwd="/home/$user"; fi
+
+    local -a a=("$pdrt" --kill-on-exit --link2symlink --sysvipc -L
+        "--change-id=$uidgid" "--rootfs=$rootfs" "--cwd=$cwd"
+        --bind=/dev --bind=/proc --bind=/sys)
+    # Android system directories the guest's linker/runtime reach into. Bind only the
+    # ones that exist (proot-distro's system_bindings does the same).
+    local p
+    for p in /apex /odm /product /system /system_ext /vendor \
+        /linkerconfig/ld.config.txt /linkerconfig/com.android.art/ld.config.txt \
+        /plat_property_contexts /property_contexts; do
+        [[ -e "$p" ]] && a+=("--bind=$p")
+    done
+    # --shared-tmp: expose the host prefix /tmp as the guest /tmp (matching proot-distro
+    # --shared-tmp). That ALREADY contains /tmp/.X11-unix, so do NOT also bind the X11
+    # dir separately — a second overlapping bind on /tmp/.X11-unix shadows the socket
+    # and the guest's X clients get "cannot open display :1". Only when /tmp is NOT
+    # shared do we bind the X11 socket dir on its own so the desktop can reach the
+    # display.
+    if (( shared_tmp )); then
+        a+=("--bind=$PREFIX/tmp:/tmp")
+    elif [[ -d "$PREFIX/tmp/.X11-unix" ]]; then
+        a+=("--bind=$PREFIX/tmp/.X11-unix:/tmp/.X11-unix")
+    fi
+    for p in "${extra_binds[@]}"; do a+=("--bind=$p"); done
+
+    # The guest command is "$@". proot-distro's login normally runs a login shell that
+    # sets a standard PATH from /etc/profile; single-layer proot execs the command
+    # directly and skips that, so the guest would inherit the HOST's PATH and fail to
+    # find /usr/bin/install, date, etc. (`command not found`, exit 127). Also strip
+    # LD_LIBRARY_PATH/LD_PRELOAD so the host's proot-lib paths do not leak into the
+    # guest's dynamic loader. `/usr/bin/env` here is the GUEST's env (resolved inside
+    # the rootfs). Callers that already prepend their own `/usr/bin/env VAR=… cmd` still
+    # work — this just guarantees a sane PATH underneath.
+    # env's options (-u) must precede any NAME=VALUE assignment, or env treats the flag
+    # as the command (the guest's coreutils env is strict about this ordering).
+    local -a guest_env=(/usr/bin/env
+        -u LD_LIBRARY_PATH -u LD_PRELOAD
+        "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
+    # Ensure libpdrt.so's OWN NEEDED libs (libtalloc etc.) resolve even when the caller
+    # unset LD_LIBRARY_PATH before entering the guest (worker_run does). The proot libs
+    # live next to the loader; set it only for THIS exec's process — proot builds the
+    # guest environment itself, and the guest_env wrapper drops it inside the container.
+    local native_lib_dir; native_lib_dir="$(dirname "$loader")"
+    LD_LIBRARY_PATH="$native_lib_dir" "${tmo[@]}" "${a[@]}" "${guest_env[@]}" "$@"
+}
+
+# Guarantee the guest has a non-empty /etc/machine-id (and the /var/lib/dbus copy).
+# D-Bus — and the xfconfd D-Bus activation that xfwm4 / xfce4-panel / xfsettingsd all
+# rely on — refuses to run without one; an empty file makes Xfconf fail to initialize
+# and tears the desktop down to just xfdesktop. /etc/machine-id is root-owned, so this
+# MUST run as root inside a proot (a bare host write from uid com.termux, or a session
+# write from uid desktop, both get Permission denied). pd_login with no --user runs as
+# change-id 0:0 = root, which can write it. Idempotent: only (re)generates when empty.
+ensure_machine_id() {
+    local id="$1"
+    # IMPORTANT: keep this function free of the exact legacy provisioning command that
+    # HostScriptCompatibility.normalize() rewrites (the dbus ensure-form). normalize()
+    # blindly .replace()s that substring — anywhere it appears, even in a comment — with
+    # a large bash-only block. Injected mid-`/bin/sh -c` that block blows up dash with a
+    # syntax error; injected into a comment it corrupts the script. So this runs a fresh
+    # generation with plain, POSIX-sh-safe commands (dbus-uuidgen with no --ensure flag).
+    pd_login "$id" --timeout 30 -- /bin/sh -c '
+        mid=""
+        [ -s /etc/machine-id ] && mid="$(cat /etc/machine-id 2>/dev/null)"
+        case "$mid" in
+            *[!0-9a-fA-F]* | "" )
+                mid="$(dbus-uuidgen 2>/dev/null || true)"
+                case "$mid" in *[!0-9a-fA-F]* | "" )
+                    mid="$(tr -dc 0-9a-f < /proc/sys/kernel/random/uuid 2>/dev/null || true)" ;;
+                esac
+                rm -f /etc/machine-id /var/lib/dbus/machine-id 2>/dev/null || true
+                printf "%s\n" "$mid" > /etc/machine-id 2>/dev/null || true ;;
+        esac
+        mkdir -p /var/lib/dbus 2>/dev/null || true
+        cp -f /etc/machine-id /var/lib/dbus/machine-id 2>/dev/null || true
+        printf "machine-id=%s\n" "$(cat /etc/machine-id 2>/dev/null)"
+    '
+}
 
 # True if the named session is alive.
 session_alive() {
@@ -264,7 +422,7 @@ session_kill() {
         if [[ "$pid" =~ ^[0-9]+$ ]]; then
             kill -TERM "$pid" 2>/dev/null || true
         fi
-        rm -f "$(session_pid_file "$session")"
+        rm -f "$(session_pid_file "$session")" "$(desktop_ready_marker)"
     else
         tmux kill-session -t "$session" >/dev/null 2>&1 || true
     fi
@@ -585,7 +743,7 @@ guest_audio_ready() {
     # races cold start and reports a false negative. Retry a few times; each PRoot
     # login already takes ~1-2s, which also paces the daemon settling window.
     for attempt in 1 2 3; do
-        if timeout 6s proot-distro login "$id" --shared-tmp \
+        if pd_login "$id" --timeout 6 --shared-tmp \
             --bind "$PULSE_GUEST_BIND" --user desktop -- \
             /bin/bash -c '
                 test -S /tmp/ldfa-pulse/native || exit 1
@@ -606,7 +764,7 @@ guest_audio_ready() {
 desktop_session_script() {
     cat <<'SESSION'
 #!/bin/bash
-# LDFA_SESSION_RUNTIME_VERSION=29
+# LDFA_SESSION_RUNTIME_VERSION=36
 # Hardened LDFA Session Script
 set -Eeuo pipefail
 
@@ -619,6 +777,11 @@ export LANG=ja_JP.UTF-8
 export LANGUAGE=ja_JP:ja
 export LC_ALL=ja_JP.UTF-8
 export DISPLAY="${DISPLAY:-:1}"
+# The embedded Xorg accepts any client (host-based access), and there is no Xauthority
+# cookie file in this session. GTK/XFCE components otherwise probe $HOME/.Xauthority and
+# can stall/refuse; point XAUTHORITY at /dev/null so they skip cookie auth — exactly what
+# the host's own working X preflights (xset/xprop) already do.
+export XAUTHORITY=/dev/null
 export XDG_SESSION_TYPE=x11
 export XDG_SESSION_DESKTOP=xfce
 export XDG_CURRENT_DESKTOP=XFCE
@@ -699,41 +862,81 @@ mkdir -p \
     "${XDG_STATE_HOME:-$HOME/.local/state}/ldfa"
 chmod 700 "$XDG_RUNTIME_DIR"
 
+# D-Bus (and its service activation — e.g. xfconfd, which xfwm4/xfsettingsd need)
+# refuses to work without a machine-id. On some installs /etc/machine-id ends up empty,
+# which under the single-layer session surfaced as `xfwm4-CRITICAL: Xfconf could not be
+# initialized` and a cascade of GTK-CRITICALs that killed settingsd/wm/panel. Seed it
+# here (idempotent) before the session bus starts. dbus-uuidgen writes 32 hex chars.
+if [[ ! -s /etc/machine-id ]]; then
+    dbus-uuidgen --ensure=/etc/machine-id 2>/dev/null || true
+fi
+if [[ -s /etc/machine-id && ! -s /var/lib/dbus/machine-id ]]; then
+    mkdir -p /var/lib/dbus 2>/dev/null || true
+    cp -f /etc/machine-id /var/lib/dbus/machine-id 2>/dev/null || true
+fi
+
 # Do not restore a killed XFCE session. Chrome has its own bounded crash restore.
 rm -f "$HOME/.cache/sessions"/xfce4-session-* 2>/dev/null || true
 
 DBUS_PID_FILE="$XDG_RUNTIME_DIR/dbus.pid"
 DBUS_SOCK="$XDG_RUNTIME_DIR/bus"
 DBUS_ADDRESS_FILE="$XDG_RUNTIME_DIR/dbus_address"
-if [[ -f "$DBUS_PID_FILE" ]]; then
-    dbus_pid="$(cat "$DBUS_PID_FILE" 2>/dev/null || true)"
-    dbus_name=""
-    if [[ "$dbus_pid" =~ ^[0-9]+$ ]] && [[ -r "/proc/$dbus_pid/comm" ]]; then
-        dbus_name="$(cat "/proc/$dbus_pid/comm" 2>/dev/null || true)"
-    fi
-    if [[ ! "$dbus_pid" =~ ^[0-9]+$ ]] || \
-        ! kill -0 "$dbus_pid" 2>/dev/null || \
-        [[ "$dbus_name" != dbus-daemon ]] || \
-        [[ ! -S "$DBUS_SOCK" ]] || \
-        [[ ! -s "$DBUS_ADDRESS_FILE" ]]; then
-        rm -f "$DBUS_PID_FILE" "$DBUS_SOCK" "$DBUS_ADDRESS_FILE"
-    fi
-fi
+DBUS_LOG="$XDG_RUNTIME_DIR/dbus.log"
 
-if [[ ! -f "$DBUS_PID_FILE" ]]; then
-    dbus-daemon --session --fork --print-address 5 --print-pid 6 \
-        --address="unix:path=$DBUS_SOCK" \
-        5> "$DBUS_ADDRESS_FILE" 6> "$DBUS_PID_FILE"
-    # The forked daemon writes its bus address to fd 5 once it is ready. Poll for
-    # that file to become non-empty instead of a flat 0.5s sleep; the ceiling
-    # (25 * 0.02s = 0.5s) keeps the original worst case so a genuinely stuck
-    # daemon still cannot hang startup, but the common case returns in tens of ms.
-    for _dbus_wait in $(seq 1 25); do
+start_session_dbus() {
+    rm -f "$DBUS_PID_FILE" "$DBUS_SOCK" "$DBUS_ADDRESS_FILE"
+    # Do NOT use `--fork` with fd-5/fd-6 redirection: under the native-library proot the
+    # double-fork daemon does not reliably inherit those redirected fds, so the address
+    # file stayed EMPTY and every XFCE component aborted with "address is empty" while a
+    # stray autolaunch dbus-daemon came up on an unrelated /tmp/dbus-XXXX socket. Instead
+    # run dbus-daemon in the FOREGROUND, capture its --print-address on our own stdout
+    # pipe, background it ourselves, and record the pid. `--nofork --nopidfile` keeps it
+    # our direct child; the proot session tree owns it and reaps it on restart.
+    dbus-daemon --session --nofork --nopidfile --print-address \
+        --address="unix:path=$DBUS_SOCK" > "$DBUS_ADDRESS_FILE" 2>>"$DBUS_LOG" &
+    local _dpid=$!
+    printf '%s\n' "$_dpid" > "$DBUS_PID_FILE"
+    # Wait for the daemon to publish its address (it prints one line, then serves).
+    for _dbus_wait in $(seq 1 100); do
         [[ -s "$DBUS_ADDRESS_FILE" ]] && break
+        kill -0 "$_dpid" 2>/dev/null || { printf '[dbus] daemon exited early\n' >>"$DBUS_LOG"; break; }
         sleep 0.02
     done
+    printf '[dbus] start pid=%s addr=[%s]\n' "$_dpid" "$(cat "$DBUS_ADDRESS_FILE" 2>/dev/null)" >>"$DBUS_LOG"
+}
+
+# Verify the session bus actually ANSWERS, not just that a pid/socket exists. Under
+# the native-library proot the desktop session restarts inside a NEW proot tree each
+# generation; a dbus-daemon from a PRIOR tree is killed with that tree but leaves its
+# pid/socket/address files behind in the shared tmp. The old liveness check (kill -0 +
+# /proc/comm) is unreliable across proot trees (the pid may be reused or invisible in
+# this tree's /proc), so a component could inherit a DEAD bus address and abort with
+# "Failed to connect to the dbus session bus" (SIGTRAP) — the exact cause of XFCE not
+# coming up on targetSdk 35. So actively PROBE the bus and re-fork if it does not reply.
+: > "$DBUS_LOG"
+# Pin the bus address to OUR socket up front so no probe/component ever triggers
+# dbus autolaunch (which would spin up a private bus on a throwaway /tmp/dbus-XXXX
+# socket the rest of the session cannot see — that was exactly the failure: components
+# reported "address is empty" and a stray autolaunch daemon appeared). Then probe THIS
+# address specifically; only if it does not answer do we (re)start our own daemon. This
+# also fixes the case where a prior probe fell through to a dead bus: we now always end
+# up owning a live daemon on $DBUS_SOCK.
+export DBUS_SESSION_BUS_ADDRESS="unix:path=$DBUS_SOCK"
+if ! DBUS_SESSION_BUS_ADDRESS="unix:path=$DBUS_SOCK" \
+        timeout 3s dbus-send --session --dest=org.freedesktop.DBus \
+        /org/freedesktop/DBus org.freedesktop.DBus.ListNames >/dev/null 2>&1; then
+    printf '[dbus] no live bus on %s; starting our own\n' "$DBUS_SOCK" >>"$DBUS_LOG"
+    start_session_dbus
 fi
-export DBUS_SESSION_BUS_ADDRESS="$(cat "$DBUS_ADDRESS_FILE")"
+# Re-probe to confirm the bus now answers; log the outcome so a failure is visible
+# instead of silently letting XFCE come up bus-less.
+if DBUS_SESSION_BUS_ADDRESS="unix:path=$DBUS_SOCK" \
+        timeout 3s dbus-send --session --dest=org.freedesktop.DBus \
+        /org/freedesktop/DBus org.freedesktop.DBus.ListNames >/dev/null 2>&1; then
+    printf '[dbus] session bus LIVE = %s\n' "$DBUS_SESSION_BUS_ADDRESS" >>"$DBUS_LOG"
+else
+    printf '[dbus] session bus DEAD after start; see dbus-daemon stderr above\n' >>"$DBUS_LOG"
+fi
 
 # xfce4-session depends on ICE hard-link locking, which PRoot cannot provide.
 # Starting the XFCE components directly avoids its repeated 8-second auth
@@ -1060,7 +1263,12 @@ launch_settings() {
 }
 
 launch_wm() {
-    xfwm4 --compositor=off --replace >>"$COMPONENT_LOG" 2>&1 &
+    # No --replace: this script already pkills any prior xfwm4/xfce4-session at startup,
+    # so there is no live WM to replace. Under the double proot's slow startup, --replace
+    # made xfwm4 negotiate a WM-selection handover that raced its own init and it exited
+    # early with `Gtk-CRITICAL: gtk_main_quit: assertion 'main_loops != NULL' failed`
+    # (before entering the GTK main loop), so _NET_SUPPORTING_WM_CHECK never published.
+    xfwm4 --compositor=off >>"$COMPONENT_LOG" 2>&1 &
     wm_pid=$!
 }
 
@@ -1097,7 +1305,12 @@ component_pid_running() {
 # the first few polls.
 wait_for_wm() {
     local attempt
-    for attempt in $(seq 1 250); do
+    # Under the native-library proot the desktop runs proot-in-proot (double ptrace
+    # trap), so XFCE's thread/futex-heavy startup is markedly slower than on the legacy
+    # single-proot (tmux) path. 25s was tuned for that fast path; allow up to 90s here so
+    # a slow first compose still finishes instead of looping. wm_ready is an in-session
+    # X round trip (no per-poll proot login), so a long poll is cheap.
+    for attempt in $(seq 1 900); do
         if wm_ready; then
             return 0
         fi
@@ -1138,6 +1351,16 @@ wait_for_wm || {
     printf '[%s] xfwm4 did not publish a root window manager\n' "$(date -Iseconds)" >&2
     exit 71
 }
+
+# Publish a desktop-ready marker for the native-proot host. That host runs cmd_probe
+# in a SEPARATE proot, where a cross-proot desktop check is impossible — `xset` works
+# but `pgrep`/`/proc` cannot see this session's components and hangs. Only THIS script,
+# inside the session's own proot, can truthfully report readiness. XDG_RUNTIME_DIR is
+# /tmp/runtime-desktop, which --shared-tmp maps to the host's $PREFIX/tmp, so the host
+# reads it there. Cleared on EXIT below so the marker reflects the LIVE desktop only.
+LDFA_READY_MARKER="$XDG_RUNTIME_DIR/ldfa-desktop-ready"
+: > "$LDFA_READY_MARKER" 2>/dev/null || true
+trap 'rm -f "$LDFA_READY_MARKER" 2>/dev/null || true' EXIT
 
 # Now that the desktop is usable, run the Electron sandbox/scale .desktop sweep
 # off the critical path. It is fire-and-forget: it only rewrites user-level
@@ -1247,7 +1470,7 @@ SESSION
 
 desktop_runtime_ready() {
     local id="$1"
-    timeout 4s proot-distro login "$id" -- /bin/bash -c \
+    pd_login "$id" --timeout 4 -- /bin/bash -c \
         'test -x /usr/local/bin/ldfa-session &&
          grep -Fqx "$1" /usr/local/bin/ldfa-session &&
          # fish users need the /etc/fish/conf.d snippet too (fish ignores the bash
@@ -1265,7 +1488,7 @@ ensure_desktop_runtime() {
     desktop_runtime_ready "$id" && return 0
 
     unset PROOT_NO_SECCOMP
-    desktop_session_script | proot-distro login "$id" -- /bin/bash -c '
+    desktop_session_script | pd_login "$id" -- /bin/bash -c '
         set -Eeuo pipefail
         install -d -m 0755 /usr/local/bin
         temporary="/usr/local/bin/.ldfa-session.$$"
@@ -1306,7 +1529,7 @@ ensure_desktop_runtime() {
         # side effects); -p prepends so ~/.local/bin wins, matching bash.
         install -d -m 0755 /etc/fish/conf.d
         cat > /etc/fish/conf.d/00-ldfa.fish <<'"'"'LDFA_FISH'"'"'
-# LDFA_SESSION_RUNTIME_VERSION=29
+# LDFA_SESSION_RUNTIME_VERSION=36
 # Managed by LDFA. fish ignores ~/.profile and ~/.bashrc, so the PATH and env
 # LDFA sets for bash are re-applied here for fish users. conf.d is sourced in
 # every fish mode (login, interactive, script), so no status guard is needed.
@@ -1352,7 +1575,7 @@ ensure_timezone() {
     # builds already install tzdata in CONTAINER_SETUP.
     if [[ ! -f "$rootfs/usr/share/zoneinfo/$tz" ]]; then
         unset PROOT_NO_SECCOMP
-        if ! timeout 300s proot-distro login "$id" -- /usr/bin/env \
+        if ! pd_login "$id" --timeout 300 -- /usr/bin/env \
             DEBIAN_FRONTEND=noninteractive LC_ALL=C.UTF-8 \
             /bin/bash -c 'apt-get -o Acquire::Retries=3 -o Dpkg::Use-Pty=0 update &&
                           apt-get -o Acquire::Retries=3 -o Dpkg::Use-Pty=0 \
@@ -1394,7 +1617,7 @@ audio_client_ready() {
     # passed through the nested proot/bash -c layers, which produced empty output
     # and made this check always fail (forcing a needless apt run every start).
     # Query each package individually with no newline in the format instead.
-    timeout 8s proot-distro login "$id" -- /bin/bash -c \
+    pd_login "$id" --timeout 8 -- /bin/bash -c \
         'for package in pulseaudio-utils libasound2-plugins; do
              [ "$(dpkg-query -W -f='"'"'${Status}'"'"' "$package" 2>/dev/null)" = \
                  "install ok installed" ] || exit 1
@@ -1419,7 +1642,7 @@ ensure_audio_client() {
     fi
 
     unset PROOT_NO_SECCOMP
-    proot-distro login "$id" -- /bin/bash -s <<'AUDIO_CLIENT_SETUP'
+    pd_login "$id" -- /bin/bash -s <<'AUDIO_CLIENT_SETUP'
 set -Eeuo pipefail
 export DEBIAN_FRONTEND=noninteractive
 export LC_ALL=C.UTF-8
@@ -1516,7 +1739,7 @@ AUDIO_CLIENT_SETUP
 
 google_chrome_ready() {
     local id="$1"
-    proot-distro login "$id" -- /bin/bash -c \
+    pd_login "$id" -- /bin/bash -c \
         'test -x /usr/bin/google-chrome-stable &&
          test -x /usr/local/bin/google-chrome-ldfa &&
          test -f /home/desktop/.local/share/applications/google-chrome.desktop &&
@@ -1538,7 +1761,7 @@ ensure_google_chrome() {
     # provisioning time so Chrome remains independently updateable and the APK
     # does not vendor a stale browser binary.
     unset PROOT_NO_SECCOMP
-    proot-distro login "$id" -- /bin/bash -s <<'CHROME_SETUP'
+    pd_login "$id" -- /bin/bash -s <<'CHROME_SETUP'
 set -Eeuo pipefail
 export DEBIAN_FRONTEND=noninteractive
 export LC_ALL=C.UTF-8
@@ -1705,7 +1928,7 @@ CHROME_SETUP
 
 nodejs_ready() {
     local id="$1"
-    proot-distro login "$id" -- /bin/bash -c \
+    pd_login "$id" -- /bin/bash -c \
         'test -x /opt/nodejs/bin/node &&
          test -x /opt/nodejs/bin/npm &&
          test -x /usr/local/bin/node &&
@@ -1751,7 +1974,7 @@ ensure_nodejs() {
     NODEJS_SHA256_x64="$NODEJS_SHA256_x64" \
     NODEJS_SHA256_arm64="$NODEJS_SHA256_arm64" \
     NODEJS_MARKER="$NODEJS_MARKER" \
-    proot-distro login "$id" -- /usr/bin/env \
+    pd_login "$id" -- /usr/bin/env \
         NODEJS_VERSION="$NODEJS_VERSION" \
         NODEJS_SHA256_x64="$NODEJS_SHA256_x64" \
         NODEJS_SHA256_arm64="$NODEJS_SHA256_arm64" \
@@ -1893,7 +2116,7 @@ NODEJS_SETUP
 
 mark_chrome_for_restore_if_running() {
     local id="$1"
-    timeout 4s proot-distro login "$id" --user desktop -- /bin/bash -c '
+    pd_login "$id" --timeout 4 --user desktop -- /bin/bash -c '
         state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/ldfa"
         if pgrep -x chrome >/dev/null 2>&1 ||
             pgrep -x google-chrome >/dev/null 2>&1 ||
@@ -1906,7 +2129,7 @@ mark_chrome_for_restore_if_running() {
 
 clear_chrome_restore_marker() {
     local id="$1"
-    timeout 4s proot-distro login "$id" --user desktop -- /bin/rm -f \
+    pd_login "$id" --timeout 4 --user desktop -- /bin/rm -f \
         /home/desktop/.local/state/ldfa/chrome-running \
         >/dev/null 2>&1 || true
 }
@@ -1914,7 +2137,7 @@ clear_chrome_restore_marker() {
 request_chrome_restore_if_needed() {
     local id="$1" result settings_pid="" settings_name="" parent_pid=""
     local -a parent_args=()
-    result="$(timeout 4s proot-distro login "$id" --user desktop -- /bin/bash -c '
+    result="$(pd_login "$id" --timeout 4 --user desktop -- /bin/bash -c '
         state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/ldfa"
         marker="$state_dir/chrome-running"
         request="$state_dir/chrome-restore-request"
@@ -2214,7 +2437,7 @@ worker_install() {
     # Keep PRoot's syscall-trace acceleration enabled in Android app processes.
     # Forcing it off exposes guest syscalls to the app seccomp policy as ENOSYS.
     unset PROOT_NO_SECCOMP
-    proot-distro login "$id" --bind "$shared:/mnt/android" -- \
+    pd_login "$id" --bind "$shared:/mnt/android" -- \
         /usr/bin/env LDFA_TZ="$(host_timezone)" \
             LDFA_KEYBOARD_LAYOUT="$(read_meta "$id" keyboard_layout jis)" \
             /bin/bash -s <<'CONTAINER_SETUP'
@@ -2413,7 +2636,7 @@ desktop_ready_once() {
     session_alive "$(run_session "$id")" || return 1
     [[ -S "$PREFIX/tmp/.X11-unix/X${display}" ]] || return 1
 
-    timeout 3s proot-distro login "$id" --shared-tmp --user desktop -- \
+    pd_login "$id" --timeout 3 --shared-tmp --user desktop -- \
         /usr/bin/env DISPLAY=":$display" XAUTHORITY=/dev/null \
         /bin/bash -c '
             visible_client_class() {
@@ -2445,7 +2668,7 @@ desktop_ready_once() {
 
 desktop_process_snapshot() {
     local id="$1"
-    timeout 3s proot-distro login "$id" -- /bin/bash -c \
+    pd_login "$id" --timeout 3 -- /bin/bash -c \
         '/bin/ps -eo comm= 2>/dev/null | /usr/bin/sort -u | /usr/bin/paste -sd, -' \
         2>/dev/null || true
 }
@@ -2565,7 +2788,7 @@ apps_provisioned_fingerprint() {
 # "chrome=1|0" and "node=1|0".
 apps_combined_ready() {
     local id="$1"
-    timeout 8s proot-distro login "$id" -- /bin/bash -c '
+    pd_login "$id" --timeout 8 -- /bin/bash -c '
         audio_marker="$1"; runtime_marker="$2"; chrome_marker="$3"; node_marker="$4"
         for package in pulseaudio-utils libasound2-plugins; do
             [ "$(dpkg-query -W -f='"'"'${Status}'"'"' "$package" 2>/dev/null)" = \
@@ -2701,6 +2924,9 @@ worker_run() {
     if native_proot_mode; then
         mkdir -p "$RUN_ROOT"
         printf '%s\n' "$$" > "$(session_pid_file "$(run_session "$id")")"
+        # A stale ready marker from a previous generation must not fool the next
+        # probe. The guest session re-creates it after its own wait_for_wm succeeds.
+        rm -f "$(desktop_ready_marker)"
     fi
     DISPLAY_NUMBER="$display_number"
     X11_SOCKET="$PREFIX/tmp/.X11-unix/X${DISPLAY_NUMBER}"
@@ -2741,7 +2967,12 @@ worker_run() {
             "$(date -Iseconds)" >&2
     fi
 
-    while [[ ! -S "$X11_SOCKET" ]] && (( wait_count < 40 )); do
+    # The embedded Xorg (Xlorie) is brought up by the app's native service in
+    # parallel with this worker; on ARM its first cold start measured ~33s, so the
+    # old 20s (40×0.5) budget expired before the X1 socket appeared and the worker
+    # died "X11 socket is unavailable". Wait up to 60s (120×0.5) — the socket is
+    # visible to this proot once created (verified) and stop_file still breaks early.
+    while [[ ! -S "$X11_SOCKET" ]] && (( wait_count < 120 )); do
         [[ -f "$(stop_file "$id")" ]] && exit 0
         set_status "$id" starting 100 "内蔵X11表示サーバーを待っています…"
         sleep 0.5
@@ -2751,7 +2982,7 @@ worker_run() {
     [[ -S "$X11_SOCKET" ]] || die "X11 socket is unavailable; refusing to start XFCE"
     for xset_attempt in $(seq 1 20); do
         [[ -f "$(stop_file "$id")" ]] && exit 0
-        if proot-distro login "$id" --shared-tmp --user desktop -- \
+        if pd_login "$id" --shared-tmp --user desktop -- \
             /usr/bin/env DISPLAY=":$DISPLAY_NUMBER" XAUTHORITY=/dev/null \
             /usr/bin/xset q >/dev/null 2>&1; then
             xset_ready=1
@@ -2761,44 +2992,55 @@ worker_run() {
     done
     [[ "$xset_ready" == 1 ]] || die "display preflight xset failed; refusing to start XFCE"
 
+    # Native-proot readiness is published by the GUEST session script itself, from
+    # inside the session's own proot (the only place pgrep/_NET checks work), right
+    # after its wait_for_wm succeeds. cmd_probe stats that shared-tmp marker. Nothing
+    # to start here — a host-side watcher would run in a separate proot and could not
+    # see the session's components (verified: cross-proot pgrep hangs).
+
+    # Re-sync timezone once before publishing the session request. A single readlink
+    # when already in sync (0 PRoot logins).
+    ensure_timezone "$id" >> "$(log_file "$id")" 2>&1 || true
+    session_tz="$(session_timezone "$id" 2>/dev/null || true)"
+
+    # Seed the guest machine-id. D-Bus (and the xfconfd activation that xfwm4/panel/
+    # xfsettingsd depend on) refuses to run without a non-empty /etc/machine-id; when it
+    # was empty the whole `Xfconf could not be initialized` cascade killed 3 of the 4 XFCE
+    # components. /etc/machine-id is root-owned, so NEITHER the host (uid com.termux) NOR
+    # the single-layer session (uid desktop) can write it — only a root context inside a
+    # proot can. So do it here with a one-shot pd_login as root (no --user ⇒ change-id
+    # 0:0). This nests proot-in-proot briefly, but it's a single dbus-uuidgen, not a
+    # long-lived process, so the double-proot slowness that plagues the DESKTOP does not
+    # matter for this sub-second command.
+    ensure_machine_id "$id" >> "$(log_file "$id")" 2>&1 || true
+
+    # DON'T launch ldfa-session from HERE: we are inside the outer (host-transparent)
+    # proot, so a pd_login here nests proot-in-proot and XFCE stalls (~125s, never
+    # composes). Instead publish a session request the APP reads, and it spawns the
+    # desktop as its OWN single native-proot layer (ProotWorkerLauncher.startSession)
+    # running the `session-run` verb — single-layer, XFCE composes in ~1s (measured).
+    # The request carries exactly the env the guest session needs; the app also binds
+    # $shared:/mnt/android and the PulseAudio socket on that single layer.
+    {
+        printf 'ROOTFS=%s\n' "$(rootfs_dir "$id")"
+        printf 'CHANGE_ID=%s\n' "$(pd_login_uidgid "$(rootfs_dir "$id")" desktop)"
+        printf 'DISPLAY_NUMBER=%s\n' "$DISPLAY_NUMBER"
+        printf 'PULSE_GUEST_SERVER=%s\n' "$PULSE_GUEST_SERVER"
+        printf 'PULSE_GUEST_BIND=%s\n' "$PULSE_GUEST_BIND"
+        printf 'SHARED=%s\n' "$shared"
+        printf 'LDFA_SCALE=%s\n' "$(read_meta "$id" scale 100)"
+        printf 'LDFA_KEYBOARD_LAYOUT=%s\n' "$(read_meta "$id" keyboard_layout jis)"
+        [[ -n "$session_tz" ]] && printf 'TZ=%s\n' "$session_tz"
+    } > "$(session_request_file "$(run_session "$id")")"
+
     set_status "$id" running 100 "Linuxデスクトップを実行中"
+    # Host-side supervisor: stay alive (holding the wake lock and the audio bridge) until
+    # the desktop is stopped. The app owns the single-layer session Process; we only need
+    # to keep this outer worker running so its proot (and thus the shared state) persists.
     while [[ ! -f "$(stop_file "$id")" ]]; do
-        printf '[%s] launching Linux session\n' "$(date -Iseconds)"
-        # Re-sync on every session start so device moves and DST changes are
-        # picked up. When already in sync this is a single readlink (0 PRoot logins).
-        ensure_timezone "$id" >> "$(log_file "$id")" 2>&1 || true
-        session_env=()
-        session_tz="$(session_timezone "$id" 2>/dev/null || true)"
-        if [[ -n "$session_tz" ]]; then
-            session_env=("TZ=$session_tz")
-        fi
-        set +e
-        # Clean environment before entering PRoot
-        unset LD_PRELOAD
-        unset LD_LIBRARY_PATH
-        unset PROOT_NO_SECCOMP
-
-        # Use env -u to ensure child processes within PRoot don't inherit Termux preloads.
-        # --bind exposes the app-private PulseAudio bridge socket at /tmp/ldfa-pulse
-        # independently of --shared-tmp, so desktop audio survives proot's tmp churn.
-        proot-distro login "$id" --shared-tmp --bind "$shared:/mnt/android" \
-            --bind "$PULSE_GUEST_BIND" --user desktop -- \
-            /usr/bin/env -u LD_PRELOAD -u LD_LIBRARY_PATH \
-                DISPLAY=":$DISPLAY_NUMBER" GTK_IM_MODULE=fcitx QT_IM_MODULE=fcitx \
-                XMODIFIERS=@im=fcitx PULSE_SERVER="$PULSE_GUEST_SERVER" \
-                ${session_env[@]+"${session_env[@]}"} \
-                LDFA_SCALE="$(read_meta "$id" scale 100)" \
-                LDFA_KEYBOARD_LAYOUT="$(read_meta "$id" keyboard_layout jis)" \
-                /usr/local/bin/ldfa-session
-        rc=$?
-        set -e
-
-        [[ -f "$(stop_file "$id")" ]] && break
-        printf '[%s] session exited (%s); restarting in 1 second\n' "$(date -Iseconds)" "$rc"
-        set_status "$id" starting 100 "セッションを自動復旧しています…"
-        sleep 1
-        set_status "$id" running 100 "Linuxデスクトップを実行中"
+        sleep 2
     done
+    rm -f "$(session_request_file "$(run_session "$id")")"
 
     set_status "$id" ready 100 "Linuxデスクトップを起動できます"
     termux-wake-unlock >/dev/null 2>&1 || true
@@ -2806,6 +3048,7 @@ worker_run() {
         rm -f "$(active_file)"
     fi
 }
+
 
 cmd_stop() {
     local id="${1:-}" preserve_chrome_restore="${2:-0}"
@@ -2858,7 +3101,7 @@ cmd_set_scale() {
     unset PROOT_NO_SECCOMP
     LDFA_APPLY_DPI="$dpi" LDFA_APPLY_CUR="$cur" LDFA_APPLY_PAN="$pan" \
     LDFA_APPLY_ICO="$ico" LDFA_APPLY_GSF="$gsf" \
-    proot-distro login "$id" --user desktop -- /usr/bin/env \
+    pd_login "$id" --user desktop -- /usr/bin/env \
         DISPLAY=":$display" \
         LDFA_APPLY_DPI="$dpi" LDFA_APPLY_CUR="$cur" LDFA_APPLY_PAN="$pan" \
         LDFA_APPLY_ICO="$ico" LDFA_APPLY_GSF="$gsf" \
@@ -2902,7 +3145,7 @@ cmd_set_keymap() {
     display="$(read_meta "$id" display "$DEFAULT_DISPLAY_NUMBER")"
     unset PROOT_NO_SECCOMP
     LDFA_KM_MODEL="$model" LDFA_KM_XKB="$xkb" LDFA_KM_FCITX="$fcitx" \
-    proot-distro login "$id" --user desktop -- /usr/bin/env \
+    pd_login "$id" --user desktop -- /usr/bin/env \
         DISPLAY=":$display" \
         LDFA_KM_MODEL="$model" LDFA_KM_XKB="$xkb" LDFA_KM_FCITX="$fcitx" \
         /bin/bash -c '
@@ -2940,7 +3183,7 @@ cmd_restore_cleanup() {
     container_exists "$id" || die "復元されたDebian環境が見つかりません。"
 
     unset PROOT_NO_SECCOMP
-    proot-distro login "$id" -- /bin/bash -c '
+    pd_login "$id" -- /bin/bash -c '
         set +e
         rm -rf /tmp/* /run/* /var/run/* 2>/dev/null
         rm -f /tmp/.X*-lock 2>/dev/null
@@ -2968,11 +3211,32 @@ cmd_restore_cleanup() {
 }
 
 cmd_probe() {
-    local id="${1:-}" display attempt
+    local id="${1:-}" display attempt session
     validate_id "$id"
     display="$(read_meta "$id" display "$DEFAULT_DISPLAY_NUMBER")"
     validate_display_number "$display"
-    session_alive "$(run_session "$id")" || die "Linuxデスクトップworkerが停止しています。"
+    session="$(run_session "$id")"
+    session_alive "$session" || die "Linuxデスクトップworkerが停止しています。"
+
+    # Native-proot mode: probing the desktop from this (separate) proot tree cannot
+    # work — xset reaches X but pgrep/_NET checks can't see the session's components
+    # and hang — so read the marker the GUEST session script wrote after ITS own
+    # wait_for_wm. The wait must cover the WHOLE cold chain — embedded Xorg cold start
+    # (~33s on ARM) + the desktop's first compose, which is slow under the double proot
+    # (wait_for_wm now allows 90s) — so allow ~175s (700×0.25), just inside the app's
+    # 180s native probe timeout. stop/worker-death still break early.
+    if native_proot_mode; then
+        for attempt in $(seq 1 700); do
+            if [[ -f "$(desktop_ready_marker)" ]]; then
+                say "desktop_ready=1"
+                say "display=:$display"
+                return 0
+            fi
+            session_alive "$session" || break
+            sleep 0.25
+        done
+        die "XFCE window managerがDISPLAY=:$displayで起動完了しませんでした。"
+    fi
 
     for attempt in $(seq 1 80); do
         if desktop_ready_once "$id" "$display"; then
@@ -2980,7 +3244,7 @@ cmd_probe() {
             say "display=:$display"
             return 0
         fi
-        session_alive "$(run_session "$id")" || break
+        session_alive "$session" || break
         sleep 0.25
     done
     die "XFCE window managerがDISPLAY=:$displayで起動完了しませんでした。"

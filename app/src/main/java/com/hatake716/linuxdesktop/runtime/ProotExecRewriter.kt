@@ -33,13 +33,14 @@ object ProotExecRewriter {
                 } else {
                     emptyList()
                 }
-                return runtime.wrap(command.toList(), rootfs = null, binds = binds).toTypedArray()
+                val wrapped = runtime.wrap(command.toList(), rootfs = null, binds = binds)
+                return wrapped.toTypedArray()
             }
 
             override fun rewriteEnvironment(environment: Array<String>, originalCommand: Array<String>): Array<String> {
                 if (originalCommand.isNotEmpty()) {
                     val exe = originalCommand[0]
-                    if (exe.endsWith("/libproot.so") || exe.endsWith("/proot")) return environment
+                    if (exe.endsWith("/libpdrt.so") || exe.endsWith("/proot")) return environment
                 }
                 val additions = runtime.environment()
                 if (additions.isEmpty()) return environment

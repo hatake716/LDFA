@@ -52,6 +52,9 @@ class LinuxDesktopRepository(private val context: Context) {
     private val prootWorkerLauncher =
         com.hatake716.linuxdesktop.runtime.ProotWorkerLauncher.from(context)
     private val prootWorkers = java.util.concurrent.ConcurrentHashMap<String, Process>()
+    // The desktop session's single-layer proot Process (native path). Held separately
+    // from the worker so stop tears down both; destroying it kills XFCE.
+    private val prootSessions = java.util.concurrent.ConcurrentHashMap<String, Process>()
     private val x11LifecycleMutex = GLOBAL_DISPLAY_LIFECYCLE_MUTEX
     private var termuxServiceLease: ServiceConnection? = null
     private val hostScript: String by lazy {
@@ -227,6 +230,10 @@ class LinuxDesktopRepository(private val context: Context) {
             } catch (throwable: Throwable) {
                 failure = throwable
             } finally {
+                // Reap the native single-layer desktop and worker Processes (no-op on the
+                // legacy path). The host `stop` sets the stop file, but the app owns these
+                // Processes, so it must destroy them to tear the proots down.
+                teardownNativeProot(id)
                 if (ownsDisplay) {
                     withContext(NonCancellable) {
                         try {
@@ -1062,10 +1069,19 @@ class LinuxDesktopRepository(private val context: Context) {
         // the worker (it can't outlive its short-lived proot). Launch it here under
         // its own persistent proot and hold the process so it stays alive.
         launchNativeProotWorkerIfNeeded(id)
+        // The worker does host prep (audio, X1 wait, xset preflight) then publishes a
+        // session request. Launch the DESKTOP as its OWN single native-proot layer — one
+        // layer deep, not nested in the worker's proot — so XFCE composes in ~1s instead
+        // of stalling. The guest session then publishes the ready marker cmd_probe waits on.
+        launchNativeProotSessionIfNeeded(id)
+        // Native-proot startup is slower end-to-end (embedded Xorg cold-start ~33s on ARM
+        // before XFCE can compose and publish the ready marker). 45s is not enough
+        // headroom, so allow 120s on the native path. The legacy tmux path keeps 45s.
+        val probeTimeout = if (prootWorkerLauncher.usable) 180.seconds else 45.seconds
         commandClient.runInstalledHost(
             action = "probe",
             arguments = listOf(id),
-            timeout = 45.seconds,
+            timeout = probeTimeout,
         )
         Log.i(LIFECYCLE_LOG_TAG, "host desktop probe ready id=$id")
     }
@@ -1081,6 +1097,49 @@ class LinuxDesktopRepository(private val context: Context) {
         } else {
             Log.w(LIFECYCLE_LOG_TAG, "native-proot worker launch returned null id=$id")
         }
+    }
+
+    /**
+     * Once the worker publishes its session request (host prep done: audio, X1, xset
+     * preflight), launch the desktop as its OWN single native-proot layer and hold the
+     * Process. One layer deep (not nested in the worker's proot) is what lets XFCE
+     * compose in ~1s. Destroyed on stop alongside the worker.
+     */
+    private fun launchNativeProotSessionIfNeeded(id: String) {
+        if (!prootWorkerLauncher.usable) return
+        prootSessions[id]?.let { if (it.isAlive) return }
+        val request = prootWorkerLauncher.sessionRequestFile(id)
+        // The worker writes the request after its X1-wait (~33s cold) + xset preflight.
+        // Poll up to ~90s; the overall probe timeout (180s) still bounds the whole start.
+        var waited = 0
+        while (!request.isFile && waited < 90_000) {
+            if (prootWorkers[id]?.isAlive == false) {
+                Log.w(LIFECYCLE_LOG_TAG, "native-proot worker died before session request id=$id")
+                return
+            }
+            Thread.sleep(500); waited += 500
+        }
+        if (!request.isFile) {
+            Log.w(LIFECYCLE_LOG_TAG, "session request never appeared id=$id")
+            return
+        }
+        val process = prootWorkerLauncher.startSession(id)
+        if (process != null) {
+            prootSessions[id] = process
+            Log.i(LIFECYCLE_LOG_TAG, "native-proot session launched (single-layer) id=$id")
+        } else {
+            Log.w(LIFECYCLE_LOG_TAG, "native-proot session launch returned null id=$id")
+        }
+    }
+
+    /**
+     * Destroy the native-proot session and worker Processes for [id] and drop them from
+     * their maps. Called on stop so the single-layer desktop proot (and the outer worker
+     * proot) are reaped instead of lingering. Safe to call when nothing is running.
+     */
+    private fun teardownNativeProot(id: String) {
+        prootSessions.remove(id)?.destroyForcibly()
+        prootWorkers.remove(id)?.destroyForcibly()
     }
 
     private fun readMetaDisplay(id: String): Int {
