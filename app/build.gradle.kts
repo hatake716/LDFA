@@ -12,7 +12,7 @@ android {
     defaultConfig {
         applicationId = "com.termux"
         minSdk = 26
-        targetSdk = 28
+        targetSdk = 35
         versionCode = 20
         versionName = "1.1.0"
 
@@ -67,7 +67,7 @@ android {
     }
 
     packaging {
-        jniLibs.useLegacyPackaging = false
+        jniLibs.useLegacyPackaging = true
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
         resources.excludes += "/META-INF/DEPENDENCIES"
     }
