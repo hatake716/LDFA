@@ -4,6 +4,17 @@
 set -Eeuo pipefail
 
 VERSION="1.1.0"
+
+# Termux normally exports these, but a worker launched via `setsid` from inside a
+# native-library proot (the Google Play / targetSdk-35 path) can start with a bare
+# environment, and `set -u` would then abort at the first `$PREFIX` use. Fall back
+# to the fixed Termux prefix paths. Harmless when already set (the `:-` keeps the
+# existing value), so the normal tmux/targetSdk-28 path is unaffected.
+PREFIX="${PREFIX:-/data/data/com.termux/files/usr}"
+HOME="${HOME:-/data/data/com.termux/files/home}"
+TMPDIR="${TMPDIR:-$PREFIX/tmp}"
+export PREFIX HOME TMPDIR
+
 LINUX_IMAGE="debian:12"
 BASE="${XDG_DATA_HOME:-$HOME/.local/share}/linux-desktop-for-android"
 BIN_DIR="$BASE/bin"
@@ -208,6 +219,55 @@ encode() {
 
 tmux_alive() {
     has tmux && tmux has-session -t "$1" 2>/dev/null
+}
+
+# --- Session backend (tmux vs setsid+PID) --------------------------------
+# On a Google-Play / targetSdk>=29 build the whole host script runs inside a
+# native-library proot (W^X). tmux CANNOT be used there: its server double-forks
+# and re-execs itself, escaping proot's ptrace, so the re-exec hits W^X and the
+# server dies instantly. Under proot we instead launch the worker with `setsid`
+# (which stays inside proot — verified) and track it by PID file. LDFA signals
+# this mode by exporting LDFA_NATIVE_PROOT=1. Everywhere else, tmux is unchanged.
+session_pid_file() { printf '%s/%s.pid' "$RUN_ROOT" "$1"; }
+
+native_proot_mode() { [[ "${LDFA_NATIVE_PROOT:-0}" == 1 ]]; }
+
+# True if the named session is alive.
+session_alive() {
+    local session="$1"
+    if native_proot_mode; then
+        local pid; pid="$(cat "$(session_pid_file "$session")" 2>/dev/null || true)"
+        [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null
+    else
+        tmux_alive "$session"
+    fi
+}
+
+# Start a detached worker session running: "$@".
+session_start() {
+    local session="$1"; shift
+    if native_proot_mode; then
+        mkdir -p "$RUN_ROOT"
+        # setsid detaches without leaving proot; record the PID for liveness/stop.
+        setsid "$@" >/dev/null 2>&1 &
+        printf '%s\n' "$!" > "$(session_pid_file "$session")"
+    else
+        tmux new-session -d -s "$session" "$@"
+    fi
+}
+
+# Stop the named session. Prints the worker PID (best effort) before killing.
+session_kill() {
+    local session="$1"
+    if native_proot_mode; then
+        local pid; pid="$(cat "$(session_pid_file "$session")" 2>/dev/null || true)"
+        if [[ "$pid" =~ ^[0-9]+$ ]]; then
+            kill -TERM "$pid" 2>/dev/null || true
+        fi
+        rm -f "$(session_pid_file "$session")"
+    else
+        tmux kill-session -t "$session" >/dev/null 2>&1 || true
+    fi
 }
 
 container_exists() {
@@ -1905,9 +1965,14 @@ stop_one() {
     set_status "$id" stopping 100 "Linuxデスクトップを停止しています…"
     touch "$(stop_file "$id")"
 
-    if tmux_alive "$session"; then
-        worker_pid="$(tmux list-panes -t "$session" -F '#{pane_pid}' 2>/dev/null | head -n 1 || true)"
-        tmux kill-session -t "$session" >/dev/null 2>&1 || true
+    if session_alive "$session"; then
+        # Grab the worker PID before killing so we can wait for it to exit.
+        if native_proot_mode; then
+            worker_pid="$(cat "$(session_pid_file "$session")" 2>/dev/null || true)"
+        else
+            worker_pid="$(tmux list-panes -t "$session" -F '#{pane_pid}' 2>/dev/null | head -n 1 || true)"
+        fi
+        session_kill "$session"
         if [[ "$worker_pid" =~ ^[0-9]+$ ]]; then
             for attempt in $(seq 1 40); do
                 kill -0 "$worker_pid" 2>/dev/null || break
@@ -1937,7 +2002,7 @@ stop_other_desktops() {
         id="$(basename "$dir")"
         [[ "$id" == "$keep" ]] && continue
         state="$(read_meta "$id" state unknown)"
-        if [[ "$state" == running || "$state" == starting ]] || tmux_alive "$(run_session "$id")"; then
+        if [[ "$state" == running || "$state" == starting ]] || session_alive "$(run_session "$id")"; then
             stop_one "$id"
         fi
     done
@@ -2034,7 +2099,7 @@ cmd_list() {
         display="$(read_meta "$id" display "$DEFAULT_DISPLAY_NUMBER")"
         created="$(read_meta "$id" created_at 0)"
         alive=0
-        if tmux_alive "$(install_session "$id")" || tmux_alive "$(run_session "$id")"; then
+        if session_alive "$(install_session "$id")" || session_alive "$(run_session "$id")"; then
             alive=1
         fi
         printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
@@ -2048,9 +2113,9 @@ start_install_worker() {
     local id="$1" session
     validate_id "$id"
     session="$(install_session "$id")"
-    tmux_alive "$session" && return 0
+    session_alive "$session" && return 0
     rm -f "$(stop_file "$id")"
-    tmux new-session -d -s "$session" "$SELF" worker-install "$id"
+    session_start "$session" "$SELF" worker-install "$id"
 }
 
 cmd_create() {
@@ -2322,9 +2387,9 @@ start_run_worker() {
     validate_id "$id"
     validate_display_number "$display_number"
     session="$(run_session "$id")"
-    tmux_alive "$session" && return 0
+    session_alive "$session" && return 0
     rm -f "$(stop_file "$id")"
-    tmux new-session -d -s "$session" \
+    session_start "$session" \
         env LDFA_DISPLAY_NUMBER="$display_number" "$SELF" worker-run "$id" "$display_number"
 }
 
@@ -2332,7 +2397,7 @@ desktop_ready_once() {
     local id="$1" display="${2:-$(read_meta "$1" display "$DEFAULT_DISPLAY_NUMBER")}"
     validate_id "$id"
     validate_display_number "$display"
-    tmux_alive "$(run_session "$id")" || return 1
+    session_alive "$(run_session "$id")" || return 1
     [[ -S "$PREFIX/tmp/.X11-unix/X${display}" ]] || return 1
 
     timeout 3s proot-distro login "$id" --shared-tmp --user desktop -- \
@@ -2394,7 +2459,7 @@ recover_desktop_session() {
     # strict health miss must not tear down the replacement processes while
     # their windows are still mapping. Give the lightweight repair a bounded
     # two-second grace period before escalating to a whole-session restart.
-    if [[ "$force_rebuild" == 0 ]] && tmux_alive "$(run_session "$id")" && \
+    if [[ "$force_rebuild" == 0 ]] && session_alive "$(run_session "$id")" && \
         [[ -S "$PREFIX/tmp/.X11-unix/X${display}" ]]; then
         for attempt in $(seq 1 8); do
             sleep 0.25
@@ -2405,7 +2470,7 @@ recover_desktop_session() {
                 say "desktop_recovered=1"
                 return 0
             fi
-            tmux_alive "$(run_session "$id")" || break
+            session_alive "$(run_session "$id")" || break
         done
     fi
 
@@ -2441,7 +2506,7 @@ recover_desktop_session() {
             say "desktop_recovered=1"
             return 0
         fi
-        tmux_alive "$(run_session "$id")" || break
+        session_alive "$(run_session "$id")" || break
         sleep 0.25
     done
 
@@ -2732,8 +2797,8 @@ cmd_delete() {
     [[ -d "$(meta_dir "$id")" ]] || die "環境が見つかりません。"
 
     stop_one "$id"
-    if tmux_alive "$(install_session "$id")"; then
-        tmux kill-session -t "$(install_session "$id")" >/dev/null 2>&1 || true
+    if session_alive "$(install_session "$id")"; then
+        session_kill "$(install_session "$id")"
     fi
     if container_exists "$id"; then
         proot-distro remove "$id"
@@ -2758,7 +2823,7 @@ cmd_set_scale() {
     # panel/icons/fonts/cursor update without a restart. The env-derived scales
     # (GDK/QT, GDK_SCALE) only affect newly launched apps; a stop/start reapplies
     # everything from the stored meta.
-    if ! tmux_alive "$(run_session "$id")"; then
+    if ! session_alive "$(run_session "$id")"; then
         say "scale=$percent"
         return 0
     fi
@@ -2806,7 +2871,7 @@ cmd_set_keymap() {
 
     # If a desktop session is live, apply immediately so the layout changes
     # without a restart. A stop/start reapplies everything from the stored meta.
-    if ! tmux_alive "$(run_session "$id")"; then
+    if ! session_alive "$(run_session "$id")"; then
         say "keyboard_layout=$layout"
         return 0
     fi
@@ -2883,7 +2948,7 @@ cmd_probe() {
     validate_id "$id"
     display="$(read_meta "$id" display "$DEFAULT_DISPLAY_NUMBER")"
     validate_display_number "$display"
-    tmux_alive "$(run_session "$id")" || die "Linuxデスクトップworkerが停止しています。"
+    session_alive "$(run_session "$id")" || die "Linuxデスクトップworkerが停止しています。"
 
     for attempt in $(seq 1 80); do
         if desktop_ready_once "$id" "$display"; then
@@ -2891,7 +2956,7 @@ cmd_probe() {
             say "display=:$display"
             return 0
         fi
-        tmux_alive "$(run_session "$id")" || break
+        session_alive "$(run_session "$id")" || break
         sleep 0.25
     done
     die "XFCE window managerがDISPLAY=:$displayで起動完了しませんでした。"
@@ -2954,7 +3019,7 @@ cmd_heartbeat() {
         case "$state" in
             queued|installing)
                 busy=1
-                if ! tmux_alive "$(install_session "$id")"; then
+                if ! session_alive "$(install_session "$id")"; then
                     set_status "$id" queued "$(read_meta "$id" progress 1)" \
                         "中断されたインストールを再開しています…"
                     start_install_worker "$id"
@@ -2979,7 +3044,7 @@ cmd_repair() {
         [[ -d "$dir" ]] || continue
         id="$(basename "$dir")"
         state="$(read_meta "$id" state unknown)"
-        if [[ "$state" == failed ]] && ! tmux_alive "$(run_session "$id")"; then
+        if [[ "$state" == failed ]] && ! session_alive "$(run_session "$id")"; then
             if [[ "$(read_meta "$id" installed 0)" == 1 ]]; then
                 set_status "$id" ready 100 "Linuxデスクトップを起動できます"
             else

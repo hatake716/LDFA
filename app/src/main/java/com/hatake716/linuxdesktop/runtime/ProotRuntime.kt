@@ -71,6 +71,9 @@ class ProotRuntime internal constructor(
             "PROOT_LOADER" to loader.absolutePath,
             "PROOT_TMP_DIR" to prootTmpDir.absolutePath,
             "LD_LIBRARY_PATH" to nativeLibDir.absolutePath,
+            // Tells ldfa-host.sh to use its setsid+PID worker backend instead of
+            // tmux (tmux's server re-exec escapes proot and dies under W^X).
+            "LDFA_NATIVE_PROOT" to "1",
         )
     }
 
