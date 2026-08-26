@@ -86,6 +86,9 @@ dependencies {
 
     implementation(project(":termux-runtime"))
     implementation(project(":embedded-x11"))
+    // Direct dep so the app can register its proot exec-rewriter into
+    // com.termux.shared.shell.ExecInterceptor (Play/targetSdk-35 W^X path).
+    implementation(project(":termux-shared"))
 
     implementation(composeBom)
     androidTestImplementation(composeBom)

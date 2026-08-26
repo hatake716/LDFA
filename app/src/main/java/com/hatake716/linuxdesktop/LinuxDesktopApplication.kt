@@ -62,6 +62,13 @@ class LinuxDesktopApplication : TermuxApplication() {
      */
     @SuppressLint("MissingSuperCall")
     override fun onCreate() {
+        // Route data-dir execs through the native-library proot on Play/targetSdk-35
+        // builds (W^X). No effect when the proot native libs are absent (targetSdk 28).
+        runCatching {
+            val runtime = com.hatake716.linuxdesktop.runtime.ProotRuntime.from(this)
+            val termuxLib = File(filesDir, "usr/lib")
+            com.hatake716.linuxdesktop.runtime.ProotExecRewriter.register(runtime, termuxLib)
+        }
         if (currentProcessName() == "$packageName:x11") return
         super.onCreate()
 
