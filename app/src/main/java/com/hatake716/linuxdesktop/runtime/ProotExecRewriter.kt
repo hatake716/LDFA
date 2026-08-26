@@ -25,7 +25,7 @@ object ProotExecRewriter {
                 if (command.isEmpty()) return command
                 // Never wrap proot with proot (that is the wrapper itself).
                 val exe = command[0]
-                if (exe.endsWith("/libproot.so") || exe.endsWith("/proot")) return command
+                if (exe.endsWith("/libpdrt.so") || exe.endsWith("/proot")) return command
                 // Bind the real Termux lib dir onto the RUNPATH the guest ELFs expect,
                 // so their shared libraries resolve inside proot.
                 val binds = if (termuxLibDir.isDirectory) {

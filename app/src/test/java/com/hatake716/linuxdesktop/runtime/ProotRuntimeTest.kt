@@ -14,7 +14,7 @@ class ProotRuntimeTest {
     private fun libDirWithProot(present: Boolean): File {
         val dir = tmp.newFolder("nativeLib")
         if (present) {
-            for (name in listOf("libproot.so", "libproot-loader.so")) {
+            for (name in listOf("libpdrt.so", "libpdrt-loader.so")) {
                 File(dir, name).apply { writeText("#!"); setExecutable(true) }
             }
         }
@@ -42,7 +42,7 @@ class ProotRuntimeTest {
         val cmd = listOf("/files/usr/bin/bash", "-lc", "id")
         val wrapped = rt.wrap(cmd)
 
-        assertEquals(File(libDir, "libproot.so").absolutePath, wrapped[0])
+        assertEquals(File(libDir, "libpdrt.so").absolutePath, wrapped[0])
         assertEquals("--kill-on-exit", wrapped[1])
         // original command is the tail, unmodified and in order
         assertEquals(cmd, wrapped.takeLast(cmd.size))
@@ -78,7 +78,7 @@ class ProotRuntimeTest {
         val tmpDir = tmp.newFolder("proot-tmp")
         val rt = ProotRuntime(libDir, tmpDir)
         val env = rt.environment()
-        assertEquals(File(libDir, "libproot-loader.so").absolutePath, env["PROOT_LOADER"])
+        assertEquals(File(libDir, "libpdrt-loader.so").absolutePath, env["PROOT_LOADER"])
         assertEquals(libDir.absolutePath, env["LD_LIBRARY_PATH"])
         assertEquals(tmpDir.absolutePath, env["PROOT_TMP_DIR"])
     }

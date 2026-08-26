@@ -75,8 +75,12 @@ class ProotRuntime internal constructor(
     }
 
     companion object {
-        private const val LIB_PROOT = "libproot.so"
-        private const val LIB_PROOT_LOADER = "libproot-loader.so"
+        // NB: the file name must NOT contain "proot". proot-distro refuses to run when
+        // its ptrace tracer's /proc/<pid>/status Name contains "proot" (its nested-proot
+        // guard). The tracer here IS our native proot, so its comm — the .so basename —
+        // must be proot-free. "pdrt" = proot-distro runtime.
+        private const val LIB_PROOT = "libpdrt.so"
+        private const val LIB_PROOT_LOADER = "libpdrt-loader.so"
 
         fun from(context: Context): ProotRuntime {
             val nativeLibDir = File(context.applicationInfo.nativeLibraryDir)
