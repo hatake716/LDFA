@@ -1,0 +1,80 @@
+From 6116bfc2766eb40d2f20de9bf1b80b6e21b09a7a Mon Sep 17 00:00:00 2001
+From: hatake716 <acesmash@gmail.com>
+Date: Thu, 27 Aug 2026 18:10:30 +0900
+Subject: [PATCH 3/4] Rename package constant to com.hatake716.linuxdesktop;
+ immutable PendingIntents
+
+TERMUX_PACKAGE_NAME now carries the Play applicationId, which derives every
+prefix path, RUN_COMMAND action/extra name and content-provider authority in
+termux-shared. TermuxPluginUtils/TermuxCrashUtils notification PendingIntents
+gain FLAG_IMMUTABLE, required at targetSdk 31+ (creating them without a
+mutability flag crashes RunCommandService error reporting).
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+---
+ .../java/com/termux/shared/termux/TermuxConstants.java | 10 ++++++++--
+ .../termux/shared/termux/crash/TermuxCrashUtils.java   |  5 +++--
+ .../shared/termux/plugins/TermuxPluginUtils.java       |  7 +++++--
+ 3 files changed, 16 insertions(+), 6 deletions(-)
+
+diff --git a/termux-shared/src/main/java/com/termux/shared/termux/TermuxConstants.java b/termux-shared/src/main/java/com/termux/shared/termux/TermuxConstants.java
+index 534936ff..6887c40d 100644
+--- a/termux-shared/src/main/java/com/termux/shared/termux/TermuxConstants.java
++++ b/termux-shared/src/main/java/com/termux/shared/termux/TermuxConstants.java
+@@ -348,8 +348,14 @@ public final class TermuxConstants {
+ 
+     /** Termux app name */
+     public static final String TERMUX_APP_NAME = "Termux"; // Default: "Termux"
+-    /** Termux package name */
+-    public static final String TERMUX_PACKAGE_NAME = "com.termux"; // Default: "com.termux"
++    /** Termux package name.
++     * LDFA change: this drives TERMUX_INTERNAL_PRIVATE_APP_DATA_DIR_PATH,
++     * TERMUX_FILES_DIR_PATH and TERMUX_PREFIX_DIR_PATH, and therefore where the
++     * bootstrap installer extracts the userland. It MUST match the app's
++     * applicationId (com.hatake716.linuxdesktop) and the prefix the bootstrap zips
++     * were rebuilt for (/data/data/com.hatake716.linuxdesktop/files/usr), or the
++     * installer writes to a foreign data dir the bootstrap ELFs don't reference. */
++    public static final String TERMUX_PACKAGE_NAME = "com.hatake716.linuxdesktop"; // LDFA: was "com.termux"
+     /** Termux GitHub repo name */
+     public static final String TERMUX_GITHUB_REPO_NAME = "termux-app"; // Default: "termux-app"
+     /** Termux GitHub repo url */
+diff --git a/termux-shared/src/main/java/com/termux/shared/termux/crash/TermuxCrashUtils.java b/termux-shared/src/main/java/com/termux/shared/termux/crash/TermuxCrashUtils.java
+index 1cd4ce06..2ea181e5 100644
+--- a/termux-shared/src/main/java/com/termux/shared/termux/crash/TermuxCrashUtils.java
++++ b/termux-shared/src/main/java/com/termux/shared/termux/crash/TermuxCrashUtils.java
+@@ -342,11 +342,12 @@ public class TermuxCrashUtils implements CrashHandler.CrashHandlerClient {
+         // Must ensure result code for PendingIntents and id for notification are unique otherwise will override previous
+         int nextNotificationId = TermuxNotificationUtils.getNextNotificationId(termuxPackageContext);
+ 
+-        PendingIntent contentIntent = PendingIntent.getActivity(termuxPackageContext, nextNotificationId, result.contentIntent, PendingIntent.FLAG_UPDATE_CURRENT);
++        // targetSdk 31+ (S+) requires FLAG_IMMUTABLE or FLAG_MUTABLE on every PendingIntent.
++        PendingIntent contentIntent = PendingIntent.getActivity(termuxPackageContext, nextNotificationId, result.contentIntent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+ 
+         PendingIntent deleteIntent = null;
+         if (result.deleteIntent != null)
+-            deleteIntent = PendingIntent.getBroadcast(termuxPackageContext, nextNotificationId, result.deleteIntent, PendingIntent.FLAG_UPDATE_CURRENT);
++            deleteIntent = PendingIntent.getBroadcast(termuxPackageContext, nextNotificationId, result.deleteIntent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+ 
+         // Setup the notification channel if not already set up
+         setupCrashReportsNotificationChannel(termuxPackageContext);
+diff --git a/termux-shared/src/main/java/com/termux/shared/termux/plugins/TermuxPluginUtils.java b/termux-shared/src/main/java/com/termux/shared/termux/plugins/TermuxPluginUtils.java
+index cb37ddc3..4b6a1295 100644
+--- a/termux-shared/src/main/java/com/termux/shared/termux/plugins/TermuxPluginUtils.java
++++ b/termux-shared/src/main/java/com/termux/shared/termux/plugins/TermuxPluginUtils.java
+@@ -380,11 +380,14 @@ public class TermuxPluginUtils {
+         // Must ensure result code for PendingIntents and id for notification are unique otherwise will override previous
+         int nextNotificationId = TermuxNotificationUtils.getNextNotificationId(termuxPackageContext);
+ 
+-        PendingIntent contentIntent = PendingIntent.getActivity(termuxPackageContext, nextNotificationId, result.contentIntent, PendingIntent.FLAG_UPDATE_CURRENT);
++        // targetSdk 31+ (S+) requires FLAG_IMMUTABLE or FLAG_MUTABLE on every PendingIntent;
++        // omitting it throws IllegalArgumentException (crashed RunCommandService on the error
++        // path). These intents are not used with inline replies/bubbles, so IMMUTABLE is correct.
++        PendingIntent contentIntent = PendingIntent.getActivity(termuxPackageContext, nextNotificationId, result.contentIntent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+ 
+         PendingIntent deleteIntent = null;
+         if (result.deleteIntent != null)
+-            deleteIntent = PendingIntent.getBroadcast(termuxPackageContext, nextNotificationId, result.deleteIntent, PendingIntent.FLAG_UPDATE_CURRENT);
++            deleteIntent = PendingIntent.getBroadcast(termuxPackageContext, nextNotificationId, result.deleteIntent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+ 
+         // Setup the notification channel if not already set up
+         setupPluginCommandErrorsNotificationChannel(termuxPackageContext);

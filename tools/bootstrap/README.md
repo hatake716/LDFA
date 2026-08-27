@@ -5,9 +5,10 @@
 [termux-packages](https://github.com/termux/termux-packages) からフルソースビルドする手順。
 
 upstream の配布 bootstrap は `com.termux` prefix がバイナリに焼き込まれているため流用できない。
-aarch64 の zip はこの手順の成果物であり、チェックサムは
-[termux-runtime/build.gradle](../../termux-runtime/build.gradle) に固定してある
-（URL からは取得できない — ローカルの zip が唯一のソース）。
+aarch64 の zip はこの手順の成果物であり、**本体リポジトリにコミット済み**
+（vendor/termux-app/.gitignore の否定ルール参照。URL からは取得できないため
+リポジトリが唯一のソース）。チェックサムは
+[termux-runtime/build.gradle](../../termux-runtime/build.gradle) に固定してある。
 
 ## 手順
 

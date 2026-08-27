@@ -1,0 +1,101 @@
+From 3b1c9966ea1f0eab884f6b5b7f11864035ed338c Mon Sep 17 00:00:00 2001
+From: hatake716 <acesmash@gmail.com>
+Date: Thu, 27 Aug 2026 21:43:10 +0900
+Subject: [PATCH 4/4] Never crash on background foreground-service denials
+ (Android 12+)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+With the app in the background (user pressed Home mid-operation), Android
+throws ForegroundServiceStartNotAllowedException both when RunCommandService
+promotes itself in onStartCommand and at RunCommandService's
+startForegroundService(TermuxService) dispatch — each was uncaught on the
+main thread and killed the whole app, then crash-looped once via the service
+restart. Guard all three sites: the two runStartForeground() promotions log
+and continue un-promoted (RunCommandService is started with plain
+startService so no startForeground obligation remains; TermuxService stays
+alive via the app's bind), and the TermuxService dispatch falls back to
+startService(), dropping the single command only if even that is denied.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+---
+ .../com/termux/app/RunCommandService.java     | 34 +++++++++++++++++--
+ .../java/com/termux/app/TermuxService.java    | 12 ++++++-
+ 2 files changed, 43 insertions(+), 3 deletions(-)
+
+diff --git a/app/src/main/java/com/termux/app/RunCommandService.java b/app/src/main/java/com/termux/app/RunCommandService.java
+index 635f2810..542b65a5 100644
+--- a/app/src/main/java/com/termux/app/RunCommandService.java
++++ b/app/src/main/java/com/termux/app/RunCommandService.java
+@@ -231,7 +231,26 @@ public class RunCommandService extends Service {
+ 
+         // Start TERMUX_SERVICE and pass it execution intent
+         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+-            this.startForegroundService(execIntent);
++            try {
++                this.startForegroundService(execIntent);
++            } catch (IllegalStateException e) {
++                // ForegroundServiceStartNotAllowedException (S+) at CALL time when
++                // the app is in the background. TermuxService is almost always
++                // already running and foreground (the app holds a lifetime bind
++                // from MainActivity); plain startService() delivers the execution
++                // intent to the running instance without requesting a foreground
++                // promotion, and is permitted while the app hosts any foreground
++                // service. If even that is rejected, drop this one command instead
++                // of crashing the whole app.
++                Logger.logStackTraceWithMessage(LOG_TAG,
++                    "startForegroundService(TermuxService) denied (app in background); falling back to startService", e);
++                try {
++                    this.startService(execIntent);
++                } catch (IllegalStateException e2) {
++                    Logger.logStackTraceWithMessage(LOG_TAG,
++                        "startService(TermuxService) also denied; dropping this command", e2);
++                }
++            }
+         } else {
+             this.startService(execIntent);
+         }
+@@ -247,7 +266,18 @@ public class RunCommandService extends Service {
+     private void runStartForeground() {
+         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+             setupNotificationChannel();
+-            startForeground(TermuxConstants.TERMUX_RUN_COMMAND_NOTIFICATION_ID, buildNotification());
++            try {
++                startForeground(TermuxConstants.TERMUX_RUN_COMMAND_NOTIFICATION_ID, buildNotification());
++            } catch (IllegalStateException e) {
++                // ForegroundServiceStartNotAllowedException (S+): promotion from the
++                // background is denied. This service only forwards the execution
++                // intent to TermuxService and stops itself, so keep dispatching
++                // without foreground state instead of crashing the whole app. It is
++                // started with plain startService(), so no unmet startForeground
++                // obligation remains after catching.
++                Logger.logStackTraceWithMessage(LOG_TAG,
++                    "startForeground denied (app in background); continuing without foreground state", e);
++            }
+         }
+     }
+ 
+diff --git a/app/src/main/java/com/termux/app/TermuxService.java b/app/src/main/java/com/termux/app/TermuxService.java
+index bc3fe239..e6e21619 100644
+--- a/app/src/main/java/com/termux/app/TermuxService.java
++++ b/app/src/main/java/com/termux/app/TermuxService.java
+@@ -203,7 +203,17 @@ public final class TermuxService extends Service implements AppShell.AppShellCli
+     /** Make service run in foreground mode. */
+     private void runStartForeground() {
+         setupNotificationChannel();
+-        startForeground(TermuxConstants.TERMUX_APP_NOTIFICATION_ID, buildNotification());
++        try {
++            startForeground(TermuxConstants.TERMUX_APP_NOTIFICATION_ID, buildNotification());
++        } catch (IllegalStateException e) {
++            // ForegroundServiceStartNotAllowedException (S+): promotion from the
++            // background is denied. This service is normally promoted while the app
++            // is visible and stays foreground from then on; if a background
++            // re-promotion is ever refused, keep running un-promoted (the app's
++            // bind keeps it alive) rather than crash the whole app.
++            Logger.logStackTraceWithMessage(LOG_TAG,
++                "startForeground denied (app in background); continuing without foreground state", e);
++        }
+     }
+ 
+     /** Make service leave foreground mode. */

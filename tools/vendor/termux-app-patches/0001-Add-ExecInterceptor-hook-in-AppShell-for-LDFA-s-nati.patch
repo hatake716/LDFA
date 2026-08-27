@@ -1,0 +1,90 @@
+From 85df24ede87dd35ccc3cb774529fc8d2721b34aa Mon Sep 17 00:00:00 2001
+From: hatake716 <acesmash@gmail.com>
+Date: Wed, 26 Aug 2026 09:35:40 +0900
+Subject: [PATCH 1/4] Add ExecInterceptor hook in AppShell for LDFA's
+ native-proot exec path
+
+AppShell now consults a static ExecInterceptor to optionally rewrite the command
+and environment right before Runtime.exec. Default is a pass-through no-op (every
+upstream use is unaffected). LDFA registers a rewriter to run data-dir binaries
+through a native-library proot for Google Play targetSdk>=29 (W^X) compliance.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+---
+ .../termux/shared/shell/ExecInterceptor.java  | 40 +++++++++++++++++++
+ .../shell/command/runner/app/AppShell.java    |  8 +++-
+ 2 files changed, 47 insertions(+), 1 deletion(-)
+ create mode 100644 termux-shared/src/main/java/com/termux/shared/shell/ExecInterceptor.java
+
+diff --git a/termux-shared/src/main/java/com/termux/shared/shell/ExecInterceptor.java b/termux-shared/src/main/java/com/termux/shared/shell/ExecInterceptor.java
+new file mode 100644
+index 00000000..c2563326
+--- /dev/null
++++ b/termux-shared/src/main/java/com/termux/shared/shell/ExecInterceptor.java
+@@ -0,0 +1,40 @@
++package com.termux.shared.shell;
++
++/**
++ * A single, optional rewrite hook applied to a command right before it is exec'd by
++ * {@code AppShell}. LDFA registers a rewriter here to run data-dir binaries through
++ * a native-library proot on targetSdk >= 29 (Google Play W^X compliance); when no
++ * rewriter is registered (the default, and every upstream Termux use), the command
++ * and environment pass through unchanged, so existing behavior is untouched.
++ *
++ * Kept in termux-shared with no app dependency: the app injects its logic via
++ * {@link #setRewriter(Rewriter)} at startup.
++ */
++public final class ExecInterceptor {
++
++    /** Rewrites the exec command and/or its environment. Return the value to use. */
++    public interface Rewriter {
++        /** @return the command array to exec (may be the same array). */
++        String[] rewriteCommand(String[] command, String workingDirectory);
++        /** @return the environment array to use (may be the same array). */
++        String[] rewriteEnvironment(String[] environment, String[] originalCommand);
++    }
++
++    private static volatile Rewriter sRewriter;
++
++    private ExecInterceptor() {}
++
++    public static void setRewriter(Rewriter rewriter) {
++        sRewriter = rewriter;
++    }
++
++    public static String[] rewriteCommand(String[] command, String workingDirectory) {
++        Rewriter r = sRewriter;
++        return r == null ? command : r.rewriteCommand(command, workingDirectory);
++    }
++
++    public static String[] rewriteEnvironment(String[] environment, String[] originalCommand) {
++        Rewriter r = sRewriter;
++        return r == null ? environment : r.rewriteEnvironment(environment, originalCommand);
++    }
++}
+diff --git a/termux-shared/src/main/java/com/termux/shared/shell/command/runner/app/AppShell.java b/termux-shared/src/main/java/com/termux/shared/shell/command/runner/app/AppShell.java
+index 3f49e5ae..17fdb957 100644
+--- a/termux-shared/src/main/java/com/termux/shared/shell/command/runner/app/AppShell.java
++++ b/termux-shared/src/main/java/com/termux/shared/shell/command/runner/app/AppShell.java
+@@ -102,7 +102,7 @@ public final class AppShell {
+             executionCommand.commandLabel = executableBasename;
+ 
+         // Setup command args
+-        final String[] commandArray = shellEnvironmentClient.setupShellCommandArguments(executionCommand.executable, executionCommand.arguments);
++        String[] commandArray = shellEnvironmentClient.setupShellCommandArguments(executionCommand.executable, executionCommand.arguments);
+ 
+         // Setup command environment
+         HashMap<String, String> environment = shellEnvironmentClient.setupShellCommandEnvironment(currentPackageContext,
+@@ -125,6 +125,12 @@ public final class AppShell {
+         Logger.logVerboseExtended(LOG_TAG, "\"" + executionCommand.getCommandIdAndLabelLogString() + "\" AppShell Environment:\n" +
+             Joiner.on("\n").join(environmentArray));
+ 
++        // Optional exec rewrite (LDFA runs data-dir binaries through a native-library
++        // proot on targetSdk >= 29 for Google Play W^X compliance). No-op by default.
++        final String[] originalCommandArray = commandArray;
++        commandArray = com.termux.shared.shell.ExecInterceptor.rewriteCommand(commandArray, executionCommand.workingDirectory);
++        environmentArray = com.termux.shared.shell.ExecInterceptor.rewriteEnvironment(environmentArray, originalCommandArray);
++
+         // Exec the process
+         final Process process;
+         try {

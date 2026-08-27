@@ -1,7 +1,3 @@
-[submodule "vendor/termux-app"]
-	path = vendor/termux-app
-	url = https://github.com/termux/termux-app.git
-	branch = master
 [submodule "vendor/termux-x11"]
 	path = vendor/termux-x11
 	url = https://github.com/termux/termux-x11.git
