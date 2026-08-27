@@ -11,6 +11,7 @@ import android.provider.Settings
 import android.util.Log
 import com.hatake716.linuxdesktop.BuildConfig
 import com.hatake716.linuxdesktop.display.VncFallbackActivity
+import com.hatake716.linuxdesktop.x11.EmbeddedX11PrerequisiteController
 import com.hatake716.linuxdesktop.x11.EmbeddedX11ServiceController
 import com.termux.app.EmbeddedTermuxRuntime
 import com.termux.app.TermuxService
@@ -706,6 +707,13 @@ class LinuxDesktopRepository(private val context: Context) {
     }
 
     private suspend fun startAndVerifyNativeX11(id: String) {
+        // XKB data and the X11 socket directory must exist BEFORE the :x11
+        // process starts Xorg — Xorg cannot create its socket into a missing
+        // $PREFIX/tmp/.X11-unix and the service never becomes ready. Bootstrap
+        // runs this once, but state can drift (a bootstrap that never finished,
+        // a cleared tmp); the prepare action is idempotent and cheap, so
+        // re-ensure it on every native start.
+        EmbeddedX11PrerequisiteController.ensure(context)
         var lastFailure: Throwable? = null
         var lastLogs = ""
         val attemptedModes = mutableListOf<String>()

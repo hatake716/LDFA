@@ -27,6 +27,19 @@ validate_id() {
 }
 
 service_pid() {
+    # pidof scans /proc, which hidepid=invisible blanks for non-descendant
+    # sibling processes on RELEASE builds (debuggable builds hold the
+    # readproc/ptrace exemption) — so it found the :x11 process on every debug
+    # run and NEVER on a release run. The Android service writes its pid into
+    # a state file in the app files dir; trust that, gated by kill -0 (signal
+    # permission is uid-based and unaffected by hidepid). Keep pidof as a
+    # fallback for older builds without the state file.
+    local state="/data/data/${PACKAGE_ID}/files/embedded-x11-service.state" pid
+    pid="$(head -n1 "$state" 2>/dev/null | tr -d '[:space:]')"
+    if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then
+        printf '%s' "$pid"
+        return 0
+    fi
     pidof "${PACKAGE_ID}:x11" 2>/dev/null | awk '{print $1}'
 }
 

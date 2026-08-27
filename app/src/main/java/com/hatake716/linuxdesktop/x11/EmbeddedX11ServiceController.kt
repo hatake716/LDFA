@@ -316,11 +316,18 @@ internal object EmbeddedX11ServiceController {
     }.getOrDefault(false)
 
     private fun isOwnedX11Process(pid: Int): Boolean = runCatching {
-        val cmdline = File("/proc/$pid/cmdline")
-            .readBytes()
-            .toString(Charsets.UTF_8)
-            .substringBefore('\u0000')
-        cmdline == X11_PROCESS_NAME
+        // Verified on device (Android 16, /proc mounted hidepid=invisible):
+        // reading /proc/<pid>/cmdline of the sibling :x11 process works on
+        // debuggable builds (they hold the readproc exemption) but fails on
+        // RELEASE builds even for the same uid — the old cmdline comparison
+        // silently broke every release-build native X11 start. kill(pid, 0)
+        // needs no /proc at all: success proves the pid is alive AND signalable
+        // by this uid (dead → ESRCH, foreign uid → EPERM, both → false).
+        // Ownership beyond "our uid, alive" is already pinned by the state file
+        // the service wrote (pid + generation) and by Xorg's own .X1-lock pid,
+        // which the caller cross-checks against the same pid.
+        Os.kill(pid, 0)
+        true
     }.getOrDefault(false)
 
     private fun cleanupEndpointsAfterVerifiedExit(pid: Int) {
