@@ -28,8 +28,9 @@
     <string name="backup_pick_env">バックアップする環境</string>
     <string name="backup_no_stopped_env">停止中の環境がありません。実行中の環境は先に停止してください。</string>
     <string name="backup_dest">保存先フォルダ</string>
-    <string name="backup_dest_default">スマホ本体（内部ストレージ）▸ LinuxDesktop ▸ backups</string>
-    <string name="backup_dest_hint">「ファイル」アプリの内部ストレージにある LinuxDesktop フォルダから取り出せます。</string>
+    <string name="backup_dest_default">スマホ本体 ▸ ダウンロード ▸ LinuxDesktop</string>
+    <string name="backup_dest_hint">「ファイル」アプリのダウンロードにある LinuxDesktop フォルダから取り出せます。</string>
+    <string name="backup_notif_exporting">バックアップをダウンロードへ書き出しています…</string>
     <string name="backup_dest_fullpath">フルパス: %1$s</string>
     <string name="backup_start">バックアップを開始</string>
     <string name="backup_running">バックアップ中…</string>

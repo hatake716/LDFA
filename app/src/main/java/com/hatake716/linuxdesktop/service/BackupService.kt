@@ -54,7 +54,6 @@ class BackupService : Service() {
             }
             ACTION_BACKUP -> startBackup(
                 containerId = intent.getStringExtra(EXTRA_CONTAINER_ID).orEmpty(),
-                outputDirPath = intent.getStringExtra(EXTRA_OUTPUT_DIR).orEmpty(),
             )
             ACTION_RESTORE -> startRestore(
                 inputPath = intent.getStringExtra(EXTRA_INPUT_PATH).orEmpty(),
@@ -76,19 +75,34 @@ class BackupService : Service() {
 
     // ---- backup ------------------------------------------------------------
 
-    private fun startBackup(containerId: String, outputDirPath: String) {
+    private fun startBackup(containerId: String) {
         if (job?.isActive == true) return
-        if (containerId.isBlank() || outputDirPath.isBlank()) { stopSelf(); return }
+        if (containerId.isBlank()) { stopSelf(); return }
         if (!goForeground(getString(R.string.backup_notif_creating))) return
         _state.value = BackupUiState.Running(BackupUiState.Op.BACKUP, indeterminate = true)
         job = scope.launch {
+            // The app declares NO storage permission (not grantable at targetSdk 35),
+            // so shared storage is reachable only through MediaStore: the engine
+            // writes into an app-private staging dir, and the finished archive is
+            // exported to ダウンロード/LinuxDesktop where file managers and the
+            // 機種変更 flow can pick it up.
+            val staging = File(
+                applicationContext.getExternalFilesDir(null) ?: filesDir,
+                "backup-staging",
+            )
+            staging.listFiles()?.forEach { it.delete() }
+            var stagingFile: File? = null
             try {
                 val engine = BackupEngine(applicationContext)
                 val out = engine.createFull(
                     id = containerId,
-                    outputDir = File(outputDirPath),
+                    outputDir = staging,
                     listener = { phase -> onBackupPhase(phase) },
                 )
+                stagingFile = out.file
+                updateNotification(getString(R.string.backup_notif_exporting), null)
+                val exportedPath = exportToDownloads(out.file)
+                out.file.delete()
                 _state.value = BackupUiState.Done(
                     op = BackupUiState.Op.BACKUP,
                     message = getString(
@@ -98,7 +112,7 @@ class BackupService : Service() {
                     ),
                     detail = buildString {
                         append(getString(R.string.backup_done_location)).append("\n\n")
-                        append(getString(R.string.backup_dest_fullpath, out.file.absolutePath)).append('\n')
+                        append(getString(R.string.backup_dest_fullpath, exportedPath)).append('\n')
                         append("SHA-256: ").append(out.sha256Prefix)
                         if (out.skippedSpecial > 0 || out.unreadableCount > 0) {
                             append('\n').append(
@@ -106,7 +120,7 @@ class BackupService : Service() {
                             )
                         }
                     },
-                    filePath = out.file.absolutePath,
+                    filePath = exportedPath,
                 )
             } catch (c: CancellationException) {
                 _state.value = BackupUiState.Cancelled(BackupUiState.Op.BACKUP)
@@ -116,9 +130,45 @@ class BackupService : Service() {
                 android.util.Log.e(TAG, "backup failed", t)
                 _state.value = BackupUiState.Failed(BackupUiState.Op.BACKUP, describeFailure(t))
             } finally {
+                // The multi-GB staging archive must never outlive the operation.
+                stagingFile?.delete()
                 finish()
             }
         }
+    }
+
+    /**
+     * Copy a finished archive into shared storage's ダウンロード/LinuxDesktop via
+     * MediaStore (no storage permission required, API 29+). Returns the
+     * user-facing location. On API 26-28 MediaStore.Downloads doesn't exist and
+     * the classic WRITE permission is no longer declared, so the archive stays
+     * in the app-external dir and that real path is reported instead.
+     */
+    private fun exportToDownloads(file: File): String {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            return file.absolutePath
+        }
+        val resolver = applicationContext.contentResolver
+        val values = android.content.ContentValues().apply {
+            put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, file.name)
+            put(android.provider.MediaStore.MediaColumns.MIME_TYPE, "application/octet-stream")
+            put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, "Download/LinuxDesktop")
+            put(android.provider.MediaStore.MediaColumns.IS_PENDING, 1)
+        }
+        val uri = resolver.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+            ?: throw BackupEngine.BackupError("保存先（ダウンロード）を作成できませんでした。")
+        try {
+            resolver.openOutputStream(uri)?.use { outStream ->
+                file.inputStream().use { it.copyTo(outStream, 1 shl 16) }
+            } ?: throw BackupEngine.BackupError("保存先へ書き込めませんでした。")
+            values.clear()
+            values.put(android.provider.MediaStore.MediaColumns.IS_PENDING, 0)
+            resolver.update(uri, values, null, null)
+        } catch (t: Throwable) {
+            runCatching { resolver.delete(uri, null, null) }
+            throw t
+        }
+        return "ダウンロード/LinuxDesktop/${file.name}"
     }
 
     private fun onBackupPhase(phase: BackupEngine.Phase) {
@@ -326,11 +376,10 @@ class BackupService : Service() {
             if (_state.value.isTerminal) _state.value = BackupUiState.Idle
         }
 
-        fun startBackup(context: Context, containerId: String, outputDir: File) {
+        fun startBackup(context: Context, containerId: String) {
             val intent = Intent(context, BackupService::class.java).apply {
                 action = ACTION_BACKUP
                 putExtra(EXTRA_CONTAINER_ID, containerId)
-                putExtra(EXTRA_OUTPUT_DIR, outputDir.absolutePath)
             }
             startGuarded(context, intent)
         }

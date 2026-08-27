@@ -168,7 +168,7 @@ internal fun BackupScreen(
                             }
                         }
                     }
-                    DestinationCard(paths.defaultBackupDir.absolutePath)
+                    DestinationCard()
                 }
             }
 
@@ -192,7 +192,7 @@ internal fun BackupScreen(
                     Button(
                         onClick = {
                             val id = selectedId ?: return@Button
-                            BackupService.startBackup(context, id, paths.defaultBackupDir)
+                            BackupService.startBackup(context, id)
                         },
                         enabled = selectedId != null,
                         modifier = Modifier.fillMaxWidth(),
@@ -224,7 +224,7 @@ private fun EnvRow(name: String, selected: Boolean, onSelect: () -> Unit) {
 }
 
 @Composable
-private fun DestinationCard(path: String) {
+private fun DestinationCard() {
     Card(
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
@@ -255,13 +255,6 @@ private fun DestinationCard(path: String) {
             Text(
                 text = stringResource(R.string.backup_dest_hint),
                 style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(Modifier.height(8.dp))
-            Text(
-                text = stringResource(R.string.backup_dest_fullpath, path),
-                style = MaterialTheme.typography.bodySmall,
-                fontFamily = FontFamily.Monospace,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
