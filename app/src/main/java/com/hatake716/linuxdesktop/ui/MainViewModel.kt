@@ -256,7 +256,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     errorMessage = null,
                 )
             }
-            runCatching { repository.repairInterruptedWork() }
+            runCatching {
+                repository.repairInterruptedWork()
+                // 修復 is the explicit retry: bypass the once-per-process resume
+                // guard so a failed auto-resume can be attempted again.
+                repository.resumeInterruptedInstalls(_state.value.containers, force = true)
+            }
                 .onSuccess {
                     _state.update {
                         it.copy(
@@ -396,8 +401,34 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     refreshing = if (silent) it.refreshing else false,
                 )
             }
+            maybeResumeInterruptedInstalls(containers)
         }.onFailure {
             if (!silent) showError(it)
+        }
+    }
+
+    /**
+     * An install whose worker died with a previous app process shows as
+     * QUEUED/INSTALLING with no live session. Auto-relaunch it (once per id per
+     * process — the repository guards against loops) so a killed app never
+     * strands a half-installed environment.
+     */
+    private fun maybeResumeInterruptedInstalls(containers: List<ContainerInfo>) {
+        val interrupted = containers.filter {
+            (it.state == ContainerState.QUEUED || it.state == ContainerState.INSTALLING) &&
+                !it.sessionAlive
+        }
+        if (interrupted.isEmpty()) return
+        viewModelScope.launch {
+            val resumed = runCatching {
+                repository.resumeInterruptedInstalls(interrupted)
+            }.getOrDefault(0)
+            if (resumed > 0) {
+                _state.update {
+                    it.copy(noticeMessage = "中断されていたインストールを再開しました。")
+                }
+                refreshContainers(silent = true)
+            }
         }
     }
 

@@ -152,6 +152,47 @@ class LinuxDesktopRepository(private val context: Context) {
         id
     }
 
+    /**
+     * Container ids this process already tried to auto-resume, so a worker that dies
+     * instantly cannot be relaunched in a loop by the periodic list refresh. The 修復
+     * action clears an id to allow another explicit attempt.
+     */
+    private val resumedInstalls: MutableSet<String> =
+        java.util.Collections.synchronizedSet(mutableSetOf())
+
+    /**
+     * Relaunch the install worker + provision for an install whose app process died
+     * mid-flight: the native worker/provision proots are children of this process and
+     * die with it, and cmd_repair's tmux-based revival cannot help on the native path.
+     * The relaunched worker cleans the partial container and reinstalls; its re-entry
+     * guard makes a redundant relaunch a no-op. Returns true when a resume launched.
+     */
+    suspend fun resumeInterruptedInstalls(
+        containers: List<ContainerInfo>,
+        force: Boolean = false,
+    ): Int = withContext(Dispatchers.IO) {
+        var resumed = 0
+        for (container in containers) {
+            val id = container.id
+            val interrupted = (container.state == ContainerState.QUEUED ||
+                container.state == ContainerState.INSTALLING) && !container.sessionAlive
+            if (!interrupted) continue
+            if (!prootWorkerLauncher.usable) continue
+            if (prootInstallWorkers[id]?.isAlive == true) continue
+            if (force) resumedInstalls.remove(id)
+            if (!resumedInstalls.add(id)) continue
+            Log.i(LIFECYCLE_LOG_TAG, "resuming interrupted install id=$id")
+            // The dead run's provision request must not race the fresh worker
+            // (it points at a rootfs the worker is about to delete). The worker
+            // clears it too; deleting here closes the poll-window race.
+            runCatching { prootWorkerLauncher.installRequestFile(id).delete() }
+            launchNativeProotInstallWorkerIfNeeded(id)
+            launchNativeProotInstallProvisionIfNeeded(id)
+            resumed++
+        }
+        resumed
+    }
+
     suspend fun startContainer(id: String): DesktopDisplayBackend = withContext(Dispatchers.IO) {
         x11LifecycleMutex.withLock {
             holdTermuxServiceLifetime()
