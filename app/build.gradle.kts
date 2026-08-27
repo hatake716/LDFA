@@ -1,7 +1,20 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
+}
+
+// Play upload signing. keystore.properties is machine-local (gitignored) and
+// points at a keystore OUTSIDE the repo — see keystore.properties.example and
+// tools/release/README.md. When absent (CI, fresh clones), the release build
+// stays unsigned rather than failing.
+val keystorePropertiesFile = rootProject.file("keystore.properties")
+val keystoreProperties = Properties().apply {
+    if (keystorePropertiesFile.exists()) {
+        keystorePropertiesFile.inputStream().use { load(it) }
+    }
 }
 
 android {
@@ -42,6 +55,14 @@ android {
             keyAlias = "androiddebugkey"
             keyPassword = "android"
         }
+        if (keystorePropertiesFile.exists()) {
+            create("release") {
+                storeFile = File(keystoreProperties.getProperty("storeFile"))
+                storePassword = keystoreProperties.getProperty("storePassword")
+                keyAlias = keystoreProperties.getProperty("keyAlias")
+                keyPassword = keystoreProperties.getProperty("keyPassword")
+            }
+        }
     }
 
     buildTypes {
@@ -54,6 +75,15 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
             )
+            signingConfig = signingConfigs.findByName("release")
+            // Play release ships arm64-v8a ONLY. The native-proot prebuilts
+            // (jniLibs: libpdrt.so etc.) exist only for arm64, and the other
+            // three bootstrap zips are still the upstream com.termux builds —
+            // broken under this app's prefix and must not ship. Debug keeps
+            // every ABI so x86_64 emulator work stays possible.
+            ndk {
+                abiFilters += "arm64-v8a"
+            }
         }
     }
 

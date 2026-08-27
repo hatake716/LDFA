@@ -14,3 +14,6 @@ __pycache__/
 *.py[cod]
 gradle/wrapper/gradle-wrapper.jar
 .kotlin/
+
+# Play upload signing (machine-local; keystore lives outside the repo)
+/keystore.properties
