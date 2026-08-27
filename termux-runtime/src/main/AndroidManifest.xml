@@ -4,8 +4,14 @@
 
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
 
+    <!-- Must live in OUR package namespace: Android refuses to install a second
+         package redeclaring a permission owned by a differently-signed app, so a
+         com.termux-named declaration made LDFA uninstallable next to real Termux
+         (INSTALL_FAILED_DUPLICATE_PERMISSION). Vestigial in the embedded build
+         (both services are exported=false and unguarded) but kept for vendor
+         code that references holding it; ${applicationId} tracks any rename. -->
     <permission
-        android:name="com.termux.permission.RUN_COMMAND"
+        android:name="${applicationId}.permission.RUN_COMMAND"
         android:description="@string/permission_run_command_description"
         android:label="@string/permission_run_command_label"
         android:protectionLevel="signature" />

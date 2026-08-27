@@ -163,6 +163,10 @@ jobs:
           # rather than the app-wide usesCleartextTraffic flag.
           ! grep -Fq 'android.permission.MANAGE_EXTERNAL_STORAGE' "$VERIFY_DIR/manifest.xml"
           grep -Fq 'networkSecurityConfig' "$VERIFY_DIR/manifest.xml"
+          # Declaring a com.termux-owned permission makes LDFA uninstallable next to
+          # real Termux (INSTALL_FAILED_DUPLICATE_PERMISSION); ours must be namespaced.
+          ! grep -Fq 'com.termux.permission' "$VERIFY_DIR/manifest.xml"
+          grep -Fq 'com.hatake716.linuxdesktop.permission.RUN_COMMAND' "$VERIFY_DIR/manifest.xml"
 
           # The obsolete app_process/loader and shell-owned Android lifecycle must not return.
           ! grep -Fq 'assets/x11-loader.apk' "$VERIFY_DIR/entries.txt"
