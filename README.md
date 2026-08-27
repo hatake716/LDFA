@@ -94,7 +94,6 @@ Androidの管理画面から環境をワンタップで起動し、そのまま�
 - Google公式のGoogle Chrome stableを64-bit Debianへ自動導入
 - Node.js 22 LTS（公式静的ビルド）を自動導入し、`npm install -g`でClaude CodeやCodexなどのCLIを利用可能に
 - 一般ユーザー`desktop`とパスワードなし`sudo`を構成
-- Android共有ストレージをDebianの`/mnt/android`へ接続
 - 環境まるごとを1つの`.ldfa`ファイルへバックアップし、別のAndroid端末でも新しい環境として復元（機種変更・移行に対応）
 - 内蔵ターミナルからDebianを保守
 - 作成、起動、停止、修復、削除とログ表示をMaterial 3 UIへ統合
@@ -125,7 +124,6 @@ descriptorをguest境界越しに渡せないため、client／daemon双方でsh
 - 64-bit ARM端末を推奨
 - Debian環境1つにつき、最低3〜5 GB程度の空き容量を推奨
 - 初回セットアップ時の安定したインターネット接続
-- Android共有ストレージへのアクセス許可
 - 互換VNC表示を使用する場合はAndroid System WebView
 
 APKには`arm64-v8a`、`armeabi-v7a`、`x86`、`x86_64`のnativeライブラリを収録しています。ただし、Google Chrome公式Linuxパッケージの自動導入対象は`arm64`と`amd64`だけです。32-bit環境ではChromeを別ブラウザへ無断で置換せず、Debian／XFCEの構築だけを継続します。
@@ -197,9 +195,8 @@ LDFAの初回画面では、1つの主ボタンが次に必要な操作を順番
 
 1. 内蔵ターミナルランタイムを展開
 2. 内蔵X11サーバーを確認
-3. Android共有ストレージへのアクセスを許可
-4. Debian環境の表示名を入力
-5. Debian 12、XFCE、日本語環境、Google Chromeを自動構築
+3. Debian環境の表示名を入力
+4. Debian 12、XFCE、日本語環境、Google Chromeを自動構築
 
 Debian、デスクトップパッケージ、ロケール、フォント、Mozc、Chromeを取得するため、初回構築には時間がかかります。処理中はアプリ内で進捗とログを確認できます。AndroidがLDFAをバックグラウンド制限しないよう、可能であればバッテリー設定を「制限なし」にしてください。
 
@@ -348,15 +345,9 @@ XMODIFIERS=@im=fcitx
 
 > キーボード配列の設定は native X11 表示（`DISPLAY=:1`）が対象です。VNC フォールバック（`DISPLAY=:2`）ではブラウザ側でキーが解決されるため、現在は反映されません。Android のソフトウェアキーボード（Gboard）は配列設定の影響を受けず、日本語入力・Googleログイン欄への入力は従来どおり動作します。
 
-## Androidとのファイル共有
+## Androidとのファイル共有について
 
-環境ごとのAndroid共有ディレクトリを、Debian内の次のパスへ接続します。
-
-```text
-/mnt/android
-```
-
-XFCEのデスクトップには「Android共有」へのショートカットを作成します。共有ストレージはバックアップやAndroidアプリとの受け渡しに利用できますが、重要データは別の場所にも保存してください。
+Android共有ストレージ連携（`/mnt/android`）は廃止しました。targetSdk 35 では必要なストレージ権限をユーザーが許可する手段が存在しないためです。Debian環境のファイルはアプリ専用領域にのみ保存されます。Androidとのデータのやり取りにはバックアップ（`.ldfa`ファイルの書き出し・読み込み）を利用してください。
 
 ## バックアップと移行（v1.1.0〜）
 
@@ -475,7 +466,6 @@ v1.1.0（versionCode 20）に対する結果です。
 | API 35 x86_64・4 KB AVDでDebian 12 clean install | PASS |
 | native X11、XFCE、Surface再作成、background復帰 | 履歴画面から通常復帰後、約0.25秒でChrome／XFCE全体を再表示してPASS。従来の10回連続試験もPASS |
 | Fcitx5 + Mozc日本語確定 | PASS |
-| Android共有ストレージ往復 | PASS |
 | Google Chromeの起動とHTTPSページ描画 | PASS |
 | app-private PulseAudio Unix bridge | source／生成session／stateful controller／APK内assetの各gate PASS。旧TCP endpointと公開listenerは不在 |
 | Androidからの可聴音声 | **実機で可聴出力を確認済み**（動画音声がAndroidスピーカーから再生） |
@@ -509,9 +499,8 @@ APKの16 KB alignment成功は、Debian userlandとXFCEを含むARM64 16 KB実�
 10. Android本体speakerで実際に音を聞き、利用予定ならBluetooth／有線routeへの切替も確認する。
 11. stop→startを3回繰り返し、専用`module-native-protocol-unix`が重複しないことを確認する。
 12. Googleアカウントのログイン画面でAndroidソフトウェアキーボードを開き、入力・composition・確定を行う。本人確認のためGmailへ移動した後、履歴画面からLDFAへ戻り、プロセスが生存している通常復帰では1〜2秒以内にChrome／XFCE全体が再表示されることを複数回確認する。Androidが子プロセスを終了した場合も、マウスポインタだけの永久黒画面にならず自動復旧することを確認する。
-13. `/mnt/android`でAndroidとのファイル往復を確認する。
-14. 縦横回転、Homeからの復帰、画面消灯復帰を確認する。
-15. 停止、再起動、画面の再表示を複数回行う。
+13. 縦横回転、Homeからの復帰、画面消灯復帰を確認する。
+14. 停止、再起動、画面の再表示を複数回行う。
 16. 停止後にデスクトップやChromeのプロセスが残らないことを確認する。
 17. 16 KB page端末の場合は、Debian loginとXFCE表示まで別途確認する。
 

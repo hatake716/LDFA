@@ -24,7 +24,6 @@ import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.CloudDownload
 import androidx.compose.material.icons.rounded.Computer
 import androidx.compose.material.icons.rounded.Download
-import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Security
@@ -35,7 +34,6 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -97,7 +95,6 @@ internal fun LoadingScreen() {
 internal fun SetupScreen(
     state: MainUiState,
     onPrepareRuntime: () -> Unit,
-    onGrantStorageAccess: () -> Unit,
     onRefresh: () -> Unit,
     onBootstrap: () -> Unit,
 ) {
@@ -215,20 +212,6 @@ internal fun SetupScreen(
         item {
             SetupStepCard(
                 number = 3,
-                title = "Android共有ストレージ(任意)",
-                description = "Android側のファイルをDebianの /mnt/android から読み書きできるようにします。" +
-                    "許可できない端末でもデスクトップはそのまま利用できます。",
-                complete = state.setup.storageReady,
-                icon = Icons.Rounded.Folder,
-                optional = true,
-                actionLabel = "アクセスを許可",
-                onAction = onGrantStorageAccess,
-            )
-        }
-
-        item {
-            SetupStepCard(
-                number = 4,
                 title = "Debian XFCEと日本語環境",
                 description = "Debian、XFCE、Fcitx5、Mozc、日本語フォント、sudoをまとめて構築します。",
                 complete = state.setup.hostReady,
@@ -397,9 +380,6 @@ private fun SetupStepCard(
     icon: ImageVector,
     showProgress: Boolean = false,
     logContent: String = "",
-    optional: Boolean = false,
-    actionLabel: String? = null,
-    onAction: (() -> Unit)? = null,
 ) {
     Surface(
         shape = RoundedCornerShape(22.dp),
@@ -439,10 +419,7 @@ private fun SetupStepCard(
                         fontWeight = FontWeight.SemiBold,
                     )
                     Text(
-                        if (complete) "準備完了"
-                        else if (showProgress) "処理中"
-                        else if (optional) "任意"
-                        else "未完了",
+                        if (complete) "準備完了" else if (showProgress) "処理中" else "未完了",
                         style = MaterialTheme.typography.labelMedium,
                         color = if (complete) SuccessGreen else MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -454,11 +431,6 @@ private fun SetupStepCard(
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-
-            if (!complete && onAction != null && actionLabel != null) {
-                Spacer(Modifier.height(10.dp))
-                OutlinedButton(onClick = onAction) { Text(actionLabel) }
-            }
 
             if (showProgress) {
                 Spacer(Modifier.height(14.dp))

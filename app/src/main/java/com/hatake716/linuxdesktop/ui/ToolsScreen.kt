@@ -18,7 +18,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Build
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.DesktopWindows
-import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.Memory
 import androidx.compose.material.icons.rounded.Refresh
@@ -173,15 +172,6 @@ internal fun ToolsScreen(
                         title = "アプリ内実行環境",
                         description = "ターミナルとX11サーバー",
                         ready = state.setup.terminalReady && state.setup.x11Ready,
-                    )
-                    HorizontalDivider(Modifier.padding(start = 64.dp))
-                    StatusRow(
-                        icon = Icons.Rounded.Folder,
-                        title = "Androidファイル共有",
-                        description = state.setup.doctor?.sharedDirectory
-                            ?.takeIf { it.isNotBlank() }
-                            ?: "/mnt/android",
-                        ready = state.setup.storageReady,
                     )
                     HorizontalDivider(Modifier.padding(start = 64.dp))
                     StatusRow(

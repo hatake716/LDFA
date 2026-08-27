@@ -27,7 +27,7 @@ SHARED_ROOT="$HOME/storage/shared/LinuxDesktop"
 SELF="$BIN_DIR/ldfa-host"
 BOOTSTRAP_LOG="$LOG_ROOT/bootstrap.log"
 CHROME_LAUNCHER_MARKER="# LDFA_CHROME_LAUNCHER_VERSION=8"
-DESKTOP_RUNTIME_MARKER="# LDFA_SESSION_RUNTIME_VERSION=36"
+DESKTOP_RUNTIME_MARKER="# LDFA_SESSION_RUNTIME_VERSION=37"
 AUDIO_CLIENT_MARKER="# LDFA_AUDIO_CLIENT_VERSION=3"
 PULSE_BRIDGE_MARKER="# LDFA_PULSE_BRIDGE_VERSION=1"
 # Modern Node.js runtime provisioned into the guest so Node-based CLIs (Claude
@@ -519,18 +519,24 @@ storage_linked() {
 }
 
 ensure_storage() {
-    mkdir -p "$HOME/storage"
-    if ! storage_linked "$HOME/storage/shared"; then
-        termux-setup-storage >/dev/null 2>&1 || true
-    fi
+    # The Android-shared-storage feature is retired (the storage permissions are
+    # not user-grantable at targetSdk 35 and are no longer even declared), so
+    # this is best-effort only and must NEVER abort or stall setup. In
+    # particular it must NOT call termux-setup-storage: once ~/storage exists,
+    # that script asks "Do you want to continue? (y/n)" on stdin, and in the
+    # app's non-interactive RUN_COMMAND shell that read blocks FOREVER (it hung
+    # cmd_bootstrap for the full 30-minute timeout on the first permissionless
+    # device run). The plain symlink below is all the linking we ever needed.
+    mkdir -p "$HOME/storage" 2>/dev/null || true
     if [[ ! -e "$HOME/storage/shared" ]] && [[ -d /storage/emulated/0 ]]; then
         ln -s /storage/emulated/0 "$HOME/storage/shared" 2>/dev/null || true
     fi
     storage_linked "$HOME/storage/shared" || \
-        die "Android共有ストレージへアクセスできません。アプリのストレージ権限を確認してください。"
+        printf '[%s] Android共有ストレージは利用できません(機能は任意)。\n' "$(date -Iseconds)" >&2
     # Creating LinuxDesktop/ requires traversing into shared storage, which this
     # exact process may not yet be able to do; do not abort setup on it.
     mkdir -p "$SHARED_ROOT" 2>/dev/null || true
+    return 0
 }
 
 retry_command() {
@@ -1572,6 +1578,11 @@ ensure_desktop_runtime() {
             fi
         done
 
+        # The Android-shared-storage feature is retired (not grantable at
+        # targetSdk 35): drop the desktop shortcut that pointed at the
+        # never-bound /mnt/android so existing environments lose the dead icon.
+        rm -f "/home/desktop/Desktop/Android共有"
+
         # fish is a non-POSIX shell that reads NEITHER .profile NOR .bashrc, so
         # none of the PATH/env lines above reach a user who set their login shell
         # to fish (a common choice). fish DOES source every /etc/fish/conf.d/*.fish
@@ -2344,7 +2355,10 @@ cmd_doctor() {
     has proot-distro && proot_ok=1
     has pulseaudio && has pactl && audio_tools_ok=1
     storage_linked "$HOME/storage/shared" && storage_ok=1
-    [[ $tmux_ok -eq 1 && $proot_ok -eq 1 && $storage_ok -eq 1 && \
+    # storage_ok is reported but NOT part of host readiness: the shared-storage
+    # feature is retired and not grantable at targetSdk 35, so it must never
+    # hold the whole setup hostage.
+    [[ $tmux_ok -eq 1 && $proot_ok -eq 1 && \
         $audio_tools_ok -eq 1 ]] && host_ok=1
 
     say "version=$VERSION"
@@ -2730,7 +2744,6 @@ cp /home/desktop/.profile /home/desktop/.xprofile
 printf 'run_im fcitx5\n' > /home/desktop/.xinputrc
 install -d -m 0755 /home/desktop/Desktop /home/desktop/.config
 printf 'ja_JP\n' > /home/desktop/.config/user-dirs.locale
-ln -sfn /mnt/android '/home/desktop/Desktop/Android共有'
 
 chown -R desktop:desktop /home/desktop
 step "Debian XFCEの設定が完了しました"

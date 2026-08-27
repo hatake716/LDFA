@@ -23,7 +23,6 @@ import androidx.compose.material.icons.rounded.BatteryFull
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.CloudDone
 import androidx.compose.material.icons.rounded.Computer
-import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.Gavel
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Keyboard
@@ -32,7 +31,6 @@ import androidx.compose.material.icons.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material.icons.rounded.Settings
-import androidx.compose.material.icons.rounded.Storage
 import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.material.icons.rounded.ZoomIn
 import androidx.compose.material3.FilterChip
@@ -108,14 +106,6 @@ internal fun SettingsScreen(
                 )
                 HorizontalDivider(Modifier.padding(start = 58.dp))
                 StatusSettingsRow(
-                    icon = Icons.Rounded.Folder,
-                    title = "Android共有ストレージ",
-                    ready = state.setup.storageReady,
-                    readyText = "接続済み",
-                    pendingText = "アクセス許可が必要です",
-                )
-                HorizontalDivider(Modifier.padding(start = 58.dp))
-                StatusSettingsRow(
                     icon = Icons.Rounded.CloudDone,
                     title = "Debian実行基盤",
                     ready = state.setup.hostReady,
@@ -154,14 +144,6 @@ internal fun SettingsScreen(
                     subtitle = "Debianの保守やコマンド操作に使用",
                     onClick = if (state.setup.terminalReady) onOpenTerminal else null,
                 )
-                HorizontalDivider(Modifier.padding(start = 58.dp))
-                SettingsRow(
-                    icon = Icons.Rounded.Storage,
-                    title = "共有フォルダ",
-                    subtitle = state.setup.doctor?.sharedDirectory?.ifBlank { null }
-                        ?: "/sdcard/LinuxDesktop",
-                    onClick = null,
-                )
             }
         }
 
@@ -177,7 +159,7 @@ internal fun SettingsScreen(
                 SettingsRow(
                     icon = Icons.Rounded.Settings,
                     title = "Androidのアプリ設定",
-                    subtitle = "ストレージ、通知、バックグラウンド動作",
+                    subtitle = "通知、バックグラウンド動作",
                     onClick = onAppSettings,
                 )
             }

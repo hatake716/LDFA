@@ -79,7 +79,7 @@ internal fun CreateContainerDialog(
                     )
                     Spacer(Modifier.width(8.dp))
                     Text(
-                        "3〜5GB以上の空き容量を推奨します。Android共有ファイルはDebian環境の外側へ保存されます。",
+                        "3〜5GB以上の空き容量を推奨します。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -106,8 +106,6 @@ internal fun DeleteContainerDialog(
     onDismiss: () -> Unit,
     onDelete: (Boolean) -> Unit,
 ) {
-    var deleteSharedFiles by rememberSaveable { mutableStateOf(false) }
-
     AlertDialog(
         onDismissRequest = onDismiss,
         icon = { Icon(Icons.Rounded.Delete, null, tint = MaterialTheme.colorScheme.error) },
@@ -115,16 +113,13 @@ internal fun DeleteContainerDialog(
         text = {
             Column {
                 Text("Debian環境内のアプリと設定は完全に削除され、元に戻せません。")
-                Spacer(Modifier.height(12.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Checkbox(checked = deleteSharedFiles, onCheckedChange = { deleteSharedFiles = it })
-                    Text("Android共有フォルダ内のファイルも削除")
-                }
             }
         },
         confirmButton = {
             Button(
-                onClick = { onDelete(deleteSharedFiles) },
+                // The Android-shared-storage feature is retired; there is no
+                // per-environment shared folder to purge any more.
+                onClick = { onDelete(false) },
                 colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
             ) { Text("削除") }
         },

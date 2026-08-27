@@ -7,7 +7,7 @@
 ## Android権限
 
 - `INTERNET` / `ACCESS_NETWORK_STATE`: TermuxパッケージとDebian環境の取得
-- `READ_EXTERNAL_STORAGE` / `WRITE_EXTERNAL_STORAGE`: ユーザーが許可したAndroid共有フォルダとの連携（従来型のストレージ権限のみ。全ファイルアクセス`MANAGE_EXTERNAL_STORAGE`は使用せず、宣言もしません）
+- ストレージ権限は一切宣言しません（`READ/WRITE_EXTERNAL_STORAGE`も全ファイルアクセス`MANAGE_EXTERNAL_STORAGE`も不使用）。Android共有フォルダ連携機能は廃止済みで、Debian環境のファイルはアプリ専用領域にのみ保存されます
 - `FOREGROUND_SERVICE` / `FOREGROUND_SERVICE_SPECIAL_USE`: Debianインストール、X11サーバー、XFCEセッション維持
 - `FOREGROUND_SERVICE_DATA_SYNC`: バックアップ／復元処理
 - `POST_NOTIFICATIONS`: バックグラウンド実行状態の通知
@@ -63,7 +63,6 @@ LDFAは「ユーザーが自分で構築するLinux環境」を提供するア�
 
 ## 既知のリスク
 
-- Android共有フォルダ内のファイルはAndroidとDebianの双方から変更・削除できます。
 - 内蔵Termuxユーザーランドは本アプリ専用prefix向けに再ビルドしたものです。公式Termuxとはアプリ IDもデータ領域も異なり、独立して共存できます。
 - PRoot、ソフトウェアレンダリング、メーカー独自の省電力制御には端末差があります。
 - PRoot互換Chromeランチャーは`--no-sandbox`を使用するため、通常のLinux ChromeよりWebコンテンツの隔離が弱くなります。

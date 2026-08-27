@@ -13,7 +13,6 @@ import com.hatake716.linuxdesktop.data.*
 fun LinuxDesktopRoot(
     viewModel: MainViewModel,
     onPrepareRuntime: () -> Unit,
-    onGrantStorageAccess: () -> Unit,
     onStartContainer: (ContainerInfo) -> Unit,
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -43,7 +42,6 @@ fun LinuxDesktopRoot(
             SetupScreen(
                 state = state,
                 onPrepareRuntime = onPrepareRuntime,
-                onGrantStorageAccess = onGrantStorageAccess,
                 onRefresh = { viewModel.refreshEnvironment() },
                 onBootstrap = viewModel::bootstrapHost,
             )

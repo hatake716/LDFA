@@ -5,18 +5,20 @@
 
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
-    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
     <!--
-      MANAGE_EXTERNAL_STORAGE (All files access) is a Play policy-restricted permission
-      that Play rejects when declared but unused. This app never uses the all-files model
-      (grep of isExternalStorageManager/ACTION_MANAGE_APP_ALL_FILES finds only comments in
-      MainActivity.kt): its shared-storage feature rides on the classic WRITE_EXTERNAL_STORAGE
-      runtime permission. The bundled termux-runtime library and the vendor termux-app manifest
-      both declare MANAGE_EXTERNAL_STORAGE, so we strip it from the MERGED manifest here with a
-      remove node (do NOT edit the git submodules). Verify after a build in
-      build/intermediates/merged_manifest/.../AndroidManifest.xml that MANAGE is gone.
+      The Android-shared-storage feature is retired: at targetSdk 35 the classic
+      READ/WRITE_EXTERNAL_STORAGE permissions are not user-grantable (the system
+      permissions page doesn't even list them), so the /mnt/android share could
+      never work for real users and its UI has been removed. Strip ALL storage
+      permissions from the MERGED manifest — the bundled termux-runtime library
+      and the vendor termux-app manifest still declare them (do NOT edit the git
+      submodules); MANAGE_EXTERNAL_STORAGE is additionally a Play
+      policy-restricted permission that Play rejects when declared but unused.
+      Verify after a build that no *_EXTERNAL_STORAGE remains in
+      build/intermediates/merged_manifest/.../AndroidManifest.xml.
     -->
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" tools:node="remove" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" tools:node="remove" />
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" tools:node="remove" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
