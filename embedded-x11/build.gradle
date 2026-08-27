@@ -12,7 +12,10 @@ android {
         targetSdkVersion project.properties.targetSdkVersion.toInteger()
         buildConfigField 'String', 'VERSION_NAME', '"1.03.01-embedded"'
         buildConfigField 'String', 'COMMIT', '"50ac80fb2d4a475e323e752d17fcc0483c3c99fc"'
-        buildConfigField 'String', 'APPLICATION_ID', '"com.termux"'
+        // Must match :app's applicationId. Lorie's PrefsProto calls
+        // createPackageContext(APPLICATION_ID) at viewer startup, so a stale
+        // value here crashes MainActivity with NameNotFoundException.
+        buildConfigField 'String', 'APPLICATION_ID', '"com.hatake716.linuxdesktop"'
         consumerProguardFiles 'proguard-rules.pro'
     }
 

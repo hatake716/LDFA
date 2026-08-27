@@ -1,15 +1,15 @@
-#!/data/data/com.termux/files/usr/bin/bash
+#!/data/data/com.hatake716.linuxdesktop/files/usr/bin/bash
 # Linux Desktop for Android X11 diagnostics / Debian connectivity controller
 # SPDX-License-Identifier: GPL-3.0-only
 set -Eeuo pipefail
 
 VERSION="1.1.0"
 DISPLAY_NUMBER=1
-PACKAGE_ID="com.termux"
+PACKAGE_ID="com.hatake716.linuxdesktop"
 BASE="${XDG_DATA_HOME:-$HOME/.local/share}/linux-desktop-for-android"
 LOG_ROOT="$BASE/logs"
 LOG_FILE="$LOG_ROOT/x11-server.log"
-PREFIX="${PREFIX:-/data/data/com.termux/files/usr}"
+PREFIX="${PREFIX:-/data/data/com.hatake716.linuxdesktop/files/usr}"
 TMP_ROOT="$PREFIX/tmp"
 SOCKET_DIR="$TMP_ROOT/.X11-unix"
 SOCKET="$SOCKET_DIR/X${DISPLAY_NUMBER}"
@@ -52,23 +52,17 @@ find_xkb_root() {
 }
 
 ensure_xkb() {
+    # xkeyboard-config is BUNDLED in the bootstrap (built from source under this app's
+    # prefix), so find_xkb_root always succeeds. We must NOT `pkg install x11-repo /
+    # xkeyboard-config` at runtime: the upstream Termux repo is built for the com.termux
+    # prefix and its debs can't install here (see cmd_bootstrap in ldfa-host.sh).
     local xkb_root=""
     xkb_root="$(find_xkb_root || true)"
     if [[ -n "$xkb_root" ]]; then
         printf '%s' "$xkb_root"
         return 0
     fi
-
-    has pkg || die "Termuxパッケージ管理コマンドが見つかりません。"
-    say "[X11] Termux X11 repositoryを有効化します。" >&2
-    pkg install -y x11-repo >&2
-    pkg update -y >&2
-    say "[X11] xkeyboard-configをインストールします。" >&2
-    pkg install -y xkeyboard-config >&2
-
-    xkb_root="$(find_xkb_root || true)"
-    [[ -n "$xkb_root" ]] || die "xkeyboard-configのXKB rulesを準備できませんでした。"
-    printf '%s' "$xkb_root"
+    die "XKBデータ（xkeyboard-config）が内蔵基盤に見つかりません。ブートストラップを再生成してください。"
 }
 
 relevant_log_tail() {

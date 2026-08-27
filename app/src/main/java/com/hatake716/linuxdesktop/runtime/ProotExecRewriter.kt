@@ -16,7 +16,7 @@ import java.io.File
 object ProotExecRewriter {
 
     /** Guest path the bootstrap ELFs hard-code as their RUNPATH. */
-    private const val TERMUX_LIB = "/data/data/com.termux/files/usr/lib"
+    private const val TERMUX_LIB = "/data/data/com.hatake716.linuxdesktop/files/usr/lib"
 
     fun register(runtime: ProotRuntime, termuxLibDir: File) {
         if (!runtime.available) return

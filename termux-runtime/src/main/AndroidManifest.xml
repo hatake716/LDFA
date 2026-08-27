@@ -60,9 +60,16 @@
             android:resizeableActivity="true"
             android:taskAffinity="com.termux.filereceiver" />
 
+        <!--
+          ContentProvider authorities must be globally unique on a device. Deriving
+          them from ${applicationId} (a) avoids an install conflict with the real
+          Termux app, which owns "com.termux.documents"/"com.termux.files", and
+          (b) keeps them in sync with TermuxConstants.TERMUX_FILE_SHARE_URI_AUTHORITY,
+          which is now "<applicationId>.files".
+        -->
         <provider
             android:name="com.termux.filepicker.TermuxDocumentsProvider"
-            android:authorities="com.termux.documents"
+            android:authorities="${applicationId}.documents"
             android:exported="true"
             android:grantUriPermissions="true"
             android:permission="android.permission.MANAGE_DOCUMENTS">
@@ -73,7 +80,7 @@
 
         <provider
             android:name="com.termux.app.TermuxOpenReceiver$ContentProvider"
-            android:authorities="com.termux.files"
+            android:authorities="${applicationId}.files"
             android:exported="false"
             android:grantUriPermissions="true" />
 

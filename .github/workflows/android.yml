@@ -158,6 +158,11 @@ jobs:
           grep -Fq 'android:process=":x11"' "$VERIFY_DIR/manifest.xml"
           ! grep -Fq 'android.permission.RECORD_AUDIO' "$VERIFY_DIR/manifest.xml"
           ! grep -Fq 'android.permission.FOREGROUND_SERVICE_MICROPHONE' "$VERIFY_DIR/manifest.xml"
+          # Play blockers: the unused all-files-access permission must stay OUT of the
+          # merged manifest, and cleartext must be scoped via a network-security-config
+          # rather than the app-wide usesCleartextTraffic flag.
+          ! grep -Fq 'android.permission.MANAGE_EXTERNAL_STORAGE' "$VERIFY_DIR/manifest.xml"
+          grep -Fq 'networkSecurityConfig' "$VERIFY_DIR/manifest.xml"
 
           # The obsolete app_process/loader and shell-owned Android lifecycle must not return.
           ! grep -Fq 'assets/x11-loader.apk' "$VERIFY_DIR/entries.txt"
@@ -171,7 +176,7 @@ jobs:
           grep -Fq 'VncFallbackActivity' "$VERIFY_DIR/dex-strings.txt"
 
           # LDFA branding and Material 3 tools are included.
-          grep -Fxq 'com.termux' "$VERIFY_DIR/application-id.txt"
+          grep -Fxq 'com.hatake716.linuxdesktop' "$VERIFY_DIR/application-id.txt"
           grep -Fq "versionCode='20' versionName='1.1.0'" "$VERIFY_DIR/badging.txt"
           grep -Fq "application-label:'LDFA'" "$VERIFY_DIR/badging.txt"
           grep -Fq 'ToolsScreen' "$VERIFY_DIR/dex-strings.txt"
@@ -181,7 +186,7 @@ jobs:
           # Chrome keeps Google sign-in support while bounding its renderer pool.  The launcher
           # marker forces existing Debian environments to receive this update before startup.
           grep -Fq '# LDFA_CHROME_LAUNCHER_VERSION=8' "$VERIFY_DIR/ldfa-host.sh"
-          grep -Fq '# LDFA_SESSION_RUNTIME_VERSION=29' "$VERIFY_DIR/ldfa-host.sh"
+          grep -Fq '# LDFA_SESSION_RUNTIME_VERSION=36' "$VERIFY_DIR/ldfa-host.sh"
           grep -Fq -- '--renderer-process-limit=2' "$VERIFY_DIR/ldfa-host.sh"
           grep -Fq -- '--disable-background-mode' "$VERIFY_DIR/ldfa-host.sh"
           grep -Fq -- '--disable-extensions' "$VERIFY_DIR/ldfa-host.sh"

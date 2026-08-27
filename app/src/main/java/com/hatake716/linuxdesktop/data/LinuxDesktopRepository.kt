@@ -55,6 +55,16 @@ class LinuxDesktopRepository(private val context: Context) {
     // The desktop session's single-layer proot Process (native path). Held separately
     // from the worker so stop tears down both; destroying it kills XFCE.
     private val prootSessions = java.util.concurrent.ConcurrentHashMap<String, Process>()
+    // The Debian-install worker's persistent proot Process (native path). Like the
+    // desktop worker, worker-install must run in its own proot — spawning it via setsid
+    // inside the short-lived `create` RUN_COMMAND kills it the moment cmd_create returns.
+    // Held here for the whole install; the reference IS the proot's lifetime.
+    private val prootInstallWorkers = java.util.concurrent.ConcurrentHashMap<String, Process>()
+    // The Debian-install provision's single-layer proot Process (native path). The outer
+    // install worker publishes a request after extracting the rootfs; the app runs the
+    // guest apt/provision body as its OWN single proot layer so the dpkg-heavy xfce unpack
+    // isn't nested (proot-in-proot ran it ~6x slower). Held for the provision's duration.
+    private val prootInstallSessions = java.util.concurrent.ConcurrentHashMap<String, Process>()
     private val x11LifecycleMutex = GLOBAL_DISPLAY_LIFECYCLE_MUTEX
     private var termuxServiceLease: ServiceConnection? = null
     private val hostScript: String by lazy {
@@ -126,6 +136,18 @@ class LinuxDesktopRepository(private val context: Context) {
             arguments = listOf(id, displayName.trim()),
             timeout = 45.seconds,
         )
+        // On the native path cmd_create only prepares state (meta + queued status + empty
+        // log) and returns; it deliberately does NOT setsid the install worker (that would
+        // die with the create proot). The app launches worker-install in its own persistent
+        // proot instead, exactly like the desktop worker. Legacy path: cmd_create's
+        // tmux-backed start_install_worker already ran, so this is a no-op there.
+        launchNativeProotInstallWorkerIfNeeded(id)
+        // The install worker publishes a provision request once install_container extracts
+        // the rootfs. This waits for that request, then launches the guest apt/provision
+        // body as its OWN single native-proot layer (the dpkg-heavy xfce unpack, which was
+        // ~6x slower nested inside the worker proot). No-op on the legacy path (the worker
+        // runs the provision inline via pd_login and never publishes a request).
+        launchNativeProotInstallProvisionIfNeeded(id)
         id
     }
 
@@ -1100,6 +1122,70 @@ class LinuxDesktopRepository(private val context: Context) {
     }
 
     /**
+     * Launch (or re-launch) the Debian-install worker in its own persistent proot on the
+     * native path, and hold the Process for the whole install. A daemon thread reaps the
+     * map entry when the install finishes so the proot is released. Idempotent: skips if a
+     * live install worker is already held. No-op on the legacy path (launcher not usable;
+     * cmd_create's tmux backend runs the worker there).
+     */
+    private fun launchNativeProotInstallWorkerIfNeeded(id: String) {
+        if (!prootWorkerLauncher.usable) return
+        prootInstallWorkers[id]?.let { if (it.isAlive) return }
+        val process = prootWorkerLauncher.startInstall(id)
+        if (process != null) {
+            prootInstallWorkers[id] = process
+            Log.i(LIFECYCLE_LOG_TAG, "native-proot install worker launched id=$id")
+            Thread {
+                runCatching { process.waitFor() }
+                prootInstallWorkers.remove(id, process)
+                Log.i(LIFECYCLE_LOG_TAG, "native-proot install worker finished id=$id")
+            }.apply { isDaemon = true; name = "ldfa-install-hold-$id" }.start()
+        } else {
+            Log.w(LIFECYCLE_LOG_TAG, "native-proot install worker launch returned null id=$id")
+        }
+    }
+
+    /**
+     * Once the install worker publishes its provision request (rootfs extracted, guest
+     * body written into the rootfs), launch the Debian guest provision as its OWN single
+     * native-proot layer and hold the Process. One layer deep (not nested in the worker's
+     * proot) is what makes the dpkg-heavy xfce unpack fast. The worker supervises the
+     * guest's success/failure marker; the app just keeps this proot alive until the
+     * provision exits, then reaps it. Torn down on stop alongside the worker.
+     */
+    private fun launchNativeProotInstallProvisionIfNeeded(id: String) {
+        if (!prootWorkerLauncher.usable) return
+        prootInstallSessions[id]?.let { if (it.isAlive) return }
+        val request = prootWorkerLauncher.installRequestFile(id)
+        // The worker writes the request after install_container extracts the rootfs
+        // (a Debian download+unpack). Poll generously; bail if the worker died first.
+        var waited = 0
+        while (!request.isFile && waited < 300_000) {
+            if (prootInstallWorkers[id]?.isAlive == false) {
+                Log.w(LIFECYCLE_LOG_TAG, "native-proot install worker died before provision request id=$id")
+                return
+            }
+            Thread.sleep(500); waited += 500
+        }
+        if (!request.isFile) {
+            Log.w(LIFECYCLE_LOG_TAG, "install provision request never appeared id=$id")
+            return
+        }
+        val process = prootWorkerLauncher.startInstallProvision(id)
+        if (process != null) {
+            prootInstallSessions[id] = process
+            Log.i(LIFECYCLE_LOG_TAG, "native-proot install provision launched (single-layer) id=$id")
+            Thread {
+                runCatching { process.waitFor() }
+                prootInstallSessions.remove(id, process)
+                Log.i(LIFECYCLE_LOG_TAG, "native-proot install provision finished id=$id")
+            }.apply { isDaemon = true; name = "ldfa-provision-hold-$id" }.start()
+        } else {
+            Log.w(LIFECYCLE_LOG_TAG, "native-proot install provision launch returned null id=$id")
+        }
+    }
+
+    /**
      * Once the worker publishes its session request (host prep done: audio, X1, xset
      * preflight), launch the desktop as its OWN single native-proot layer and hold the
      * Process. One layer deep (not nested in the worker's proot) is what lets XFCE
@@ -1140,6 +1226,8 @@ class LinuxDesktopRepository(private val context: Context) {
     private fun teardownNativeProot(id: String) {
         prootSessions.remove(id)?.destroyForcibly()
         prootWorkers.remove(id)?.destroyForcibly()
+        prootInstallSessions.remove(id)?.destroyForcibly()
+        prootInstallWorkers.remove(id)?.destroyForcibly()
     }
 
     private fun readMetaDisplay(id: String): Int {

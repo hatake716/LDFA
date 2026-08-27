@@ -222,8 +222,8 @@ class EmbeddedX11ServerService : Service() {
 
         private const val CHANNEL_ID = "linux_desktop_x11"
         private const val NOTIFICATION_ID = 1716
-        private const val TERMUX_HOME = "/data/data/com.termux/files/home"
-        private const val TERMUX_PREFIX = "/data/data/com.termux/files/usr"
+        private const val TERMUX_HOME = "/data/data/com.hatake716.linuxdesktop/files/home"
+        private const val TERMUX_PREFIX = "/data/data/com.hatake716.linuxdesktop/files/usr"
         private const val TMP_ROOT = "$TERMUX_PREFIX/tmp"
         private const val XDG_RUNTIME = "$TERMUX_HOME/.local/share/linux-desktop-for-android/run/x11-runtime"
         private const val LOG_FILE = "$TERMUX_HOME/.local/share/linux-desktop-for-android/logs/x11-server.log"

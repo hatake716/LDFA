@@ -1,4 +1,4 @@
-#!/data/data/com.termux/files/usr/bin/bash
+#!/data/data/com.hatake716.linuxdesktop/files/usr/bin/bash
 # Linux Desktop for Android unified host controller (Robust Debian Edition)
 # SPDX-License-Identifier: GPL-3.0-only
 set -Eeuo pipefail
@@ -10,8 +10,8 @@ VERSION="1.1.0"
 # environment, and `set -u` would then abort at the first `$PREFIX` use. Fall back
 # to the fixed Termux prefix paths. Harmless when already set (the `:-` keeps the
 # existing value), so the normal tmux/targetSdk-28 path is unaffected.
-PREFIX="${PREFIX:-/data/data/com.termux/files/usr}"
-HOME="${HOME:-/data/data/com.termux/files/home}"
+PREFIX="${PREFIX:-/data/data/com.hatake716.linuxdesktop/files/usr}"
+HOME="${HOME:-/data/data/com.hatake716.linuxdesktop/files/home}"
 TMPDIR="${TMPDIR:-$PREFIX/tmp}"
 export PREFIX HOME TMPDIR
 
@@ -154,14 +154,55 @@ host_posix_tz() {
 # The real proot-distro rootfs. Probe the new and legacy layouts in order. We can
 # write here directly, so updating /etc/localtime needs no PRoot login.
 rootfs_dir() {
-    local id="$1" base="$PREFIX/var/lib/proot-distro" candidate
-    for candidate in "$base/containers/$id/rootfs" "$base/installed-rootfs/$id"; do
+    local id="$1" candidate
+    # proot-distro's install location moved across versions: the modern (XDG-compliant)
+    # build we bundle installs to $XDG_DATA_HOME/proot-distro/containers/<id>/rootfs
+    # (i.e. $HOME/.local/share/proot-distro/...), while older builds used
+    # $PREFIX/var/lib/proot-distro/{containers/<id>/rootfs, installed-rootfs/<id>}.
+    # Check the new location first, then fall back to the legacy ones.
+    for candidate in \
+        "${XDG_DATA_HOME:-$HOME/.local/share}/proot-distro/containers/$id/rootfs" \
+        "$PREFIX/var/lib/proot-distro/containers/$id/rootfs" \
+        "$PREFIX/var/lib/proot-distro/installed-rootfs/$id"; do
         if [[ -d "$candidate/etc" ]]; then
             printf '%s' "$candidate"
             return 0
         fi
     done
     return 1
+}
+
+# proot-distro v5 autodetects "Termux vs generic Linux host" from env hints
+# (TERMUX_VERSION / TERMUX_APP__APP_VERSION_NAME / a readable TERMUX__PREFIX,
+# needing 2 of 3 including an Android-filesystem check) and picks its registry
+# location and login defaults from the answer: Termux mode uses
+# $PREFIX/var/lib/proot-distro, host mode uses $XDG_DATA_HOME. Under the
+# renamed (non-com.termux) app the default TERMUX__PREFIX guess is unreadable,
+# so the env-scrubbed install worker fell to host mode (XDG registry) while
+# RUN_COMMAND shells carry TERMUX_VERSION and stayed in Termux mode — the same
+# container was visible in one context and invisible in the other. Pin Termux
+# mode on every proot-distro call so all contexts agree on the
+# $PREFIX/var/lib registry and on Termux-mode login semantics (the behaviour
+# proven on the com.termux build). No-op on legacy com.termux, and ignored by
+# the old bash proot-distro.
+PD_ENV=(env "TERMUX__PREFIX=$PREFIX" "TERMUX_VERSION=${TERMUX_VERSION:-ldfa}")
+pd() { "${PD_ENV[@]}" proot-distro "$@"; }
+
+# Adopt containers that earlier builds registered under $XDG_DATA_HOME (the
+# host-mode location — see PD_ENV) into the Termux-mode registry. Same
+# filesystem, so mv is an instant rename. Idempotent; never overwrites.
+migrate_pd_xdg_containers() {
+    local xdg_dir="${XDG_DATA_HOME:-$HOME/.local/share}/proot-distro/containers"
+    local tmx_dir="$PREFIX/var/lib/proot-distro/containers"
+    [[ -d "$xdg_dir" ]] || return 0
+    local d name
+    for d in "$xdg_dir"/*/; do
+        [[ -d "$d" ]] || continue
+        name="$(basename "$d")"
+        [[ -e "$tmx_dir/$name" ]] && continue
+        mkdir -p "$tmx_dir"
+        mv "$d" "$tmx_dir/$name" 2>/dev/null || true
+    done
 }
 
 meta_dir() { printf '%s/%s' "$META_ROOT" "$1"; }
@@ -234,6 +275,17 @@ session_pid_file() { printf '%s/%s.pid' "$RUN_ROOT" "$1"; }
 # proot layer (ProotWorkerLauncher.startSession), so ldfa-session runs ONE layer deep
 # and composes fast. Removed when the desktop stops.
 session_request_file() { printf '%s/%s.session-request' "$RUN_ROOT" "$1"; }
+# Native-proot install: worker_install (outer proot) writes the guest apt/provision
+# body into the rootfs at these GUEST-visible paths, publishes an install request via
+# session_request_file "$(install_session "$id")", and the app launches the body as its
+# OWN single native proot layer (ProotWorkerLauncher.startInstallProvision), so the
+# dpkg-heavy XFCE unpack runs ONE layer deep (proot-in-proot doubled ptrace made it ~6x
+# slower). The script + its success/failure markers must live INSIDE the rootfs so the
+# single guest layer (root of / == $rootfs) can write them and the host worker can see
+# them. Paths are relative to the rootfs (see rootfs_dir): guest /root/.ldfa-provision.*.
+install_provision_script() { printf '%s/root/.ldfa-provision.sh' "$(rootfs_dir "$1")"; }
+install_provision_done_marker() { printf '%s/root/.ldfa-provision.done' "$(rootfs_dir "$1")"; }
+install_provision_failed_marker() { printf '%s/root/.ldfa-provision.failed' "$(rootfs_dir "$1")"; }
 # Desktop-ready marker for native-proot mode. Written by the guest session script
 # itself (inside the session's own proot) right after wait_for_wm succeeds, at
 # $XDG_RUNTIME_DIR/ldfa-desktop-ready = /tmp/runtime-desktop/ldfa-desktop-ready in
@@ -299,7 +351,7 @@ pd_login() {
         [[ -n "$user" ]] && pdo+=(--user "$user")
         (( shared_tmp )) && pdo+=(--shared-tmp)
         local b; for b in "${extra_binds[@]}"; do pdo+=(--bind "$b"); done
-        "${tmo[@]}" proot-distro login "$id" "${pdo[@]}" -- "$@"
+        "${tmo[@]}" "${PD_ENV[@]}" proot-distro login "$id" "${pdo[@]}" -- "$@"
         return $?
     fi
 
@@ -346,8 +398,14 @@ pd_login() {
     # work — this just guarantees a sane PATH underneath.
     # env's options (-u) must precede any NAME=VALUE assignment, or env treats the flag
     # as the command (the guest's coreutils env is strict about this ordering).
+    # Also drop TMPDIR: the host exports TMPDIR=$PREFIX/tmp (a Termux-prefix path that
+    # does NOT exist inside the Debian guest namespace). If it leaks into the guest,
+    # maintainer scripts that `mktemp -p "$TMPDIR"` (e.g. ca-certificates postinst) fail
+    # with "No such file or directory", which makes dpkg --configure error and aborts the
+    # whole apt run (worker failed exit=100). Unsetting it lets the guest fall back to
+    # /tmp, which exists in the rootfs.
     local -a guest_env=(/usr/bin/env
-        -u LD_LIBRARY_PATH -u LD_PRELOAD
+        -u LD_LIBRARY_PATH -u LD_PRELOAD -u TMPDIR
         "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
     # Ensure libpdrt.so's OWN NEEDED libs (libtalloc etc.) resolve even when the caller
     # unset LD_LIBRARY_PATH before entering the guest (worker_run does). The proot libs
@@ -361,7 +419,7 @@ pd_login() {
 # D-Bus — and the xfconfd D-Bus activation that xfwm4 / xfce4-panel / xfsettingsd all
 # rely on — refuses to run without one; an empty file makes Xfconf fail to initialize
 # and tears the desktop down to just xfdesktop. /etc/machine-id is root-owned, so this
-# MUST run as root inside a proot (a bare host write from uid com.termux, or a session
+# MUST run as root inside a proot (a bare host write from the app uid, or a session
 # write from uid desktop, both get Permission denied). pd_login with no --user runs as
 # change-id 0:0 = root, which can write it. Idempotent: only (re)generates when empty.
 ensure_machine_id() {
@@ -430,11 +488,15 @@ session_kill() {
 
 container_exists() {
     local id="$1"
+    # The rootfs on disk is the source of truth; the proot-distro registry is
+    # only a fallback, because its location depends on env autodetection (see
+    # PD_ENV above) and a registry miss must not hide an intact container.
+    rootfs_dir "$id" >/dev/null && return 0
     has proot-distro || return 1
-    if proot-distro list -q >/dev/null 2>&1; then
-        proot-distro list -q 2>/dev/null | grep -Fxq "$id"
+    if pd list -q >/dev/null 2>&1; then
+        pd list -q 2>/dev/null | grep -Fxq "$id"
     else
-        proot-distro login "$id" -- /bin/true >/dev/null 2>&1
+        pd login "$id" -- /bin/true >/dev/null 2>&1
     fi
 }
 
@@ -1780,20 +1842,58 @@ esac
 if [[ ! -x /usr/bin/google-chrome-stable ]]; then
     printf '\n[%s] Google Chrome stable (%s)を準備しています\n' "$(date -Iseconds)" "$architecture"
     "${APT[@]}" update
-    "${APT[@]}" install -y --no-install-recommends ca-certificates wget
+    "${APT[@]}" install -y --no-install-recommends ca-certificates wget gnupg
 
-    chrome_package="$(mktemp /tmp/google-chrome-stable.XXXXXX.deb)"
-    cleanup_chrome_package() { rm -f "$chrome_package"; }
-    trap cleanup_chrome_package EXIT INT TERM
-    wget --https-only --tries=3 --timeout=30 --progress=dot:giga \
-        -O "$chrome_package" \
-        "https://dl.google.com/linux/direct/google-chrome-stable_current_${architecture}.deb"
+    # Preferred path: install Chrome from Google's OWN signed apt repository. This
+    # verifies the package against Google's Linux signing key — the same trust model
+    # as every other apt package LDFA installs — instead of a raw .deb with no
+    # signature check. Google publishes the repo key at the URL below.
+    chrome_from_signed_repo() {
+        install -d -m 0755 /etc/apt/keyrings
+        local key="/etc/apt/keyrings/google-chrome.gpg"
+        wget --https-only --tries=3 --timeout=30 -qO- \
+            https://dl.google.com/linux/linux_signing_key.pub \
+            | gpg --dearmor -o "$key" 2>/dev/null || return 1
+        chmod 0644 "$key"
+        # Chrome's repo is amd64-only upstream; on arm64 there is no signed repo, so
+        # this returns 1 and we fall back to the direct .deb below.
+        local repo_arch
+        case "$architecture" in
+            amd64) repo_arch=amd64 ;;
+            *) return 1 ;;
+        esac
+        printf 'deb [arch=%s signed-by=%s] https://dl.google.com/linux/chrome/deb/ stable main\n' \
+            "$repo_arch" "$key" > /etc/apt/sources.list.d/google-chrome.list
+        "${APT[@]}" update
+        "${APT[@]}" install -y --no-install-recommends google-chrome-stable
+    }
 
-    [[ "$(dpkg-deb --field "$chrome_package" Package)" == google-chrome-stable ]]
-    [[ "$(dpkg-deb --field "$chrome_package" Architecture)" == "$architecture" ]]
-    "${APT[@]}" install -y --no-install-recommends "$chrome_package"
-    rm -f "$chrome_package"
-    trap - EXIT INT TERM
+    # Fallback: fetch the official .deb directly over HTTPS. Used on arm64 (no signed
+    # repo) or if the repo path fails. Verified by dpkg-deb field checks; HTTPS-only.
+    chrome_from_direct_deb() {
+        local chrome_package
+        chrome_package="$(mktemp /tmp/google-chrome-stable.XXXXXX.deb)"
+        cleanup_chrome_package() { rm -f "$chrome_package"; }
+        trap cleanup_chrome_package EXIT INT TERM
+        wget --https-only --tries=3 --timeout=30 --progress=dot:giga \
+            -O "$chrome_package" \
+            "https://dl.google.com/linux/direct/google-chrome-stable_current_${architecture}.deb" || return 1
+        [[ "$(dpkg-deb --field "$chrome_package" Package)" == google-chrome-stable ]] || return 1
+        [[ "$(dpkg-deb --field "$chrome_package" Architecture)" == "$architecture" ]] || return 1
+        "${APT[@]}" install -y --no-install-recommends "$chrome_package"
+        local rc=$?
+        rm -f "$chrome_package"
+        trap - EXIT INT TERM
+        return $rc
+    }
+
+    if ! chrome_from_signed_repo; then
+        printf '[%s] 署名付きaptリポジトリからの導入に失敗したため、公式.debへフォールバックします\n' \
+            "$(date -Iseconds)" >&2
+        # Drop a half-written repo file so a stale/broken source can't wedge future apt runs.
+        rm -f /etc/apt/sources.list.d/google-chrome.list
+        chrome_from_direct_deb
+    fi
 fi
 
 install -d -m 0755 /usr/local/bin
@@ -2205,7 +2305,7 @@ stop_one() {
     fi
 
     if has proot-distro; then
-        proot-distro kill "$id" >/dev/null 2>&1 || \
+        pd kill "$id" >/dev/null 2>&1 || \
             pkill -f "proot.*${id}" >/dev/null 2>&1 || true
     fi
 
@@ -2289,18 +2389,23 @@ cmd_bootstrap() {
     has pkg || die "内蔵ターミナルの初期展開が完了していません。"
 
     export DEBIAN_FRONTEND=noninteractive
-    say "[$(date -Iseconds)] Termuxパッケージ一覧を更新します。"
-    retry_command 3 3 pkg update -y
 
-    say "[$(date -Iseconds)] PRoot Distroと監視ツールをインストールします。"
-    retry_command 3 3 pkg install -y \
-        proot \
-        proot-distro \
-        tmux \
-        coreutils \
-        procps \
-        pulseaudio \
-        termux-tools
+    # proot, proot-distro, tmux, pulseaudio (and everything else this base needs) are
+    # BUNDLED in the bootstrap, built from source under this app's own prefix. We must NOT
+    # `pkg install`/`pkg update` them at runtime: the upstream Termux apt repo publishes
+    # packages compiled for the com.termux prefix, whose debs unpack into /data/data/
+    # com.termux (a foreign, non-writable data dir) and fail. Defensively neuter the host
+    # PREFIX's apt sources so no accidental `pkg` op can ever contact that repo. This
+    # touches ONLY the host bootstrap tree ($PREFIX/etc/apt); the Debian guest has its own
+    # apt config under proot-distro and is unaffected.
+    : > "$PREFIX/etc/apt/sources.list" 2>/dev/null || true
+    rm -f "$PREFIX/etc/apt/sources.list.d/"*.list 2>/dev/null || true
+
+    say "[$(date -Iseconds)] 内蔵Linux基盤を確認しています。"
+    local tool
+    for tool in proot proot-distro tmux pulseaudio; do
+        has "$tool" || die "内蔵Linux基盤が不完全です（$tool）。ブートストラップの再生成が必要です。"
+    done
 
     ensure_storage
     chmod 700 "$SELF" 2>/dev/null || true
@@ -2338,6 +2443,12 @@ start_install_worker() {
     session="$(install_session "$id")"
     session_alive "$session" && return 0
     rm -f "$(stop_file "$id")"
+    # Native path: the app launches worker-install in its OWN persistent proot
+    # (LinuxDesktopRepository.launchNativeProotInstallWorkerIfNeeded). Spawning it here
+    # via session_start's setsid would die with the calling proot (setsid can't escape a
+    # proot's lifetime), so do NOTHING here on native — cmd_create just prepares state and
+    # the app spawns the worker. Mirrors start_run_worker's native branch.
+    native_proot_mode && return 0
     session_start "$session" "$SELF" worker-install "$id"
 }
 
@@ -2379,22 +2490,22 @@ worker_failed() {
 
 install_container() {
     local id="$1" attempt image="$LINUX_IMAGE" legacy_distro="${LINUX_IMAGE%%:*}" install_help
-    install_help="$(proot-distro install --help 2>&1 || true)"
+    install_help="$(pd install --help 2>&1 || true)"
     for attempt in 1 2 3; do
         printf '[%s] Installing %s as %s (attempt %s/3)\n' \
             "$(date -Iseconds)" "$image" "$id" "$attempt"
         # PRoot-Distro 5 accepts OCI image references directly. Keep the old
         # plugin name only for the legacy CLI, where tags are not supported.
         if [[ "$install_help" == *"--name"* ]]; then
-            if proot-distro install --name "$id" "$image"; then
+            if pd install --name "$id" "$image"; then
                 return 0
             fi
         else
-            if proot-distro install "$legacy_distro" --override-alias "$id"; then
+            if pd install "$legacy_distro" --override-alias "$id"; then
                 return 0
             fi
         fi
-        proot-distro remove "$id" >/dev/null 2>&1 || true
+        pd remove "$id" >/dev/null 2>&1 || true
         (( attempt < 3 )) && sleep 5
     done
     return 1
@@ -2413,6 +2524,15 @@ worker_install() {
     # here, so tolerate the failure — the shared bind is applied per guest login.
     mkdir -p "$shared" 2>/dev/null || true
 
+    # Native path: the app launched this worker in its OWN persistent proot (not via
+    # setsid inside the create RUN_COMMAND, which would die immediately). Record our PID
+    # under the install session so session_alive/session_kill/cmd_list can track us, just
+    # like worker_run does. Do it BEFORE the exec redirect so it lands regardless.
+    if native_proot_mode; then
+        mkdir -p "$RUN_ROOT" 2>/dev/null || true
+        printf '%s\n' "$$" > "$(session_pid_file "$(install_session "$id")")" 2>/dev/null || true
+    fi
+
     exec >>"$log" 2>&1
     trap 'worker_failed "$id" "$?" "$LINENO"' ERR
     trap 'worker_failed "$id" 130 "$LINENO"' INT
@@ -2424,7 +2544,13 @@ worker_install() {
 
     if container_exists "$id" && [[ "$(read_meta "$id" installed 0)" != 1 ]]; then
         set_status "$id" installing 3 "以前の未完了環境を削除しています…"
-        proot-distro remove "$id" >/dev/null 2>&1 || true
+        pd remove "$id" >/dev/null 2>&1 || true
+        # The registry can miss a container the rootfs probe sees (context
+        # mismatch, interrupted install) — sweep the on-disk layouts too so a
+        # half-installed rootfs cannot survive and poison the reinstall.
+        rm -rf "${XDG_DATA_HOME:-$HOME/.local/share}/proot-distro/containers/$id" \
+            "$PREFIX/var/lib/proot-distro/containers/$id" \
+            "$PREFIX/var/lib/proot-distro/installed-rootfs/$id" 2>/dev/null || true
     fi
 
     if ! container_exists "$id"; then
@@ -2437,10 +2563,17 @@ worker_install() {
     # Keep PRoot's syscall-trace acceleration enabled in Android app processes.
     # Forcing it off exposes guest syscalls to the app seccomp policy as ENOSYS.
     unset PROOT_NO_SECCOMP
-    pd_login "$id" --bind "$shared:/mnt/android" -- \
-        /usr/bin/env LDFA_TZ="$(host_timezone)" \
-            LDFA_KEYBOARD_LAYOUT="$(read_meta "$id" keyboard_layout jis)" \
-            /bin/bash -s <<'CONTAINER_SETUP'
+
+    # The guest apt/provision body. This is PURE guest bash (root context): apt
+    # update+install, locale-gen, timezone symlink, useradd, sudoers, the Fcitx5
+    # profile + desktop-user setup. It is the ONE dpkg-heavy phase (xfce apt unpack)
+    # and the reason the native path splits it into its own single proot layer.
+    # Captured into a variable once so BOTH paths reuse it: legacy feeds it through
+    # pd_login's /bin/bash -s (unchanged double-proot, fine there); native writes it
+    # into the rootfs and the app runs it single-layer (see below). It reads
+    # LDFA_TZ/LDFA_KEYBOARD_LAYOUT from its env, which each path supplies.
+    local provision_body
+    provision_body="$(cat <<'CONTAINER_SETUP'
 set -Eeuo pipefail
 export DEBIAN_FRONTEND=noninteractive
 export LC_ALL=C.UTF-8
@@ -2449,8 +2582,24 @@ APT=(apt-get -o Acquire::Retries=3 -o Dpkg::Use-Pty=0)
 step() { printf '\n[%s] %s\n' "$(date -Iseconds)" "$*"; }
 
 step "パッケージソースを確認しています"
-sed -i 's/deb\.debian\.org/ftp.jp.debian.org/g' /etc/apt/sources.list || true
+# Mirror rewrite to a Japan mirror (Debian 12 uses the deb822 debian.sources, not the
+# legacy sources.list — rewrite whichever exists).
+sed -i 's/deb\.debian\.org/ftp.jp.debian.org/g' /etc/apt/sources.list 2>/dev/null || true
+sed -i 's/deb\.debian\.org/ftp.jp.debian.org/g' /etc/apt/sources.list.d/debian.sources 2>/dev/null || true
 
+# GPG bootstrap (break the chicken-and-egg): the minimal OCI base image ships NO gnupg and
+# its debian.sources `Signed-By:` points at a keyring file that isn't present, so apt's
+# apt-key fallback dies with "Unknown error executing apt-key" and `apt update` fails for
+# bookworm-updates/security. We can't `apt install gnupg` before a successful update. So do
+# a FIRST update that tolerates the unsigned repos, install gnupg + the real
+# debian-archive-keyring (which provides /usr/share/keyrings/debian-archive-keyring.gpg that
+# the sources already reference), then a SECOND, fully-verified update.
+step "パッケージ一覧を更新しています（初回・鍵ブートストラップ）"
+"${APT[@]}" -o Acquire::AllowInsecureRepositories=true update || true
+step "GPG鍵とgnupgをインストールしています"
+"${APT[@]}" install -y --no-install-recommends \
+    -o APT::Get::AllowUnauthenticated=true \
+    gnupg debian-archive-keyring
 step "パッケージ一覧を更新しています"
 "${APT[@]}" update
 
@@ -2580,7 +2729,110 @@ ln -sfn /mnt/android '/home/desktop/Desktop/Android共有'
 chown -R desktop:desktop /home/desktop
 step "Debian XFCEの設定が完了しました"
 CONTAINER_SETUP
+)"
 
+    if native_proot_mode; then
+        # Single-layer split: run the dpkg-heavy provision body as the app's OWN
+        # native proot layer instead of nesting it under this outer worker proot
+        # (proot-in-proot doubled the ptrace tax and crawled the xfce unpack ~6x).
+        # This mirrors worker_run's session split exactly: we WRITE the body into the
+        # rootfs, PUBLISH an install request the app reads, then SUPERVISE for the
+        # guest's success/failure marker. The app launches the body single-layer via
+        # ProotWorkerLauncher.startInstallProvision (change-id 0:0 — the body does
+        # root writes: useradd/locale-gen/sudoers).
+        local provision_script done_marker failed_marker request tz layout
+        provision_script="$(install_provision_script "$id")"
+        done_marker="$(install_provision_done_marker "$id")"
+        failed_marker="$(install_provision_failed_marker "$id")"
+        request="$(session_request_file "$(install_session "$id")")"
+        tz="$(host_timezone)"
+        layout="$(read_meta "$id" keyboard_layout jis)"
+
+        # Fresh markers each run (a stale .done from a re-install would falsely pass).
+        rm -f "$done_marker" "$failed_marker"
+
+        # Wrap the pure-guest body so it self-reports: all output goes to a guest-side
+        # log (/root/.ldfa-provision.log) which the outer worker tails into the debian
+        # log so failures are visible; an ERR trap records the failing line + rc there and
+        # writes the failed marker; the last line writes the done marker on success. The
+        # app runs `/bin/bash /root/.ldfa-provision.sh` in the single guest proot, so this
+        # script sees / == rootfs; /root/.ldfa-provision.{log,done,failed} are the same
+        # files the outer worker sees on the host (install_provision_* helpers).
+        {
+            printf '%s\n' '#!/bin/bash'
+            printf '%s\n' 'exec >>/root/.ldfa-provision.log 2>&1'
+            printf '%s\n' 'trap '\''rc=$?; printf "\n[provision] FAILED rc=%s at line %s: %s\n" "$rc" "$LINENO" "$BASH_COMMAND"; rm -f /root/.ldfa-provision.done; : > /root/.ldfa-provision.failed; exit $rc'\'' ERR'
+            printf '%s\n' "$provision_body"
+            printf '%s\n' 'rm -f /root/.ldfa-provision.failed'
+            printf '%s\n' ': > /root/.ldfa-provision.done'
+        } > "$provision_script"
+        chmod 0755 "$provision_script"
+        : > "$(dirname "$provision_script")/.ldfa-provision.log"
+
+        # Publish the request AFTER install_container succeeded (rootfs must exist for
+        # --rootfs) and AFTER the script is in place. The app polls this file, then
+        # launches the single guest layer. CHANGE_ID is 0:0 (provision runs as root).
+        {
+            printf 'ROOTFS=%s\n' "$(rootfs_dir "$id")"
+            printf 'CHANGE_ID=%s\n' "0:0"
+            printf 'SHARED=%s\n' "$shared"
+            printf 'LDFA_TZ=%s\n' "$tz"
+            printf 'LDFA_KEYBOARD_LAYOUT=%s\n' "$layout"
+        } > "$request"
+
+        # Stream the guest provision's log into the debian log so the UI's live log and
+        # any failure are visible (the provision proot is a separate app-launched process
+        # whose stdout the app drains to null; the guest-side .log is the real record).
+        local provision_log; provision_log="$(dirname "$provision_script")/.ldfa-provision.log"
+        ( tail -n +1 -F "$provision_log" 2>/dev/null ) &
+        local tail_pid=$!
+
+        # Supervise until the guest provision signals completion (or the env is being
+        # stopped). worker_failed's ERR/INT/TERM traps still cover this loop. The provision
+        # script's ERR trap writes the failed marker on any command failure, so a normal
+        # failure breaks us out promptly. A hard SIGKILL of the provision proot would leave
+        # NO marker; a generous wall-clock deadline (1h — the install is minutes even on
+        # slow ARM/network) is a last-resort deadlock breaker treated as failure below.
+        local waited=0
+        while [[ ! -f "$done_marker" && ! -f "$failed_marker" && ! -f "$(stop_file "$id")" ]]; do
+            sleep 2
+            waited=$((waited + 2))
+            (( waited >= 3600 )) && break
+        done
+
+        # Flush the tail of the provision log then stop the follower.
+        sleep 1
+        kill "$tail_pid" 2>/dev/null || true
+        rm -f "$request"
+        if [[ -f "$(stop_file "$id")" && ! -f "$done_marker" ]]; then
+            rm -f "$provision_script" "$failed_marker"
+            die "インストールが停止されました。"
+        fi
+        if [[ ! -f "$done_marker" ]]; then
+            # Provision proot wrote the failed marker, or died without either marker.
+            rm -f "$provision_script" "$failed_marker"
+            die "Debianの初回設定に失敗しました。リアルタイムログを確認して再試行できます。"
+        fi
+        rm -f "$provision_script" "$done_marker" "$failed_marker"
+    else
+        # Legacy (tmux / targetSdk-28) path: run the provision body inline via
+        # pd_login exactly as before. proot-distro login is a single layer here, so
+        # there is no double-proot penalty to split away. Feed the captured body to the
+        # guest bash on stdin with `printf '%s'` (NOT an unquoted heredoc): the body
+        # contains ${APT[@]}, $(date ...), ${LDFA_KEYBOARD_LAYOUT:-jis} etc. that must
+        # reach the guest verbatim, so the host must not expand them.
+        printf '%s' "$provision_body" | pd_login "$id" --bind "$shared:/mnt/android" -- \
+            /usr/bin/env LDFA_TZ="$(host_timezone)" \
+                LDFA_KEYBOARD_LAYOUT="$(read_meta "$id" keyboard_layout jis)" \
+                /bin/bash -s
+    fi
+
+    # ensure_audio_client/ensure_desktop_runtime/ensure_google_chrome/ensure_nodejs
+    # stay in the OUTER worker for BOTH paths, AFTER the heavy provision phase above.
+    # On the native path they still pd_login into the guest (a brief double-proot),
+    # which is accepted: they are small (a runtime helper install, a network+small-apt
+    # Chrome/Node fetch), NOT the thousands-of-tiny-files xfce unpack that the split
+    # above made single-layer. Splitting them too would add code for negligible gain.
     set_status "$id" installing 82 "Debianの音声クライアントを設定しています…"
     ensure_audio_client "$id"
     set_status "$id" installing 84 "デスクトップ監視機能を設定しています…"
@@ -2829,7 +3081,19 @@ cmd_ensure_apps() {
     local id="${1:-}" fingerprint combined chrome_state
     validate_id "$id"
     [[ -d "$(meta_dir "$id")" ]] || die "環境が見つかりません。"
-    container_exists "$id" || die "Debian環境が見つかりません。"
+    container_exists "$id" || {
+        # This fires only when no rootfs layout matched AND the registry has no
+        # entry — record where we looked so a field report is actionable.
+        {
+            printf '[ensure-apps: container missing %s]\n' "$(date -Iseconds)"
+            printf 'xdg_containers=[%s]\n' \
+                "$(ls "${XDG_DATA_HOME:-$HOME/.local/share}/proot-distro/containers" 2>&1 | tr '\n' ',')"
+            printf 'termux_containers=[%s]\n' \
+                "$(ls "$PREFIX/var/lib/proot-distro/containers" 2>&1 | tr '\n' ',')"
+            printf 'pd_list=[%s]\n' "$(pd list -q 2>&1 | tr '\n' ',')"
+        } >> "$(log_file "$id")" 2>&1 || true
+        die "Debian環境が見つかりません。"
+    }
     [[ "$(read_meta "$id" installed 0)" == 1 ]] || \
         die "この環境のインストールは完了していません。"
 
@@ -3006,7 +3270,7 @@ worker_run() {
     # Seed the guest machine-id. D-Bus (and the xfconfd activation that xfwm4/panel/
     # xfsettingsd depend on) refuses to run without a non-empty /etc/machine-id; when it
     # was empty the whole `Xfconf could not be initialized` cascade killed 3 of the 4 XFCE
-    # components. /etc/machine-id is root-owned, so NEITHER the host (uid com.termux) NOR
+    # components. /etc/machine-id is root-owned, so NEITHER the host (the app uid) NOR
     # the single-layer session (uid desktop) can write it — only a root context inside a
     # proot can. So do it here with a one-shot pd_login as root (no --user ⇒ change-id
     # 0:0). This nests proot-in-proot briefly, but it's a single dbus-uuidgen, not a
@@ -3068,7 +3332,20 @@ cmd_delete() {
         session_kill "$(install_session "$id")"
     fi
     if container_exists "$id"; then
-        proot-distro remove "$id"
+        if ! pd remove "$id"; then
+            # Registry miss must not strand the delete: fall back to removing
+            # the container directories directly (owner perms first — proot
+            # rootfs trees can contain write-protected directories).
+            local cdir
+            for cdir in \
+                "$PREFIX/var/lib/proot-distro/containers/$id" \
+                "$PREFIX/var/lib/proot-distro/installed-rootfs/$id" \
+                "${XDG_DATA_HOME:-$HOME/.local/share}/proot-distro/containers/$id"; do
+                [[ -e "$cdir" ]] || continue
+                chmod -R u+rwX "$cdir" 2>/dev/null || true
+                rm -rf "$cdir"
+            done
+        fi
     fi
 
     rm -rf "$(meta_dir "$id")" "$(log_file "$id")" "$(stop_file "$id")"
@@ -3362,6 +3639,7 @@ main() {
             acquire_controller_lock
             locked=1
             trap release_controller_lock EXIT INT TERM
+            migrate_pd_xdg_containers
             ;;
     esac
     case "$command" in

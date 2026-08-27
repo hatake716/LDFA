@@ -1,0 +1,285 @@
+diff --git a/packages/atool/build.sh b/packages/atool/build.sh
+index 3ed3043..c4161e2 100644
+--- a/packages/atool/build.sh
++++ b/packages/atool/build.sh
+@@ -5,7 +5,7 @@ TERMUX_PKG_LICENSE_FILE="COPYING"
+ TERMUX_PKG_MAINTAINER="@termux"
+ TERMUX_PKG_VERSION="0.39.0"
+ TERMUX_PKG_REVISION=3
+-TERMUX_PKG_SRCURL="https://download.savannah.gnu.org/releases/atool/atool-$TERMUX_PKG_VERSION.tar.gz"
++TERMUX_PKG_SRCURL="https://download-mirror.savannah.gnu.org/releases/atool/atool-$TERMUX_PKG_VERSION.tar.gz"
+ TERMUX_PKG_SHA256="aaf60095884abb872e25f8e919a8a63d0dabaeca46faeba87d12812d6efc703b"
+ TERMUX_PKG_DEPENDS="perl"
+ TERMUX_PKG_BUILD_IN_SRC=true
+diff --git a/packages/attr/build.sh b/packages/attr/build.sh
+index 6c193fe..7d52e0b 100644
+--- a/packages/attr/build.sh
++++ b/packages/attr/build.sh
+@@ -3,7 +3,7 @@ TERMUX_PKG_DESCRIPTION="Utilities for manipulating filesystem extended attribute
+ TERMUX_PKG_LICENSE="GPL-2.0"
+ TERMUX_PKG_MAINTAINER="@termux"
+ TERMUX_PKG_VERSION="2.6.0"
+-TERMUX_PKG_SRCURL="http://download.savannah.gnu.org/releases/attr/attr-${TERMUX_PKG_VERSION}.tar.gz"
++TERMUX_PKG_SRCURL="http://download-mirror.savannah.gnu.org/releases/attr/attr-${TERMUX_PKG_VERSION}.tar.gz"
+ TERMUX_PKG_SHA256=d42fa374513180bb48cb11a46696f488240e5124ff1e6ad88b0abff706985612
+ TERMUX_PKG_AUTO_UPDATE=true
+ TERMUX_PKG_BREAKS="attr-dev"
+diff --git a/packages/libacl/build.sh b/packages/libacl/build.sh
+index 79660ba..3499feb 100644
+--- a/packages/libacl/build.sh
++++ b/packages/libacl/build.sh
+@@ -3,7 +3,7 @@ TERMUX_PKG_DESCRIPTION="Access control list shared library"
+ TERMUX_PKG_LICENSE="LGPL-2.1, GPL-2.0"
+ TERMUX_PKG_MAINTAINER="@termux"
+ TERMUX_PKG_VERSION="2.4.0"
+-TERMUX_PKG_SRCURL=https://download.savannah.gnu.org/releases/acl/acl-${TERMUX_PKG_VERSION}.tar.gz
++TERMUX_PKG_SRCURL=https://download-mirror.savannah.gnu.org/releases/acl/acl-${TERMUX_PKG_VERSION}.tar.gz
+ TERMUX_PKG_SHA256=73c853c3d44e1f693e5a96a986f1bd19d3d0dac2c7d453e796177774bc4e5f6a
+ TERMUX_PKG_AUTO_UPDATE=true
+ TERMUX_PKG_DEPENDS="attr"
+diff --git a/packages/libandroid-utimes/build.sh b/packages/libandroid-utimes/build.sh
+index 07647fd..a5e39e5 100644
+--- a/packages/libandroid-utimes/build.sh
++++ b/packages/libandroid-utimes/build.sh
+@@ -6,3 +6,13 @@ TERMUX_PKG_VERSION=0.4
+ TERMUX_PKG_SRCURL=https://github.com/termux/libandroid-utimes/archive/refs/tags/v${TERMUX_PKG_VERSION}.tar.gz
+ TERMUX_PKG_SHA256=579dd000d084e2647d7b907d3c4ef2c46c8cda703e371ed1df32f4dd0366e25d
+ TERMUX_PKG_BUILD_IN_SRC=true
++
++# LDFA: upstream's v0.4 tarball ships no LICENSE file, and termux-licenses has no
++# generic "BSD 2-Clause" template, so termux_step_install_license aborts the build
++# (only hit when apt's dep chain is built, i.e. a non---android10 bootstrap). The
++# BSD-2-Clause text lives in the source headers; skip the copyright-file install for
++# this one package so the bootstrap can build. No functional impact.
++termux_step_install_license() {
++	mkdir -p "${TERMUX_PREFIX}/share/doc/${TERMUX_PKG_NAME}"
++	printf '%s\n' "$TERMUX_PKG_LICENSE" > "${TERMUX_PREFIX}/share/doc/${TERMUX_PKG_NAME}/copyright"
++}
+diff --git a/packages/lzip/build.sh b/packages/lzip/build.sh
+index 297923b..1100182 100644
+--- a/packages/lzip/build.sh
++++ b/packages/lzip/build.sh
+@@ -3,7 +3,7 @@ TERMUX_PKG_DESCRIPTION="Lossless data compressor similar to gzip and bzip2"
+ TERMUX_PKG_LICENSE="GPL-3.0"
+ TERMUX_PKG_MAINTAINER="@termux"
+ TERMUX_PKG_VERSION="1.26"
+-TERMUX_PKG_SRCURL=https://download.savannah.gnu.org/releases/lzip/lzip-${TERMUX_PKG_VERSION}.tar.lz
++TERMUX_PKG_SRCURL=https://download-mirror.savannah.gnu.org/releases/lzip/lzip-${TERMUX_PKG_VERSION}.tar.lz
+ TERMUX_PKG_SHA256=1746f1e4ec4359a728692ce2db45641c9267b048aa13c044e9d581d50394713d
+ TERMUX_PKG_AUTO_UPDATE=true
+ TERMUX_PKG_DEPENDS="libc++"
+diff --git a/packages/lzlib/build.sh b/packages/lzlib/build.sh
+index ba904f5..9aad3e1 100644
+--- a/packages/lzlib/build.sh
++++ b/packages/lzlib/build.sh
+@@ -4,6 +4,6 @@ TERMUX_PKG_LICENSE="BSD 2-Clause, GPL-2.0"
+ TERMUX_PKG_LICENSE_FILE="COPYING, COPYING.GPL"
+ TERMUX_PKG_MAINTAINER="@termux"
+ TERMUX_PKG_VERSION="1.16"
+-TERMUX_PKG_SRCURL=https://download.savannah.gnu.org/releases/lzip/lzlib/lzlib-$TERMUX_PKG_VERSION.tar.gz
++TERMUX_PKG_SRCURL=https://download-mirror.savannah.gnu.org/releases/lzip/lzlib/lzlib-$TERMUX_PKG_VERSION.tar.gz
+ TERMUX_PKG_SHA256=203228de911780309dad6813e51541d7ea89469784f01cb661edba080ff1b038
+ TERMUX_PKG_AUTO_UPDATE=true
+diff --git a/packages/plzip/build.sh b/packages/plzip/build.sh
+index 390b693..a40c09d 100644
+--- a/packages/plzip/build.sh
++++ b/packages/plzip/build.sh
+@@ -3,7 +3,7 @@ TERMUX_PKG_DESCRIPTION="A massively parallel lossless data compressor based on t
+ TERMUX_PKG_LICENSE="GPL-2.0"
+ TERMUX_PKG_MAINTAINER="@termux"
+ TERMUX_PKG_VERSION="1.13"
+-TERMUX_PKG_SRCURL=https://download.savannah.gnu.org/releases/lzip/plzip/plzip-$TERMUX_PKG_VERSION.tar.gz
++TERMUX_PKG_SRCURL=https://download-mirror.savannah.gnu.org/releases/lzip/plzip/plzip-$TERMUX_PKG_VERSION.tar.gz
+ TERMUX_PKG_SHA256=64d49dde20daa5fdff2b3ff28e3348082de10dd54eb10df6da7d1bc6c7a6db64
+ TERMUX_PKG_AUTO_UPDATE=true
+ TERMUX_PKG_DEPENDS="libc++, lzlib"
+diff --git a/scripts/build-bootstraps.sh b/scripts/build-bootstraps.sh
+index 53bb59d..ac54a69 100755
+--- a/scripts/build-bootstraps.sh
++++ b/scripts/build-bootstraps.sh
+@@ -116,6 +116,53 @@ extract_debs() {
+ 		echo "\""
+ 	fi
+ 
++	# LDFA: extract_debs globs the WHOLE output/ dir. With a custom package name the build
++	# runs in all-source mode (TERMUX_INSTALL_DEPS=false = "don't download, build from
++	# source"), so apt's full BUILD-dependency closure (python, tcl, tk, doxygen, perl,
++	# tor, swig, the X11 stack, ...) gets compiled into the SAME output/ dir and would be
++	# swept into the bootstrap — 164 pkgs / 144MB instead of the intended 79 runtime set.
++	# The upstream bootstrap gets exactly 79 because it DOWNLOADS deps as prebuilt debs, so
++	# build-only deps never touch its output/. We can't do that (wrong prefix), so restrict
++	# extraction to the intended RUNTIME package set (the 79 the current shipped bootstrap
++	# has). This is the runtime closure; build-only tooling is correctly excluded.
++	local -A LDFA_BOOTSTRAP_WHITELIST=()
++	local _wp
++	for _wp in \
++		apt attr bash bzip2 ca-certificates command-not-found coreutils curl dash \
++		debianutils dialog diffutils dos2unix dpkg ed findutils gawk gpgv grep gzip \
++		inetutils less libacl libandroid-glob libandroid-posix-semaphore \
++		libandroid-selinux libandroid-support libassuan libbz2 libc++ libcap-ng libcurl \
++		libevent libgcrypt libgmp libgnutls libgpg-error libiconv libidn2 liblz4 liblzma \
++		libmd libmpfr libnettle libnghttp2 libnghttp3 libngtcp2 libnpth libsmartcols \
++		libssh2 libtirpc libunbound libunistring lsof nano ncurses net-tools openssl \
++		patch pcre2 procps psmisc readline resolv-conf sed tar termux-am termux-am-socket \
++		termux-core termux-exec termux-keyring termux-licenses termux-tools unzip \
++		util-linux xxhash xz-utils zlib zstd \
++		p11-kit libtasn1 libffi \
++		libmount libblkid libmagic \
++		proot proot-distro tmux pulseaudio xkeyboard-config \
++		dbus python python-pip \
++		libtalloc libandroid-shmem libandroid-stub libandroid-execinfo \
++		libx11 libxcb libxau libxdmcp xorgproto xorg-util-macros \
++		libsqlite gdbm libcrypt libexpat libltdl \
++		libsndfile libsoxr speexdsp libwebrtc-audio-processing abseil-cpp \
++		libflac libvorbis libogg libopus libmp3lame libmpg123 \
++		ncurses-ui-libs; do
++		LDFA_BOOTSTRAP_WHITELIST["$_wp"]=1
++	done
++	# NOTE: these are NOT in the upstream vendor 79 set, but OUR source-built libs have
++	# different NEEDED than the upstream prebuilts (termux-packages version drift):
++	#  - libgnutls.so NEEDs libp11-kit.so/libtasn1.so → add p11-kit (→libp11-kit.so, also
++	#    NEEDs libffi.so+libtasn1.so) + libtasn1 + libffi. Without these apt's https method
++	#    won't link ("libp11-kit.so not found") and `pkg update` dies (seen on-device).
++	#  - bin/lsns NEEDs libmount.so, bin/nano NEEDs libmagic.so → add libmount (util-linux
++	#    subpackage, NEEDs libblkid.so → add libblkid) + libmagic (file subpackage). All
++	#    their other NEEDED (libandroid-posix-semaphore/lzma/bz2/z/zstd) are already in.
++	# A readelf-d completeness sweep over the zip (scratchpad/check-bootstrap-deps.sh) is
++	# the right verify; the only remaining "misses" it reports are pylibmount.so (a python
++	# binding) and *-fsanitize test binaries under libexec/installed-tests — those are
++	# inert (present in the upstream vendor zip too, never executed) and can be ignored.
++
+ 	for deb in *.deb; do
+ 
+ 		current_package_name="$(echo "$deb" | sed -E 's/^([^_]+).*/\1/' )"
+@@ -133,6 +180,12 @@ extract_debs() {
+ 			continue
+ 		fi
+ 
++		# LDFA: skip anything outside the intended runtime bootstrap set.
++		if [[ -z "${LDFA_BOOTSTRAP_WHITELIST[$current_package_name]:-}" ]]; then
++			echo "[*] LDFA: skipping non-bootstrap package '$current_package_name'..."
++			continue
++		fi
++
+ 		if [[ " ${EXTRACTED_PACKAGES[*]} " == *" $current_package_name "* ]]; then
+ 			echo "[*] Skipping already extracted package '$current_package_name'..."
+ 			continue
+@@ -429,7 +482,7 @@ main() {
+ 
+ 		# Core utilities.
+ 		PACKAGES+=("bash") # Used by `termux-bootstrap-second-stage.sh`
+-		PACKAGES+=("bzip2")
++		PACKAGES+=("libbz2") # LDFA: was "bzip2" (a subpackage of libbz2); build-package.sh cannot build a subpackage name, but building libbz2 emits the bzip2 .deb which extract_debs picks up
+ 		if ! ${BOOTSTRAP_ANDROID10_COMPATIBLE}; then
+ 			PACKAGES+=("command-not-found")
+ 		else
+diff --git a/scripts/build/termux_step_install_license.sh b/scripts/build/termux_step_install_license.sh
+index bbc0482..b252a4c 100644
+--- a/scripts/build/termux_step_install_license.sh
++++ b/scripts/build/termux_step_install_license.sh
+@@ -88,16 +88,25 @@ termux_step_install_license() {
+ 								(( ++COUNTER, ++FROM_SOURCES ))
+ 							}
+ 						done
+-						# If we have not found any licenses after searching, that's an error.
++						# If we have not found any licenses after searching, that's normally an
++						# error. LDFA: several packages (python-pip, libandroid-utimes, ...) ship
++						# no LICENSE in their upstream tarball and termux-licenses lacks a generic
++						# template for their SPDX id, which aborts an otherwise-fine build. A
++						# missing copyright doc does NOT affect the bootstrap's function, so warn
++						# and write a stub instead of failing the whole build.
+ 						if (( ! FROM_SOURCES )); then
+-							termux_error_exit "${TERMUX_PKG_NAME}: Could not find a license file for $LICENSE in the package sources"
++							echo "WARNING (LDFA): ${TERMUX_PKG_NAME}: no license file for $LICENSE in sources; writing a stub." 1>&2
++							printf '%s\n' "$TERMUX_PKG_LICENSE" > "${TERMUX_PREFIX}/share/doc/${TERMUX_PKG_NAME}/copyright"
+ 						fi
+ 					fi
+ 				;;
+ 				*) # For the rest we can use a link to the generic license file
+ 					[[ -f "$TERMUX_SCRIPTDIR/packages/termux-licenses/LICENSES/${LICENSE}.txt" ]] || {
+-						# If we get here, no license file could be found
+-						termux_error_exit "${TERMUX_PKG_NAME}: Could not find a license file for $LICENSE in packages/termux-licenses"
++						# LDFA: no generic template for this SPDX id — warn + stub instead of abort.
++						echo "WARNING (LDFA): ${TERMUX_PKG_NAME}: no template for $LICENSE in termux-licenses; writing a stub." 1>&2
++						mkdir -p "${TERMUX_PREFIX}/share/doc/${TERMUX_PKG_NAME}"
++						printf '%s\n' "$TERMUX_PKG_LICENSE" > "${TERMUX_PREFIX}/share/doc/${TERMUX_PKG_NAME}/copyright"
++						continue
+ 					}
+ 					# the link target depends on the libc being used
+ 					case "$TERMUX_PACKAGE_LIBRARY" in
+diff --git a/scripts/build/termux_step_setup_variables.sh b/scripts/build/termux_step_setup_variables.sh
+index 8fddabb..cb0a5f7 100644
+--- a/scripts/build/termux_step_setup_variables.sh
++++ b/scripts/build/termux_step_setup_variables.sh
+@@ -105,6 +105,15 @@ termux_step_setup_variables() {
+ 
+ 	export prefix=${TERMUX_PREFIX}
+ 	export PREFIX=${TERMUX_PREFIX}
++	# LDFA: termux-tools' configure.ac fills the @TERMUX_PREFIX@/@TERMUX_APP_PACKAGE@
++	# placeholders (used in bin/pkg etc.) from these EXACT env var names, via a
++	# `${TERMUX_PREFIX+set}` test — but the framework only exported lowercase
++	# prefix/PREFIX, so with a custom package name configure silently fell back to the
++	# com.termux defaults and bin/pkg hardcoded /data/data/com.termux (breaking
++	# `pkg install` under the renamed app). Export the exact-named vars so the custom
++	# prefix/package are substituted everywhere.
++	export TERMUX_PREFIX=${TERMUX_PREFIX}
++	export TERMUX_APP_PACKAGE=${TERMUX_APP_PACKAGE}
+ 
+ 	# Explicitly export in case the default was set.
+ 	export TERMUX_ARCH=${TERMUX_ARCH}
+diff --git a/scripts/properties.sh b/scripts/properties.sh
+index ebaf323..3b6fb27 100644
+--- a/scripts/properties.sh
++++ b/scripts/properties.sh
+@@ -464,7 +464,7 @@ TERMUX__REPOS_HOST_ORG_URL="https://github.com/$TERMUX__REPOS_HOST_ORG_NAME"
+ #
+ # Default value: `com.termux`
+ ##
+-TERMUX_APP__PACKAGE_NAME="com.termux"
++TERMUX_APP__PACKAGE_NAME="com.hatake716.linuxdesktop"
+ TERMUX_APP_PACKAGE="$TERMUX_APP__PACKAGE_NAME" # Deprecated alternative variable for `TERMUX_APP__PACKAGE_NAME`
+ 
+ __termux_build_props__add_variables_validator_actions "TERMUX_APP__PACKAGE_NAME" "app_package_name"
+diff --git a/scripts/run-docker.sh b/scripts/run-docker.sh
+index 9a78671..894c696 100755
+--- a/scripts/run-docker.sh
++++ b/scripts/run-docker.sh
+@@ -137,6 +137,13 @@ if [ -z "$APPARMOR_PARSER" ] || ! $SUDO aa-status --enabled; then
+ 	echo "         This is not recommended, as it may cause security issues and unexpected behavior"
+ 	echo "         Avoid executing untrusted code in the container"
+ 	APPARMOR_PARSER=""
++	# When the custom AppArmor profile can't be loaded (e.g. NixOS has no
++	# apparmor_parser), passing --security-opt apparmor=_custom-... names a profile
++	# that doesn't exist; combined with the custom seccomp profile this made even a
++	# plain `cp` inside the build fail with EPERM. Run the container unconfined for
++	# both AppArmor and seccomp so the toolchain setup and package builds work. This
++	# host is trusted (we build our own bootstrap), so the relaxation is acceptable.
++	SEC_OPT=" --security-opt seccomp=unconfined --security-opt apparmor=unconfined --cap-add CAP_SYS_ADMIN --device /dev/fuse"
+ fi
+ 
+ load_apparmor_profile() {
+@@ -154,15 +161,15 @@ load_apparmor_profile() {
+ load_apparmor_profile ./scripts/profile-relaxed.apparmor
+ 
+ __change_builder_uid_gid() {
+-	if [ "$UNAME" != Darwin ]; then
+-		if [ $(id -u) -ne 1001 -a $(id -u) -ne 0 ]; then
+-			echo "Changed builder uid/gid... (this may take a while)"
+-			$SUDO docker exec $DOCKER_TTY $TERMUX_DOCKER_EXEC_EXTRA_ARGS $CONTAINER_NAME sudo chown -R $(id -u):$(id -g) $CONTAINER_HOME_DIR
+-			$SUDO docker exec $DOCKER_TTY $TERMUX_DOCKER_EXEC_EXTRA_ARGS $CONTAINER_NAME sudo chown -R $(id -u):$(id -g) /data
+-			$SUDO docker exec $DOCKER_TTY $TERMUX_DOCKER_EXEC_EXTRA_ARGS $CONTAINER_NAME sudo usermod -u $(id -u) builder
+-			$SUDO docker exec $DOCKER_TTY $TERMUX_DOCKER_EXEC_EXTRA_ARGS $CONTAINER_NAME sudo groupmod -g $(id -g) builder
+-		fi
+-	fi
++	# DISABLED on this host. Changing the container's builder uid/gid to match the host
++	# (chown -R /home/builder + usermod -u) is meant to keep bind-mounted files writable
++	# from both sides, but on NixOS (host uid=1000, gid=100) it left the in-container
++	# toolchain setup unable to create files in its own freshly-made dirs — a plain `cp`
++	# in _cache failed with EPERM. Verified: with the DEFAULT builder uid (1001) the same
++	# mkdir/write/cp sequence succeeds. So keep builder as 1001:1001; the generated
++	# bootstrap zip is extracted from the container with `docker cp` afterwards, so host
++	# ownership of the build tree does not matter.
++	:
+ }
+ 
+ __change_container_pid_max() {

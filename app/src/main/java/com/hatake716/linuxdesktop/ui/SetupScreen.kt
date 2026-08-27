@@ -528,7 +528,7 @@ private fun readBootstrapLogTail(): String = runCatching {
 }.getOrDefault("")
 
 private const val BOOTSTRAP_LOG_PATH =
-    "/data/data/com.termux/files/home/.local/share/linux-desktop-for-android/logs/bootstrap.log"
+    "/data/data/com.hatake716.linuxdesktop/files/home/.local/share/linux-desktop-for-android/logs/bootstrap.log"
 private const val BOOTSTRAP_LOG_POLL_MILLIS = 750L
 private const val BOOTSTRAP_LOG_MAX_LINES = 80
 private const val BOOTSTRAP_LOG_MAX_BYTES = 64L * 1024L

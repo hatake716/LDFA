@@ -40,11 +40,38 @@ class ProotWorkerLauncher(
             hostScript.absolutePath,
             "worker-run", id, displayNumber.toString(),
         )
+        return launchInner(inner)
+    }
+
+    /**
+     * Launch `ldfa-host worker-install <id>` in its OWN persistent proot, exactly like
+     * the desktop worker. The Debian install would otherwise be spawned via `setsid`
+     * inside the short-lived `create` RUN_COMMAND's proot, which kills it the instant
+     * cmd_create returns (setsid cannot escape a proot's process lifetime — verified on
+     * device). This runs to completion (the whole install, ~minutes) then exits; the
+     * caller holds the returned Process for that duration to keep the proot alive.
+     */
+    fun startInstall(id: String): Process? {
+        if (!usable) return null
+        val inner = listOf(
+            File(prefixDir, "bin/env").absolutePath,
+            hostScript.absolutePath,
+            "worker-install", id,
+        )
+        return launchInner(inner)
+    }
+
+    /**
+     * Wrap [inner] in a persistent native proot (kill-on-exit OFF), set the Termux
+     * runtime env, start it, drain its pre-`exec` output, and return the held Process.
+     * Shared by [start] (worker-run) and [startInstall] (worker-install).
+     */
+    private fun launchInner(inner: List<String>): Process? {
         val binds = if (termuxLibDir.isDirectory) {
             listOf("${termuxLibDir.absolutePath}:$TERMUX_LIB_GUEST")
         } else emptyList()
         // Persistent proot: kill-on-exit OFF so the worker lives as long as this
-        // process, which the keep-alive service holds.
+        // process, which the caller holds.
         val command = runtime.wrap(inner, rootfs = null, binds = binds, killOnExit = false)
 
         val pb = ProcessBuilder(command).redirectErrorStream(true)
@@ -57,17 +84,17 @@ class ProotWorkerLauncher(
         env["TMPDIR"] = File(prefixDir, "tmp").absolutePath
         env["PATH"] = "${File(prefixDir, "bin").absolutePath}:/system/bin:/system/xbin"
         env["LANG"] = "en_US.UTF-8"
-        // worker_run itself writes run/<session>.pid on startup (under native proot),
-        // so the host's session_alive/session_kill can track it without the app
-        // needing Process.pid() (which is awkward on Android). The app just holds the
-        // Process to keep the persistent proot — and therefore the worker — alive.
+        // The host worker itself writes run/<session>.pid on startup (under native
+        // proot), so session_alive/session_kill can track it without the app needing
+        // Process.pid(). The app just holds the Process to keep the persistent proot —
+        // and therefore the worker — alive.
         val process = runCatching { pb.start() }.getOrNull() ?: return null
-        // Drain the (small) pre-`exec` output so the OS pipe never fills. worker_run
-        // does `exec >>debian.log 2>&1` almost immediately, moving all real logging
-        // off this pipe; only proot's startup banner reaches us. We must still read it
-        // — an unread pipe that fills would block the worker's early writes. NOTE: do
-        // NOT redirect this Process's stdout to a file: that fd stays open on the file
-        // and races the worker's own `exec >>` reopen of the same log, which silently
+        // Drain the (small) pre-`exec` output so the OS pipe never fills. The worker
+        // does `exec >>debian.log 2>&1` almost immediately, moving all real logging off
+        // this pipe; only proot's startup banner reaches us. We must still read it — an
+        // unread pipe that fills would block the worker's early writes. NOTE: do NOT
+        // redirect this Process's stdout to a file: that fd stays open on the file and
+        // races the worker's own `exec >>` reopen of the same log, which silently
         // swallowed all worker logging and stalled startup.
         drainToNull(process)
         return process
@@ -148,6 +175,77 @@ class ProotWorkerLauncher(
         return process
     }
 
+    /**
+     * The Debian-install provision request, written by worker_install (native path)
+     * after install_container extracts the rootfs. Present ⇒ the guest apt/provision
+     * body has been written into the rootfs and is ready to run single-layer.
+     */
+    fun installRequestFile(id: String): File =
+        File(homeDir, "$RUN_REL/${INSTALL_PREFIX}$id.session-request")
+
+    /**
+     * Run the Debian guest provision (apt update + xfce install + locale/user setup)
+     * as ITS OWN single native-proot layer — the dpkg-heavy phase that ran ~6x slower
+     * when nested inside the outer worker proot. Mirrors [startSession] exactly, but:
+     * change-id 0:0 (the body does root writes: useradd/locale-gen/sudoers), cwd /root,
+     * no DISPLAY/PULSE, and the final command runs the provision script worker_install
+     * wrote into the rootfs at /root/.ldfa-provision.sh (which self-reports success via
+     * /root/.ldfa-provision.done that the outer worker watches). Returns the Process
+     * (held by the caller) or null if the request is missing/invalid.
+     */
+    fun startInstallProvision(id: String): Process? {
+        if (!runtime.available) return null
+        val req = parseRequest(installRequestFile(id)) ?: return null
+        val rootfs = req["ROOTFS"]?.let(::File) ?: return null
+        if (!rootfs.isDirectory) return null
+        val changeId = req["CHANGE_ID"] ?: "0:0"
+        val shared = req["SHARED"]
+        val tz = req["LDFA_TZ"]
+        val keymap = req["LDFA_KEYBOARD_LAYOUT"] ?: "jis"
+
+        val proot = File(nativeLibDir(), LIB_PROOT)
+        if (!proot.canExecute()) return null
+
+        // Single-layer proot argv — mirrors pd_login's native branch (and startSession).
+        val argv = ArrayList<String>()
+        argv += proot.absolutePath
+        argv += listOf("--kill-on-exit", "--link2symlink", "--sysvipc", "-L",
+            "--change-id=$changeId", "--rootfs=${rootfs.absolutePath}", "--cwd=/root",
+            "--bind=/dev", "--bind=/proc", "--bind=/sys")
+        for (p in SYSTEM_BINDS) if (File(p).exists()) argv += "--bind=$p"
+        // Do NOT bind the host $PREFIX/tmp onto the guest /tmp here (startSession does,
+        // for the X11 socket). apt/dpkg use /tmp/apt-dpkg-install-* to stage .deb archives
+        // during unpack; with the host tmp bound in (and --link2symlink rewriting links),
+        // dpkg intermittently can't reopen those staged files ("cannot access archive …:
+        // No such file or directory" / "opendir … No such file or directory") and the
+        // install aborts. The install provision needs no shared /tmp — let the guest use
+        // its own rootfs /tmp.
+        if (shared != null) argv += "--bind=$shared:/mnt/android"
+        // Guest env wrapper (env flags before NAME=VALUE). Provisioning is root, so
+        // HOME=/root; no DISPLAY/XAUTHORITY/PULSE. LDFA_TZ/LDFA_KEYBOARD_LAYOUT are read
+        // by the provision body from its env.
+        argv += listOf(
+            "/usr/bin/env", "-u", "LD_LIBRARY_PATH", "-u", "LD_PRELOAD", "-u", "TMPDIR",
+            "PATH=$GUEST_PATH",
+            "HOME=/root", "LANG=C.UTF-8",
+            "LDFA_KEYBOARD_LAYOUT=$keymap",
+        )
+        if (tz != null) argv += "LDFA_TZ=$tz"
+        argv += listOf("/bin/bash", "/root/.ldfa-provision.sh")
+
+        val pb = ProcessBuilder(argv).redirectErrorStream(true)
+        val env = pb.environment()
+        env.putAll(runtime.environment())
+        env["LD_LIBRARY_PATH"] = nativeLibDir().absolutePath
+        env["PREFIX"] = prefixDir.absolutePath
+        env["HOME"] = homeDir.absolutePath
+        env["TMPDIR"] = File(prefixDir, "tmp").absolutePath
+        env["PATH"] = "${File(prefixDir, "bin").absolutePath}:/system/bin:/system/xbin"
+        val process = runCatching { pb.start() }.getOrNull() ?: return null
+        drainToNull(process)
+        return process
+    }
+
     private fun nativeLibDir(): File =
         // The proot libs live next to the loader ProotRuntime exports.
         File(runtime.environment()["PROOT_LOADER"] ?: "").parentFile
@@ -182,7 +280,11 @@ class ProotWorkerLauncher(
             ".local/share/linux-desktop-for-android/run"
         // Matches run_session()/session_request_file() in ldfa-host.sh: "ldfa-run-<id>".
         private const val SESSION_PREFIX = "ldfa-run-"
-        private const val TERMUX_LIB_GUEST = "/data/data/com.termux/files/usr/lib"
+        // Matches install_session()/session_request_file() in ldfa-host.sh:
+        // "ldfa-install-<id>". The native-path Debian install publishes its
+        // single-layer provision request under this prefix.
+        private const val INSTALL_PREFIX = "ldfa-install-"
+        private const val TERMUX_LIB_GUEST = "/data/data/com.hatake716.linuxdesktop/files/usr/lib"
         // The native proot lib (renamed to dodge proot-distro's nested-proot guard).
         private const val LIB_PROOT = "libpdrt.so"
         // Guest PATH the single-layer session needs (login shell is skipped).

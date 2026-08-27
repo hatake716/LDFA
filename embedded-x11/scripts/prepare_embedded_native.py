@@ -1403,10 +1403,10 @@ activity = replace_once(
 )
 activity = activity.replace(
     'if (!strcmp(__progname, "com.termux.x11"))',
-    'if (!strcmp(__progname, "com.termux") || !strcmp(__progname, "com.termux:x11"))',
+    'if (!strcmp(__progname, "com.hatake716.linuxdesktop") || !strcmp(__progname, "com.hatake716.linuxdesktop:x11"))',
     1,
 )
-if 'if (!strcmp(__progname, "com.termux") || !strcmp(__progname, "com.termux:x11"))' not in activity:
+if 'if (!strcmp(__progname, "com.hatake716.linuxdesktop") || !strcmp(__progname, "com.hatake716.linuxdesktop:x11"))' not in activity:
     raise SystemExit("Termux:X11 stderr process guard changed; embedded patch needs review")
 # A developer checkout briefly added __unused to three JNIEnv parameters while
 # the pinned commit does not contain those annotations.  Normalize that

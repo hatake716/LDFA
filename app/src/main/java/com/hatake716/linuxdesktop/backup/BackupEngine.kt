@@ -243,14 +243,14 @@ class BackupEngine(
         return BackupManifest(
             formatVersion = BackupManifest.FORMAT_VERSION,
             createdAt = OffsetDateTime.now().format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
-            app = BackupManifest.AppInfo(BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE, "com.termux"),
+            app = BackupManifest.AppInfo(BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE, BuildConfig.APPLICATION_ID),
             sourceDevice = BackupManifest.SourceDevice(Build.MODEL ?: "Android", Build.VERSION.SDK_INT, abi),
             container = BackupManifest.ContainerInfo(
                 id = id,
                 displayName = displayName,
                 distro = paths.distro(id),
                 guestArch = archOf(abi),
-                prefix = "/data/data/com.termux/files/usr",
+                prefix = "/data/data/com.hatake716.linuxdesktop/files/usr",
             ),
             scope = BackupManifest.Scope.FULL,
             payload = BackupManifest.Payload(

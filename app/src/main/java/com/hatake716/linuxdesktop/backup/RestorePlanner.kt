@@ -41,7 +41,7 @@ class RestorePlanner(private val paths: BackupPaths) {
     }
 
     private fun sharedDir(id: String): File =
-        File("/data/data/com.termux/files/home/storage/shared/LinuxDesktop/$id")
+        File("/data/data/com.hatake716.linuxdesktop/files/home/storage/shared/LinuxDesktop/$id")
 
     /**
      * Same shape as LinuxDesktopRepository.createContainerId: `<ascii16>-<uuid8>`.

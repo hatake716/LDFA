@@ -1,4 +1,4 @@
-#!/data/data/com.termux/files/usr/bin/bash
+#!/data/data/com.hatake716.linuxdesktop/files/usr/bin/bash
 # Linux Desktop for Android compatibility X11/VNC controller
 # SPDX-License-Identifier: GPL-3.0-only
 set -Eeuo pipefail
@@ -16,7 +16,7 @@ LOG_FILE="$LOG_ROOT/vnc-server.log"
 RUNNER="$RUN_ROOT/vnc-runner.sh"
 LOCK_DIR="$RUN_ROOT/vnc-lifecycle.lock"
 LOCK_PID="$LOCK_DIR/pid"
-PREFIX="${PREFIX:-/data/data/com.termux/files/usr}"
+PREFIX="${PREFIX:-/data/data/com.hatake716.linuxdesktop/files/usr}"
 TMP_ROOT="$PREFIX/tmp"
 SOCKET_DIR="$TMP_ROOT/.X11-unix"
 SOCKET="$SOCKET_DIR/X${DISPLAY_NUMBER}"
@@ -188,7 +188,7 @@ write_runner() {
     tz="$(getprop persist.sys.timezone 2>/dev/null || true)"
     [[ "$tz" =~ ^[A-Za-z][A-Za-z0-9_+-]*(/[A-Za-z0-9_+-]+){0,2}$ ]] || tz="Asia/Tokyo"
     cat > "$RUNNER" <<RUNNER_SCRIPT
-#!/data/data/com.termux/files/usr/bin/bash
+#!/data/data/com.hatake716.linuxdesktop/files/usr/bin/bash
 set -Eeuo pipefail
 exec >>"$LOG_FILE" 2>&1
 printf '[%s] compatibility X11/VNC runner started for %s\n' "\$(date -Iseconds)" "$id"

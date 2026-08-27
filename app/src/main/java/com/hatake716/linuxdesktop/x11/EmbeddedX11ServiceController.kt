@@ -1,5 +1,6 @@
 package com.hatake716.linuxdesktop.x11
 
+import com.hatake716.linuxdesktop.BuildConfig
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -345,9 +346,11 @@ internal object EmbeddedX11ServiceController {
     private var displayOpenFailure: Throwable? = null
 
     private const val DISPLAY_NUMBER = 1
-    private const val X11_PROCESS_NAME = "com.termux:x11"
-    private const val X11_SOCKET = "/data/data/com.termux/files/usr/tmp/.X11-unix/X1"
-    private const val X11_LOCK = "/data/data/com.termux/files/usr/tmp/.X1-lock"
+    // The :x11 process's /proc/<pid>/cmdline is "<applicationId>:x11"; derive it from
+    // the build's applicationId so this tracks any package rename (was "com.termux:x11").
+    private val X11_PROCESS_NAME = "${BuildConfig.APPLICATION_ID}:x11"
+    private const val X11_SOCKET = "/data/data/com.hatake716.linuxdesktop/files/usr/tmp/.X11-unix/X1"
+    private const val X11_LOCK = "/data/data/com.hatake716.linuxdesktop/files/usr/tmp/.X1-lock"
     private const val LIFECYCLE_LOG_TAG = "LDFA-Lifecycle"
     private const val START_WAIT_POLL_MILLIS = 250L
     private const val START_WAIT_ATTEMPTS = 120

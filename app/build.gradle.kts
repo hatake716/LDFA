@@ -10,7 +10,13 @@ android {
     ndkVersion = "29.0.14206865"
 
     defaultConfig {
-        applicationId = "com.termux"
+        // Play rejects publishing under Termux's owned package name "com.termux"
+        // (impersonation). Use our own namespace, which also matches `namespace`
+        // above so the app's real data dir is /data/data/com.hatake716.linuxdesktop.
+        // The bundled Termux bootstrap is rebuilt under this same prefix
+        // (/data/data/com.hatake716.linuxdesktop/files/usr) via termux-packages with
+        // TERMUX_APP__PACKAGE_NAME set to match — see docs/ and the bootstrap zips.
+        applicationId = "com.hatake716.linuxdesktop"
         minSdk = 26
         targetSdk = 35
         versionCode = 20

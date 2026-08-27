@@ -1,5 +1,6 @@
 package com.hatake716.linuxdesktop.data
 
+import com.hatake716.linuxdesktop.BuildConfig
 import android.app.Activity
 import android.app.PendingIntent
 import android.app.Service
@@ -334,19 +335,26 @@ class TermuxCommandClient(private val context: Context) {
     }
 
     companion object {
-        private const val ACTION_RUN_COMMAND = "com.termux.RUN_COMMAND"
-        private const val EXTRA_COMMAND_PATH = "com.termux.RUN_COMMAND_PATH"
-        private const val EXTRA_ARGUMENTS = "com.termux.RUN_COMMAND_ARGUMENTS"
-        private const val EXTRA_WORKDIR = "com.termux.RUN_COMMAND_WORKDIR"
-        private const val EXTRA_BACKGROUND = "com.termux.RUN_COMMAND_BACKGROUND"
-        private const val EXTRA_RUNNER = "com.termux.RUN_COMMAND_RUNNER"
-        private const val EXTRA_COMMAND_LABEL = "com.termux.RUN_COMMAND_COMMAND_LABEL"
-        private const val EXTRA_COMMAND_DESCRIPTION = "com.termux.RUN_COMMAND_COMMAND_DESCRIPTION"
-        private const val EXTRA_PENDING_INTENT = "com.termux.RUN_COMMAND_PENDING_INTENT"
+        // The bundled vendor RunCommandService validates the intent action and reads its
+        // extras via TermuxConstants, which builds them as `TERMUX_PACKAGE_NAME + ".RUN_COMMAND*"`.
+        // TERMUX_PACKAGE_NAME is now our applicationId (Play rename), so these MUST be derived
+        // from BuildConfig.APPLICATION_ID to match — hardcoding "com.termux.*" made the service
+        // reject every command ("Invalid intent action to RunCommandService"). The service's
+        // permission is a signature permission and it's the same in-process APK, so the sender
+        // and receiver just have to agree on these strings.
+        private val ACTION_RUN_COMMAND = "${BuildConfig.APPLICATION_ID}.RUN_COMMAND"
+        private val EXTRA_COMMAND_PATH = "${BuildConfig.APPLICATION_ID}.RUN_COMMAND_PATH"
+        private val EXTRA_ARGUMENTS = "${BuildConfig.APPLICATION_ID}.RUN_COMMAND_ARGUMENTS"
+        private val EXTRA_WORKDIR = "${BuildConfig.APPLICATION_ID}.RUN_COMMAND_WORKDIR"
+        private val EXTRA_BACKGROUND = "${BuildConfig.APPLICATION_ID}.RUN_COMMAND_BACKGROUND"
+        private val EXTRA_RUNNER = "${BuildConfig.APPLICATION_ID}.RUN_COMMAND_RUNNER"
+        private val EXTRA_COMMAND_LABEL = "${BuildConfig.APPLICATION_ID}.RUN_COMMAND_COMMAND_LABEL"
+        private val EXTRA_COMMAND_DESCRIPTION = "${BuildConfig.APPLICATION_ID}.RUN_COMMAND_COMMAND_DESCRIPTION"
+        private val EXTRA_PENDING_INTENT = "${BuildConfig.APPLICATION_ID}.RUN_COMMAND_PENDING_INTENT"
         private const val RESULT_ACTION_PREFIX = "com.hatake716.linuxdesktop.TERMUX_RESULT"
-        private const val TERMUX_HOME = "/data/data/com.termux/files/home"
+        private const val TERMUX_HOME = "/data/data/com.hatake716.linuxdesktop/files/home"
         private const val INSTALLED_BIN_DIR =
-            "/data/data/com.termux/files/home/.local/share/linux-desktop-for-android/bin"
+            "/data/data/com.hatake716.linuxdesktop/files/home/.local/share/linux-desktop-for-android/bin"
         private const val INSTALLED_HOST_SCRIPT = "$INSTALLED_BIN_DIR/ldfa-host"
         private const val INSTALLED_X11_SCRIPT = "$INSTALLED_BIN_DIR/ldfa-x11"
         private const val INSTALLED_VNC_SCRIPT = "$INSTALLED_BIN_DIR/ldfa-vnc"
