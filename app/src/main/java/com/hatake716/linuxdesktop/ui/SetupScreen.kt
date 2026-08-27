@@ -35,6 +35,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -100,10 +101,11 @@ internal fun SetupScreen(
     onRefresh: () -> Unit,
     onBootstrap: () -> Unit,
 ) {
+    // Storage is optional (not grantable at targetSdk 35) — the hero counter and
+    // progress track only the three REQUIRED steps.
     val completed = listOf(
         state.setup.terminalReady,
         state.setup.x11Ready,
-        state.setup.storageReady,
         state.setup.hostReady,
     ).count { it }
     var bootstrapLog by remember { mutableStateOf("") }
@@ -158,14 +160,13 @@ internal fun SetupScreen(
         }
 
         item {
-            SetupHero(completed = completed, total = 4)
+            SetupHero(completed = completed, total = 3)
         }
 
         item {
             SetupPrimaryAction(
                 state = state,
                 onPrepareRuntime = onPrepareRuntime,
-                onGrantStorageAccess = onGrantStorageAccess,
                 onRefresh = onRefresh,
                 onBootstrap = onBootstrap,
             )
@@ -214,10 +215,14 @@ internal fun SetupScreen(
         item {
             SetupStepCard(
                 number = 3,
-                title = "Android共有ストレージ",
-                description = "Android側のファイルをDebianの /mnt/android から読み書きできるようにします。",
+                title = "Android共有ストレージ(任意)",
+                description = "Android側のファイルをDebianの /mnt/android から読み書きできるようにします。" +
+                    "許可できない端末でもデスクトップはそのまま利用できます。",
                 complete = state.setup.storageReady,
                 icon = Icons.Rounded.Folder,
+                optional = true,
+                actionLabel = "アクセスを許可",
+                onAction = onGrantStorageAccess,
             )
         }
 
@@ -260,15 +265,16 @@ internal fun SetupScreen(
 private fun SetupPrimaryAction(
     state: MainUiState,
     onPrepareRuntime: () -> Unit,
-    onGrantStorageAccess: () -> Unit,
     onRefresh: () -> Unit,
     onBootstrap: () -> Unit,
 ) {
+    // Storage is deliberately absent from this chain: it is not user-grantable
+    // at targetSdk 35 and must never stand between the user and the Debian
+    // install. Its grant affordance lives on the optional step card instead.
     val actionLabel = when {
         state.bootstrapping -> "Debian環境をインストール中"
         !state.setup.terminalReady -> "セットアップを開始"
         !state.setup.x11Ready -> "内蔵X11を再確認"
-        !state.setup.storageReady -> "ストレージアクセスを許可"
         !state.setup.hostReady -> "Debian環境をインストール"
         else -> "セットアップ完了"
     }
@@ -276,7 +282,6 @@ private fun SetupPrimaryAction(
         state.bootstrapping -> "画面を閉じても処理は継続します。下に現在のログを表示しています。"
         !state.setup.terminalReady -> "最初のボタンから、必要な準備を順番に案内します。"
         !state.setup.x11Ready -> "LDFAに組み込まれたX11表示機能を確認します。"
-        !state.setup.storageReady -> "AndroidのファイルをLinuxから利用するための権限です。"
         !state.setup.hostReady -> "XFCEと日本語入力を自動で構築します。"
         else -> "LDFAを使用できます。"
     }
@@ -284,20 +289,17 @@ private fun SetupPrimaryAction(
         state.bootstrapping -> Icons.Rounded.Download
         !state.setup.terminalReady -> Icons.Rounded.Security
         !state.setup.x11Ready -> Icons.Rounded.Computer
-        !state.setup.storageReady -> Icons.Rounded.Folder
         else -> Icons.Rounded.Download
     }
     val action: () -> Unit = when {
         !state.setup.terminalReady -> onPrepareRuntime
         !state.setup.x11Ready -> onRefresh
-        !state.setup.storageReady -> onGrantStorageAccess
         !state.setup.hostReady -> onBootstrap
         else -> onRefresh
     }
     val enabled = !state.bootstrapping &&
         !(state.setup.terminalReady &&
             state.setup.x11Ready &&
-            state.setup.storageReady &&
             state.setup.hostReady)
 
     Surface(
@@ -395,6 +397,9 @@ private fun SetupStepCard(
     icon: ImageVector,
     showProgress: Boolean = false,
     logContent: String = "",
+    optional: Boolean = false,
+    actionLabel: String? = null,
+    onAction: (() -> Unit)? = null,
 ) {
     Surface(
         shape = RoundedCornerShape(22.dp),
@@ -434,7 +439,10 @@ private fun SetupStepCard(
                         fontWeight = FontWeight.SemiBold,
                     )
                     Text(
-                        if (complete) "準備完了" else if (showProgress) "処理中" else "未完了",
+                        if (complete) "準備完了"
+                        else if (showProgress) "処理中"
+                        else if (optional) "任意"
+                        else "未完了",
                         style = MaterialTheme.typography.labelMedium,
                         color = if (complete) SuccessGreen else MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -446,6 +454,11 @@ private fun SetupStepCard(
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+
+            if (!complete && onAction != null && actionLabel != null) {
+                Spacer(Modifier.height(10.dp))
+                OutlinedButton(onClick = onAction) { Text(actionLabel) }
+            }
 
             if (showProgress) {
                 Spacer(Modifier.height(14.dp))

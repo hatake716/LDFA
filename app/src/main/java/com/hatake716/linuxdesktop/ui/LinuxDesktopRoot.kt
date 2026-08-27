@@ -29,9 +29,11 @@ fun LinuxDesktopRoot(
         }
     }
 
+    // Storage access is OPTIONAL: at targetSdk 35 WRITE_EXTERNAL_STORAGE cannot
+    // be granted by the user at all (the permissions page doesn't even list it),
+    // so it must never gate the main screen — only terminal/X11/Debian do.
     val setupComplete = state.setup.terminalReady &&
         state.setup.x11Ready &&
-        state.setup.storageReady &&
         state.setup.hostReady
 
     Box(Modifier.fillMaxSize()) {

@@ -139,9 +139,14 @@ class ProotWorkerLauncher(
             "--change-id=$changeId", "--rootfs=${rootfs.absolutePath}", "--cwd=/home/desktop",
             "--bind=/dev", "--bind=/proc", "--bind=/sys")
         for (p in SYSTEM_BINDS) if (File(p).exists()) argv += "--bind=$p"
+        // Bind only an EXISTING shared dir (mirrors pd_login, which also skips
+        // missing bind sources): without the storage grant the path under
+        // ~/storage/shared never materializes, and the desktop must still start.
         // --shared-tmp: /tmp contains .X11-unix already (do not double-bind it).
         argv += "--bind=${File(prefixDir, "tmp").absolutePath}:/tmp"
-        if (shared != null) argv += "--bind=$shared:/mnt/android"
+        if (!shared.isNullOrBlank() && File(shared).isDirectory) {
+            argv += "--bind=$shared:/mnt/android"
+        }
         if (pulseBind != null) argv += "--bind=$pulseBind"
         // Guest env wrapper (env flags before NAME=VALUE) + the desktop env + a bash
         // restart loop around ldfa-session. `mkdir -p /tmp/runtime-desktop` so dbus and
@@ -219,8 +224,11 @@ class ProotWorkerLauncher(
         // dpkg intermittently can't reopen those staged files ("cannot access archive …:
         // No such file or directory" / "opendir … No such file or directory") and the
         // install aborts. The install provision needs no shared /tmp — let the guest use
-        // its own rootfs /tmp.
-        if (shared != null) argv += "--bind=$shared:/mnt/android"
+        // its own rootfs /tmp. Bind only an EXISTING shared dir (absent without
+        // the optional storage grant).
+        if (!shared.isNullOrBlank() && File(shared).isDirectory) {
+            argv += "--bind=$shared:/mnt/android"
+        }
         // Guest env wrapper (env flags before NAME=VALUE). Provisioning is root, so
         // HOME=/root; no DISPLAY/XAUTHORITY/PULSE. LDFA_TZ/LDFA_KEYBOARD_LAYOUT are read
         // by the provision body from its env.
