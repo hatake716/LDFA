@@ -1871,13 +1871,19 @@ if [[ ! -x /usr/bin/google-chrome-stable ]]; then
     # Fallback: fetch the official .deb directly over HTTPS. Used on arm64 (no signed
     # repo) or if the repo path fails. Verified by dpkg-deb field checks; HTTPS-only.
     chrome_from_direct_deb() {
-        local chrome_package
+        local chrome_package chrome_url
         chrome_package="$(mktemp /tmp/google-chrome-stable.XXXXXX.deb)"
         cleanup_chrome_package() { rm -f "$chrome_package"; }
         trap cleanup_chrome_package EXIT INT TERM
+        chrome_url="https://dl.google.com/linux/direct/google-chrome-stable_current_${architecture}.deb"
+        # The IPv6 route to dl.google.com can crawl (~99KB/s measured on device,
+        # ~20min for this .deb) while IPv4 is fast. Prefer IPv4, but fall back
+        # to the default family so IPv6-only (NAT64) networks still work; -O
+        # truncates on open, so the retry starts from a clean file.
+        wget -4 --https-only --tries=3 --timeout=30 --progress=dot:giga \
+            -O "$chrome_package" "$chrome_url" || \
         wget --https-only --tries=3 --timeout=30 --progress=dot:giga \
-            -O "$chrome_package" \
-            "https://dl.google.com/linux/direct/google-chrome-stable_current_${architecture}.deb" || return 1
+            -O "$chrome_package" "$chrome_url" || return 1
         [[ "$(dpkg-deb --field "$chrome_package" Package)" == google-chrome-stable ]] || return 1
         [[ "$(dpkg-deb --field "$chrome_package" Architecture)" == "$architecture" ]] || return 1
         "${APT[@]}" install -y --no-install-recommends "$chrome_package"
