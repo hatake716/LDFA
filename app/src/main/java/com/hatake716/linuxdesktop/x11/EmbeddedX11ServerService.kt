@@ -49,10 +49,19 @@ class EmbeddedX11ServerService : Service() {
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+        } catch (e: IllegalStateException) {
+            // ForegroundServiceStartNotAllowedException (S+): promoted from the
+            // background. Refuse to run instead of crashing the :x11 process, and
+            // stop before the did-not-call-startForeground watchdog fires — the
+            // controller treats the absent service as a normal startup failure.
+            appendLog("startForeground denied (app in background); stopping service: $e")
+            stopSelf()
         }
     }
 

@@ -61,10 +61,20 @@ class DesktopKeepAliveService : Service() {
     private fun startMonitoring(requestedId: String?) {
         val containerId = requestedId ?: repository.activeContainerId()
         val notification = buildNotification(containerId)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+        } catch (e: IllegalStateException) {
+            // ForegroundServiceStartNotAllowedException (S+): promoted from the
+            // background. Stop before the did-not-call-startForeground watchdog
+            // fires instead of crashing; the desktop keeps running without the
+            // keep-alive heartbeat until the next foreground start re-launches it.
+            android.util.Log.w("DesktopKeepAlive", "startForeground denied (app in background); stopping", e)
+            stopSelf()
+            return
         }
         heartbeatJob?.cancel()
         heartbeatJob = scope.launch {
@@ -189,7 +199,14 @@ class DesktopKeepAliveService : Service() {
                 action = ACTION_START
                 if (containerId != null) putExtra(EXTRA_CONTAINER_ID, containerId)
             }
-            ContextCompat.startForegroundService(context, intent)
+            try {
+                ContextCompat.startForegroundService(context, intent)
+            } catch (e: IllegalStateException) {
+                // ForegroundServiceStartNotAllowedException (S+) from the
+                // background: the desktop simply runs without the keep-alive
+                // heartbeat until the next foreground start — never crash for it.
+                android.util.Log.w("DesktopKeepAlive", "start denied (app in background); skipping keep-alive", e)
+            }
         }
 
         fun stop(context: Context) {

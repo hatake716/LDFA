@@ -79,7 +79,7 @@ class BackupService : Service() {
     private fun startBackup(containerId: String, outputDirPath: String) {
         if (job?.isActive == true) return
         if (containerId.isBlank() || outputDirPath.isBlank()) { stopSelf(); return }
-        goForeground(getString(R.string.backup_notif_creating))
+        if (!goForeground(getString(R.string.backup_notif_creating))) return
         _state.value = BackupUiState.Running(BackupUiState.Op.BACKUP, indeterminate = true)
         job = scope.launch {
             try {
@@ -148,7 +148,7 @@ class BackupService : Service() {
     private fun startRestore(inputPath: String, existingNames: Set<String>) {
         if (job?.isActive == true) return
         if (inputPath.isBlank()) { stopSelf(); return }
-        goForeground(getString(R.string.restore_notif_running))
+        if (!goForeground(getString(R.string.restore_notif_running))) return
         _state.value = BackupUiState.Running(BackupUiState.Op.RESTORE, indeterminate = true)
         job = scope.launch {
             try {
@@ -215,12 +215,22 @@ class BackupService : Service() {
         stopSelf()
     }
 
-    private fun goForeground(text: String) {
+    private fun goForeground(text: String): Boolean {
         val notification = buildNotification(text, null)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+            true
+        } catch (e: IllegalStateException) {
+            // ForegroundServiceStartNotAllowedException (S+): promoted from the
+            // background. Refuse the operation and stop before the
+            // did-not-call-startForeground watchdog fires instead of crashing.
+            android.util.Log.w("BackupService", "startForeground denied (app in background); stopping", e)
+            stopSelf()
+            false
         }
     }
 
@@ -322,7 +332,7 @@ class BackupService : Service() {
                 putExtra(EXTRA_CONTAINER_ID, containerId)
                 putExtra(EXTRA_OUTPUT_DIR, outputDir.absolutePath)
             }
-            ContextCompat.startForegroundService(context, intent)
+            startGuarded(context, intent)
         }
 
         fun startRestore(context: Context, inputFile: File, existingNames: Set<String>) {
@@ -331,7 +341,17 @@ class BackupService : Service() {
                 putExtra(EXTRA_INPUT_PATH, inputFile.absolutePath)
                 putExtra(EXTRA_EXISTING_NAMES, existingNames.toTypedArray())
             }
-            ContextCompat.startForegroundService(context, intent)
+            startGuarded(context, intent)
+        }
+
+        private fun startGuarded(context: Context, intent: Intent) {
+            try {
+                ContextCompat.startForegroundService(context, intent)
+            } catch (e: IllegalStateException) {
+                // ForegroundServiceStartNotAllowedException (S+) from the
+                // background: the operation just doesn't start — never crash.
+                android.util.Log.w("BackupService", "start denied (app in background); operation not started", e)
+            }
         }
 
         fun cancel(context: Context) {
