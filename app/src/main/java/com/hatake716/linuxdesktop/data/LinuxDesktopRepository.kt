@@ -1553,7 +1553,12 @@ class LinuxDesktopRepository(private val context: Context) {
         private const val NATIVE_X11_POST_ACTIVITY_STABILIZE_MILLIS = 1000L
         private const val NATIVE_X11_RETRY_DELAY_MILLIS = 1000L
 
-        private const val COMPATIBILITY_START_TIMEOUT_MINUTES = 12
+        // The first compatibility start apt-installs the whole TigerVNC/noVNC
+        // stack inside the guest (and may first --fix-broken a dpkg state an
+        // interrupted run left behind) — at guest-proot speeds that exceeded
+        // the old 12-minute budget and the timeout killed apt mid-flight,
+        // recreating the very interruption it then had to repair.
+        private const val COMPATIBILITY_START_TIMEOUT_MINUTES = 30
         private const val COMPATIBILITY_VIEWER_OPEN_DELAY_MILLIS = 700L
         private const val COMPATIBILITY_ACTIVITY_CLOSE_POLL_MILLIS = 100L
         private const val COMPATIBILITY_ACTIVITY_CLOSE_ATTEMPTS = 50

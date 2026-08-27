@@ -141,6 +141,9 @@ cmd_prepare() {
             if [[ -n "$comp" ]]; then
                 for f in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
                     [[ -f "$f" ]] || continue
+                    # Third-party repos (Google Chrome) have no contrib/universe
+                    # component; appending one only produces apt warnings.
+                    [[ "$f" == *google-chrome* ]] && continue
                     if [[ "$f" == *.sources ]]; then
                         sed -Ei "/^Components:/ { /(^|[[:space:]])$comp([[:space:]]|$)/! s/$/ $comp/; }" "$f"
                     else
@@ -150,7 +153,12 @@ cmd_prepare() {
             fi
 
             dpkg --configure -a || true
+            # A previously interrupted guest apt run (app killed mid-install →
+            # its proot dies mid-dpkg) leaves packages unpacked-but-unconfigured
+            # and every later install fails with "Unmet dependencies"; configure
+            # alone cannot fetch the missing dependencies, --fix-broken can.
             $APT update
+            $APT install -y --fix-broken || true
             $APT install -y --no-install-recommends \
                 python3 \
                 tigervnc-standalone-server \
