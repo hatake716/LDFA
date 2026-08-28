@@ -53,22 +53,20 @@ Androidの管理画面から環境をワンタップで起動し、そのまま�
   <sub>横向き表示 — 同じセッションのまま画面の向きに追従</sub>
 </p>
 
-### ⬇️ 入手（v1.1.0 正式版）
+### ⬇️ 入手
 
-**[▶ Releases から `LDFA-v1.1.0-debug.apk` をダウンロード](https://github.com/hatake716/LDFA/releases/tag/v1.1.0)**
+**Google Play での配布を準備中です**（リリース署名・application ID `com.hatake716.linuxdesktop`）。
 
-1. 上のリンクから APK をダウンロードします（提供元不明アプリの許可が必要な場合があります）。
-2. アプリを開き、案内に沿って内蔵ランタイム・ストレージ権限・Debian 環境の初回セットアップを完了します（初回は数分）。
-3. 環境を追加し「Debian XFCE を開く」でデスクトップを起動します。
+従来の配布版 **v1.1.0**（application ID が `com.termux` の旧世代・デバッグ署名）は [Releases](https://github.com/hatake716/LDFA/releases/tag/v1.1.0) から引き続き入手できますが、現行の main とは application ID が異なる**別アプリ**です。旧版の Debian 環境は、旧版の「バックアップ」で `.ldfa` ファイルへ書き出し、新版の「復元」で引き継げます。
 
-> 詳しい手順は [APKの入手方法](#apkの入手方法) と [初回セットアップ](#初回セットアップ) を参照してください。配布 APK はデバッグ署名です。上書き更新できるよう、署名鍵は固定してリポジトリに含めています。
+> 詳しい手順は [APKの入手方法](#apkの入手方法) と [初回セットアップ](#初回セットアップ) を参照してください。
 
 ## 現在のステータス
 
 | 項目 | 状態 |
 | --- | --- |
-| バージョン | `1.1.0` / versionCode `20` |
-| リリース段階 | **正式版公開済み**。[Releases v1.1.0](https://github.com/hatake716/LDFA/releases/tag/v1.1.0) からAPKを入手できます |
+| バージョン | `1.1.0` / versionCode `20`（application ID: `com.hatake716.linuxdesktop`） |
+| リリース段階 | **Google Play 提出準備中**。従来版（旧 application ID `com.termux`・デバッグ署名）は [Releases v1.1.0](https://github.com/hatake716/LDFA/releases/tag/v1.1.0) から入手可能 |
 | Linux環境 | Debian 12（Bookworm）+ XFCE |
 | 表示 | 内蔵native X11、`DISPLAY=:1`（normal → legacy描画の2段構成。VNCフォールバックは廃止） |
 | ローカル／AVD検証 | clean build、176 unit tests（app 31）、3 module lint、4 ABI APK、host／X11スクリプトの静的gateを確認。API 35 x86_64・4 KB page AVDではChrome + Gboard、履歴からの通常復帰、Chrome／XFCE強制終了後の自動復旧、新規インストール環境の起動を確認 |
@@ -76,7 +74,7 @@ Androidの管理画面から環境をワンタップで起動し、そのまま�
 | 音声受け入れ | **実機で可聴出力を確認済み**（動画音声がAndroidスピーカーから再生）。SHM無効化＋socket隔離による修正版を反映 |
 | 表示・入力 | デスクトップ全体の**表示倍率 100〜250%（25%刻み）**、画面下部の**特殊キーバー（ESC/CTRL/ALT/矢印など）のON/OFF**、物理キーボードの**配列 JIS / US**を設定から切り替え可能。実機で拡大表示を確認済み |
 | 起動時間 | プロビジョニング確認を4→1 PRoot loginへ削減、さらに成功時の冗長なPRoot login1回と固定待ちを削減。2回目以降の起動を高速化 |
-| 上書き更新 | デバッグ署名鍵をリポジトリに固定し、どの環境でビルドしても同じ鍵で署名。既存インストールへ上書き更新できることを実機で確認済み |
+| 署名 | Play 提出用のリリース署名（アップロード鍵、リポジトリ外管理）。開発ビルドはリポジトリ固定のデバッグ鍵で、どの環境でビルドしても上書き更新可能 |
 
 物理ARM64での長時間運用とARM64 16 KB page端末のE2Eは継続検証中のため、日常データを置く唯一のLinux環境としてではなく、バックアップを取ったテスト環境として使用してください。
 
@@ -124,21 +122,19 @@ descriptorをguest境界越しに渡せないため、client／daemon双方でsh
 - Debian環境1つにつき、最低3〜5 GB程度の空き容量を推奨
 - 初回セットアップ時の安定したインターネット接続
 
-APKには`arm64-v8a`、`armeabi-v7a`、`x86`、`x86_64`のnativeライブラリを収録しています。ただし、Google Chrome公式Linuxパッケージの自動導入対象は`arm64`と`amd64`だけです。32-bit環境ではChromeを別ブラウザへ無断で置換せず、Debian／XFCEの構築だけを継続します。
+**リリース（Play 提出用 AAB）は `arm64-v8a` 専用です** — native PRoot 実行基盤と再ビルド済み Termux ブートストラップを arm64 向けに同梱しているためです。開発用デバッグビルドには従来どおり 4 ABI の native ライブラリを収録しますが、arm64 以外での動作は保証しません。Google Chrome 公式 Linux パッケージの自動導入対象は `arm64` です。
 
 ## インストール前に必ず確認してください
 
-### 公式Termuxとは同時インストールできません
+### 公式Termuxと共存できます
 
-内蔵Termuxランタイムは、互換性のため次の固定パスを使用します。
+LDFA の application ID は `com.hatake716.linuxdesktop` で、内蔵 Termux ランタイムは専用パス
+`/data/data/com.hatake716.linuxdesktop/files/usr` を使用します（同梱ブートストラップはこの prefix 向けに
+termux-packages からソースビルドしたもの。手順は [tools/bootstrap/](tools/bootstrap/README.md)）。
+公式 Termux（`com.termux`）とはデータ領域も ID も完全に分離しており、**同じ端末に共存インストールできます**。
 
-```text
-/data/data/com.termux/files/usr
-```
-
-そのためLDFAのapplication IDは`com.termux`です。署名が異なる公式Termuxや別ビルドの`com.termux`とは同時インストールできません。
-
-既存Termuxに必要なスクリプト、SSH鍵、パッケージ、ホームディレクトリがある場合は、LDFAをインストールする前に必ずバックアップしてください。署名の異なるアプリへ`adb install -r`で上書きすることはできません。
+なお v1.1.0 以前の旧配布版は application ID が `com.termux` だったため公式 Termux と排他でした。
+旧版から移行する場合は、旧版の「バックアップ」で環境を `.ldfa` へ書き出し、新版の「復元」で取り込んでください。
 
 ### PRootは完全なLinux仮想マシンではありません
 
@@ -167,25 +163,21 @@ Webコンテンツ用rendererの上限は、Googleログインとの互換性を
 
 ## APKの入手方法
 
-### 1. GitHub Releases から入手（推奨）
+### 1. Google Play（準備中）
 
-**[Releases v1.1.0](https://github.com/hatake716/LDFA/releases/tag/v1.1.0)** から `LDFA-v1.1.0-debug.apk` をダウンロードします。音声出力・表示倍率・起動高速化を含む、CIで検証済みのビルドです。配布 APK はデバッグ署名ですが、署名鍵をリポジトリに固定しているため、旧バージョンからの上書き更新が可能です。
+リリース署名版（application ID `com.hatake716.linuxdesktop`）は Google Play での配布を準備中です。
 
-### 2. GitHub Actions の artifact から入手
+### 2. GitHub Actions の artifact から入手（開発ビルド）
 
-最新の `main` の[CI run](https://github.com/hatake716/LDFA/actions/workflows/android.yml)から APK artifactを取得できます。Actions artifactには保存期限があります。
-
-### 3. ローカルにAPKがある場合のインストール例
+最新の `main` の[CI run](https://github.com/hatake716/LDFA/actions/workflows/android.yml)から現行 ID のデバッグ APK artifact を取得できます。Actions artifact には保存期限があります。
 
 ```bash
-adb install -r LDFA-v1.1.0-debug.apk
+adb install -r app-debug.apk
 ```
 
-端末やADBの設定によってtest APKとしての許可を求められる場合は、`-t`を追加します。
+### 3. 従来版（旧 application ID）
 
-```bash
-adb install -r -t LDFA-v1.1.0-debug.apk
-```
+**[Releases v1.1.0](https://github.com/hatake716/LDFA/releases/tag/v1.1.0)** の `LDFA-v1.1.0-debug.apk` は application ID が `com.termux` の旧世代です。現行版とは別アプリとして扱われ、公式 Termux とは排他です。環境の引き継ぎは `.ldfa` バックアップ経由で行ってください。
 
 ## 初回セットアップ
 
@@ -351,7 +343,7 @@ Android共有ストレージ連携（`/mnt/android`）は廃止しました。ta
 
 環境をまるごと1つの`.ldfa`ファイルに保存し、同じ端末でも別のAndroid端末でも、新しい環境として復元できます。機種変更や環境の複製に利用できます。
 
-- **作成**: ツール →「バックアップを作成」→ 停止中の環境を選ぶ →「バックアップを開始」。保存先は「スマホ本体（内部ストレージ）▸ LinuxDesktop ▸ backups」（フルパス `/storage/emulated/0/LinuxDesktop/backups`）で、Androidの「ファイル」アプリから取り出せます。
+- **作成**: ツール →「バックアップを作成」→ 停止中の環境を選ぶ →「バックアップを開始」。保存先は「スマホ本体 ▸ ダウンロード ▸ LinuxDesktop」（`Download/LinuxDesktop/`、MediaStore 経由・ストレージ権限不要）で、Androidの「ファイル」アプリから取り出せます。
 - **復元**: ツール →「バックアップから復元」→ `.ldfa`ファイルを選ぶ → 内容（作成元・アーキテクチャ・作成日時）を確認 →「この内容で復元」。復元は**常に新しい環境として追加**され、既存の環境を上書きしません。同じバックアップを二重に復元しても衝突しません。
 - **形式**: rootfsとメタデータをtar→gzipで1ファイルにまとめ、末尾のSHA-256で破損を検知します。処理は前面サービス（WakeLock付き）で進み、進捗バーを表示します。
 - **除外**: `/proc` `/sys` `/dev` `/tmp` などの揮発ディレクトリ、aptキャッシュ、ChromeのキャッシュとSingletonロック、そしてPRootが作るAndroidマウントポイント（`/apex` `/system` `/vendor` など）は自動で除外されます。復元先では新しいmachine-idを生成し、Chromeや音声・アプリ構成は初回起動時に再検証します。
@@ -368,7 +360,7 @@ LDFA管理UI
    v
 LinuxDesktopRepository
    |
-   +--> EmbeddedX11ServerService (process: com.termux:x11)
+   +--> EmbeddedX11ServerService (process: com.hatake716.linuxdesktop:x11)
    |          |
    |          +--> libXlorie / Xorg :1
    |          |          |
@@ -387,7 +379,7 @@ LinuxDesktopRepository
                                     Android Surface
 ```
 
-Xorg serverは管理UIとは別の`com.termux:x11`プロセスで動作します。service起動ごとにUUID世代とPID markerを照合し、古い世代が完全に終了してから次の世代を開始します。
+Xorg serverは管理UIとは別の`com.hatake716.linuxdesktop:x11`プロセスで動作します。service起動ごとにUUID世代とPID markerを照合し、古い世代が完全に終了してから次の世代を開始します。
 
 表示Activityとnative EGL rendererは現在main processに含まれます。mutex、EGL初期化、JNI ABI、Binder/FD世代競合、Surface再作成、teardownに対するhardeningは実装済みですが、vendor EGL driver内部の永久hangやnative SIGSEGVを管理UIから完全隔離するには、viewerの別process化が今後も必要です。
 
@@ -441,8 +433,8 @@ Compatibility VNC
 ADBから確認する例:
 
 ```bash
-adb shell pidof com.termux
-adb shell pidof com.termux:x11
+adb shell pidof com.hatake716.linuxdesktop
+adb shell pidof com.hatake716.linuxdesktop:x11
 adb logcat -s LorieNative gles-renderer MainActivity
 ```
 
