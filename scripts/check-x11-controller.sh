@@ -3,10 +3,7 @@ set -euo pipefail
 
 controller="${1:-app/src/main/assets/ldfa-x11.sh}"
 repository="${2:-.}"
-vnc_controller="$repository/app/src/main/assets/ldfa-vnc.sh"
-
 bash -n "$controller"
-bash -n "$vnc_controller"
 
 # Termux-side native X11 script is prerequisites/diagnostics only. Android owns process lifecycle.
 for pattern in \
@@ -69,8 +66,13 @@ grep -Fq -- 'OsConstants.S_ISSOCK' "$lifecycle"
 grep -Fq -- 'bindService(' "$lifecycle"
 grep -Fq -- 'EmbeddedX11Display.connect(' "$lifecycle"
 grep -Fq -- 'serviceGeneration,' "$lifecycle"
-grep -Fq -- 'X11_PROCESS_NAME = "com.termux:x11"' "$lifecycle"
-grep -Fq -- 'File("/proc/$pid/cmdline")' "$lifecycle"
+# Renamed app derives the :x11 process name; and ownership checks must NOT
+# read /proc of sibling processes — hidepid=invisible hides them on RELEASE
+# builds (only debuggable builds hold the readproc exemption). kill(pid, 0)
+# is the hidepid-safe liveness/ownership probe.
+grep -Fq -- 'X11_PROCESS_NAME = "${BuildConfig.APPLICATION_ID}:x11"' "$lifecycle"
+! grep -Fq -- 'File("/proc/$pid/cmdline")' "$lifecycle"
+grep -Fq -- 'Os.kill(pid, 0)' "$lifecycle"
 grep -Fq -- 'OsConstants.SIGTERM' "$lifecycle"
 grep -Fq -- 'OsConstants.SIGKILL' "$lifecycle"
 grep -Fq -- 'cleanupEndpointsAfterVerifiedExit' "$lifecycle"
@@ -106,7 +108,6 @@ grep -Fq -- 'startAndProbeHost(id)' "$repository_source"
 grep -Fq -- 'if (id != null && currentId != id) return@withLock currentId != null' "$repository_source"
 grep -Fq -- 'activeContainerId() != effectiveId' "$repository_source"
 grep -Fq -- 'if (nativeFailure is CancellationException) throw nativeFailure' "$repository_source"
-grep -Fq -- 'if (compatibilityFailure is CancellationException) throw compatibilityFailure' "$repository_source"
 grep -Fq -- 'if (recoveryFailure is CancellationException)' "$repository_source"
 grep -Fq -- 'holdTermuxServiceLifetime()' "$repository_source"
 grep -Fq -- 'Intent(context, TermuxService::class.java)' "$repository_source"
@@ -385,10 +386,10 @@ grep -Fq -- 'viewModel.setHostActivityVisible(true)' "$main_activity"
 grep -Fq -- 'viewModel.setHostActivityVisible(false)' "$main_activity"
 grep -Fq -- 'fun setHostActivityVisible(visible: Boolean)' "$main_view_model"
 grep -Fq -- 'containerRefreshJob?.cancel()' "$main_view_model"
-vnc_activity="$repository/app/src/main/java/com/hatake716/linuxdesktop/display/VncFallbackActivity.kt"
-grep -Fq -- 'EXTRA_LAUNCH_GENERATION' "$vnc_activity"
-grep -Fq -- 'generation != null && generation == allowedLaunchGeneration' "$vnc_activity"
-grep -Fq -- 'intent.getStringExtra(EXTRA_LAUNCH_GENERATION) == allowedLaunchGeneration' "$vnc_activity"
+# The VNC fallback (VncFallbackActivity / ldfa-vnc.sh) was removed: nothing of
+# it may return.
+! test -e "$repository/app/src/main/java/com/hatake716/linuxdesktop/display/VncFallbackActivity.kt"
+! test -e "$repository/app/src/main/assets/ldfa-vnc.sh"
 
 settings="$repository/settings.gradle.kts"
 app_build="$repository/app/build.gradle.kts"
@@ -410,51 +411,5 @@ grep -Fq -- 'getHistoricalProcessExitReasons' "$process_exit_diagnostics"
 grep -Fq -- 'isLowMemoryKillReportSupported()' "$process_exit_diagnostics"
 grep -Fq -- 'same_uid_rss_kib=' "$process_exit_diagnostics"
 grep -Fq -- 'ProcessExitDiagnostics.report(context)' "$repository_source"
-
-# Compatibility display is intentionally isolated from native X1.
-for pattern in \
-  'VERSION="0.8.0"' \
-  'DISPLAY_NUMBER=2' \
-  'VNC_PORT=5902' \
-  '[[ -S "$SOCKET" ]]' \
-  'export DISPLAY=:$DISPLAY_NUMBER' \
-  'Xtigervnc :$DISPLAY_NUMBER' \
-  'activate_host_display()' \
-  'ldfa-run-$id' \
-  'tigervnc-standalone-server' \
-  'Xtigervnc' \
-  'novnc' \
-  'websockify' \
-  '-nolisten tcp' \
-  '--shared-tmp' \
-  '/usr/bin/xset q'; do
-  grep -Fq -- "$pattern" "$vnc_controller"
-done
-! grep -Fq -- 'DISPLAY_NUMBER=1' "$vnc_controller"
-! grep -Fq -- '/tmp/.X1-lock' "$vnc_controller"
-! grep -Fq -- '/tmp/.X11-unix/X1' "$vnc_controller"
-
-# Generating the compatibility runner must not expand the inner Debian HOME or
-# XDG_RUNTIME_DIR in Termux (where XDG_RUNTIME_DIR is commonly unset).
-vnc_tmp="$(mktemp -d)"
-trap 'rm -rf "$vnc_tmp"' EXIT
-(
-  export HOME="$vnc_tmp/home"
-  export XDG_DATA_HOME="$vnc_tmp/data"
-  export PREFIX="$vnc_tmp/prefix"
-  unset XDG_RUNTIME_DIR
-  mkdir -p "$HOME" "$PREFIX/tmp"
-  # shellcheck disable=SC1090
-  source <(sed '/^main "\$@"$/d' "$vnc_controller")
-  write_runner regression
-  grep -Fq -- 'mkdir -p "$XDG_RUNTIME_DIR" /tmp/.X11-unix "$HOME/.vnc"' "$RUNNER"
-  grep -Fq -- 'chmod 700 "$XDG_RUNTIME_DIR" "$HOME/.vnc"' "$RUNNER"
-  grep -Fq -- 'export DISPLAY=:2' "$RUNNER"
-  grep -Fq -- 'Xtigervnc :2' "$RUNNER"
-  ! grep -Fq -- 'pkill -f' "$RUNNER"
-  ! grep -Fq -- 'DISPLAY=:1' "$RUNNER"
-)
-rm -rf "$vnc_tmp"
-trap - EXIT
 
 echo "v0.9 direct-Binder X11 architecture checks passed"

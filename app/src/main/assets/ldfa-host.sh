@@ -2544,16 +2544,20 @@ worker_install() {
     # here, so tolerate the failure — the shared bind is applied per guest login.
     mkdir -p "$shared" 2>/dev/null || true
 
-    # Re-entry guard: the app auto-relaunches this worker when it finds an
-    # interrupted install (this worker is a child of the app process and dies
-    # with it). A live worker keeps ownership of the id; when relaunching over
-    # a dead one, drop its stale provision request so the app cannot launch a
-    # provision proot against a rootfs this run is about to delete and rebuild.
-    if session_alive "$(install_session "$id")"; then
-        printf '[%s] install worker already running for %s; exiting\n' "$(date -Iseconds)" "$id" >&2
-        return 0
+    # Re-entry guard (NATIVE ONLY): the app auto-relaunches this worker when it
+    # finds an interrupted install (this worker is a child of the app process
+    # and dies with it). A live worker keeps ownership of the id; when
+    # relaunching over a dead one, drop its stale provision request so the app
+    # cannot launch a provision proot against a rootfs this run is about to
+    # delete and rebuild. On the legacy path this worker RUNS INSIDE the tmux
+    # install session, so the same check would see itself and always bail.
+    if native_proot_mode; then
+        if session_alive "$(install_session "$id")"; then
+            printf '[%s] install worker already running for %s; exiting\n' "$(date -Iseconds)" "$id" >&2
+            return 0
+        fi
+        rm -f "$(session_request_file "$(install_session "$id")")" 2>/dev/null || true
     fi
-    rm -f "$(session_request_file "$(install_session "$id")")" 2>/dev/null || true
 
     # Native path: the app launched this worker in its OWN persistent proot (not via
     # setsid inside the create RUN_COMMAND, which would die immediately). Record our PID
