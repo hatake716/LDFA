@@ -131,20 +131,6 @@ class TermuxCommandClient(private val context: Context) {
         timeout = timeout,
     )
 
-    suspend fun runBundledVncScript(
-        script: String,
-        action: String,
-        arguments: List<String> = emptyList(),
-        timeout: Duration = 60.seconds,
-    ): String = runBundledController(
-        script = script,
-        installedName = "ldfa-vnc",
-        action = action,
-        arguments = arguments,
-        label = "Linux Desktop compatibility display: $action",
-        timeout = timeout,
-    )
-
     suspend fun runInstalledHost(
         action: String,
         arguments: List<String> = emptyList(),
@@ -167,16 +153,6 @@ class TermuxCommandClient(private val context: Context) {
         timeout = timeout,
     ).checkedStdout()
 
-    suspend fun runInstalledVnc(
-        action: String,
-        arguments: List<String> = emptyList(),
-        timeout: Duration = 30.seconds,
-    ): String = execute(
-        commandPath = INSTALLED_VNC_SCRIPT,
-        arguments = listOf(action) + arguments,
-        label = "Linux Desktop compatibility display watchdog",
-        timeout = timeout,
-    ).checkedStdout()
 
     private suspend fun runBundledController(
         script: String,
@@ -357,6 +333,5 @@ class TermuxCommandClient(private val context: Context) {
             "/data/data/com.hatake716.linuxdesktop/files/home/.local/share/linux-desktop-for-android/bin"
         private const val INSTALLED_HOST_SCRIPT = "$INSTALLED_BIN_DIR/ldfa-host"
         private const val INSTALLED_X11_SCRIPT = "$INSTALLED_BIN_DIR/ldfa-x11"
-        private const val INSTALLED_VNC_SCRIPT = "$INSTALLED_BIN_DIR/ldfa-vnc"
     }
 }

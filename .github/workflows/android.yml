@@ -166,7 +166,11 @@ jobs:
           # (READ/WRITE are not user-grantable at targetSdk 35 anyway).
           ! grep -Fq 'android.permission.READ_EXTERNAL_STORAGE' "$VERIFY_DIR/manifest.xml"
           ! grep -Fq 'android.permission.WRITE_EXTERNAL_STORAGE' "$VERIFY_DIR/manifest.xml"
-          grep -Fq 'networkSecurityConfig' "$VERIFY_DIR/manifest.xml"
+          # The VNC fallback is gone, and with it the last cleartext consumer:
+          # neither a network-security-config nor usesCleartextTraffic may ship
+          # (the platform default blocks cleartext).
+          ! grep -Fq 'networkSecurityConfig' "$VERIFY_DIR/manifest.xml"
+          ! grep -Fq 'usesCleartextTraffic' "$VERIFY_DIR/manifest.xml"
           # Declaring a com.termux-owned permission makes LDFA uninstallable next to
           # real Termux (INSTALL_FAILED_DUPLICATE_PERMISSION); ours must be namespaced.
           ! grep -Fq 'com.termux.permission' "$VERIFY_DIR/manifest.xml"
@@ -179,9 +183,10 @@ jobs:
           ! grep -Fq 'start-foreground-service' "$VERIFY_DIR/ldfa-x11.sh"
           ! grep -Fq 'am start' "$VERIFY_DIR/ldfa-x11.sh"
 
-          # Compatibility display remains packaged as the last-resort recovery backend.
-          grep -Fqx 'assets/ldfa-vnc.sh' "$VERIFY_DIR/entries.txt"
-          grep -Fq 'VncFallbackActivity' "$VERIFY_DIR/dex-strings.txt"
+          # The VNC compatibility backend was removed (its provisioning and even
+          # warm starts were minutes-slow); nothing of it may ship again.
+          ! grep -Fqx 'assets/ldfa-vnc.sh' "$VERIFY_DIR/entries.txt"
+          ! grep -Fq 'VncFallbackActivity' "$VERIFY_DIR/dex-strings.txt"
 
           # LDFA branding and Material 3 tools are included.
           grep -Fxq 'com.hatake716.linuxdesktop' "$VERIFY_DIR/application-id.txt"

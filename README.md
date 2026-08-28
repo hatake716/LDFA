@@ -70,8 +70,7 @@ Androidの管理画面から環境をワンタップで起動し、そのまま�
 | バージョン | `1.1.0` / versionCode `20` |
 | リリース段階 | **正式版公開済み**。[Releases v1.1.0](https://github.com/hatake716/LDFA/releases/tag/v1.1.0) からAPKを入手できます |
 | Linux環境 | Debian 12（Bookworm）+ XFCE |
-| 通常表示 | 内蔵native X11、`DISPLAY=:1` |
-| 最終フォールバック | TigerVNC + noVNC、`DISPLAY=:2` |
+| 表示 | 内蔵native X11、`DISPLAY=:1`（normal → legacy描画の2段構成。VNCフォールバックは廃止） |
 | ローカル／AVD検証 | clean build、176 unit tests（app 31）、3 module lint、4 ABI APK、host／X11スクリプトの静的gateを確認。API 35 x86_64・4 KB page AVDではChrome + Gboard、履歴からの通常復帰、Chrome／XFCE強制終了後の自動復旧、新規インストール環境の起動を確認 |
 | 実機検証 | Pixel 10a（ARM64・8 GB RAM）でnative起動・表示倍率の拡大・上書き更新インストールを確認済み。**新規／既存環境のデスクトップ起動（ARM向けにWM待機を延長）、環境まるごとの`.ldfa`バックアップと復元（3.69 GB環境で完走）まで実機で確認**。ARM64 16 KB pageは未完了 |
 | 音声受け入れ | **実機で可聴出力を確認済み**（動画音声がAndroidスピーカーから再生）。SHM無効化＋socket隔離による修正版を反映 |
@@ -97,14 +96,14 @@ Androidの管理画面から環境をワンタップで起動し、そのまま�
 - 環境まるごとを1つの`.ldfa`ファイルへバックアップし、別のAndroid端末でも新しい環境として復元（機種変更・移行に対応）
 - 内蔵ターミナルからDebianを保守
 - 作成、起動、停止、修復、削除とログ表示をMaterial 3 UIへ統合
-- native X11が利用できない場合にlegacy描画、互換VNCへ段階的にフォールバック
+- native X11の通常描画が利用できない場合にlegacy描画へフォールバック（VNCフォールバックは遅すぎるため廃止し、失敗時は診断ログ付きで明確にエラー表示）
 - Foreground Service、WakeLock、heartbeat、世代IDで実行中セッションを監視
 - Surface再作成時の全画面再描画、main process回収後の安全な再接続、停止／再起動を考慮したX11 lifecycle
 - Chrome／XFCE子プロセスがAndroidに個別終了された場合のイベント駆動型自動復旧
 
 ### 音声出力
 
-音声はX11やVNCへ混在させず、Debian clientからTermux互換runtimeのPulseAudioへ
+音声はX11へ混在させず、Debian clientからTermux互換runtimeのPulseAudioへ
 app-private Unix socketで送ります。Debianでは
 `PULSE_SERVER=unix:/tmp/ldfa-pulse/native`、Android側では
 `$PREFIX/var/run/ldfa-pulse-bridge/native`として同じsocketを共有します。socketは
@@ -124,7 +123,6 @@ descriptorをguest境界越しに渡せないため、client／daemon双方でsh
 - 64-bit ARM端末を推奨
 - Debian環境1つにつき、最低3〜5 GB程度の空き容量を推奨
 - 初回セットアップ時の安定したインターネット接続
-- 互換VNC表示を使用する場合はAndroid System WebView
 
 APKには`arm64-v8a`、`armeabi-v7a`、`x86`、`x86_64`のnativeライブラリを収録しています。ただし、Google Chrome公式Linuxパッケージの自動導入対象は`arm64`と`amd64`だけです。32-bit環境ではChromeを別ブラウザへ無断で置換せず、Debian／XFCEの構築だけを継続します。
 
@@ -343,7 +341,7 @@ XMODIFIERS=@im=fcitx
 
 **US配列を選んだ場合、日本語入力の切り替えは `Ctrl + Space` です**（US配列には半角/全角キーが物理的に存在しないため）。設定画面にもこの案内を表示します。
 
-> キーボード配列の設定は native X11 表示（`DISPLAY=:1`）が対象です。VNC フォールバック（`DISPLAY=:2`）ではブラウザ側でキーが解決されるため、現在は反映されません。Android のソフトウェアキーボード（Gboard）は配列設定の影響を受けず、日本語入力・Googleログイン欄への入力は従来どおり動作します。
+> キーボード配列の設定は native X11 表示（`DISPLAY=:1`）に適用されます。Android のソフトウェアキーボード（Gboard）は配列設定の影響を受けず、日本語入力・Googleログイン欄への入力は従来どおり動作します。
 
 ## Androidとのファイル共有について
 
@@ -402,16 +400,16 @@ native X11 :1 / 通常描画
         |
         | classified failure
         v
-native X11 :1 / legacy描画
+native X11 :1 / normal描画
         |
         | failure after clean teardown
         v
-TigerVNC :2 / noVNC viewer
+native X11 :1 / legacy描画
 ```
 
-native X11は`DISPLAY=:1`、互換VNCは`DISPLAY=:2`、RFBは`127.0.0.1:5902`、noVNCは`127.0.0.1:6080`を使用します。X11 TCPは`-nolisten tcp`で無効化しています。
+native X11は`DISPLAY=:1`を使用します。X11 TCPは無効で、通信はアプリ専用領域内のUnix socketのみです。どちらの描画モードでも起動できない場合は、診断ログ付きのエラーとして明確に失敗します（かつてのVNCフォールバックは、初回準備・再開とも数分〜数十分かかり実用に耐えないため廃止しました）。
 
-normal、legacy、VNCを同時起動せず、切り替え前に前のviewer、server、socket、lock、workerを停止します。
+normalとlegacyを同時起動せず、切り替え前に前のviewer、server、socket、lock、workerを停止します。
 
 ## 内蔵ターミナルとログ
 

@@ -14,7 +14,7 @@
 - `WAKE_LOCK`: インストール中・実行中の意図しない停止を減らす
 - `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`: ユーザーが安定動作設定を開くために使用
 
-平文通信（cleartext）はnetwork security configで`127.0.0.1`／`localhost`に限定します（ローカルのnoVNCフォールバック表示のみが利用）。それ以外の平文通信は拒否します。root権限は要求しません。
+平文通信（cleartext）は一切使用しません（Androidプラットフォームの既定どおりブロックされます。かつて唯一の利用箇所だったローカルnoVNCフォールバック表示は廃止済み）。root権限は要求しません。
 
 ## 内蔵コマンド実行
 

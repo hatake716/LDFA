@@ -10,7 +10,6 @@ import android.os.IBinder
 import android.provider.Settings
 import android.util.Log
 import com.hatake716.linuxdesktop.BuildConfig
-import com.hatake716.linuxdesktop.display.VncFallbackActivity
 import com.hatake716.linuxdesktop.x11.EmbeddedX11PrerequisiteController
 import com.hatake716.linuxdesktop.x11.EmbeddedX11ServiceController
 import com.termux.app.EmbeddedTermuxRuntime
@@ -35,8 +34,10 @@ data class RuntimeStatus(
 )
 
 enum class DesktopDisplayBackend(val preferenceValue: String) {
-    NATIVE_X11("native-x11"),
-    COMPATIBILITY_VNC("compatibility-vnc");
+    // COMPATIBILITY_VNC was removed with the VNC fallback; a stored
+    // "compatibility-vnc" preference from an old build resolves to null and is
+    // treated as "no active session".
+    NATIVE_X11("native-x11");
 
     companion object {
         fun fromPreference(value: String?): DesktopDisplayBackend? =
@@ -74,9 +75,6 @@ class LinuxDesktopRepository(private val context: Context) {
     }
     private val x11Script: String by lazy {
         context.assets.open("ldfa-x11.sh").bufferedReader().use { it.readText() }
-    }
-    private val vncScript: String by lazy {
-        context.assets.open("ldfa-vnc.sh").bufferedReader().use { it.readText() }
     }
 
     fun runtimeStatus(): RuntimeStatus = RuntimeStatus(
@@ -198,8 +196,8 @@ class LinuxDesktopRepository(private val context: Context) {
             holdTermuxServiceLifetime()
             clearActiveSession()
             try {
-                // A previous run can still own a worker with DISPLAY=:2. Stop it before selecting
-                // a new backend so start_run_worker cannot reuse the stale tmux generation.
+                // A previous run can still own a stale worker generation. Stop it before
+                // starting a new one.
                 try {
                     commandClient.runInstalledHost(
                         action = "stop",
@@ -214,32 +212,16 @@ class LinuxDesktopRepository(private val context: Context) {
                 stopAllDisplayServers()
                 ensureBundledDesktopApps(id)
 
-                var backend = selectAndStartDisplayBackend(id)
+                val backend = selectAndStartDisplayBackend(id)
                 startAndProbeHost(id)
 
-                if (backend == DesktopDisplayBackend.NATIVE_X11) {
-                    val desktopPresentationFailure = verifyNativeDesktopPresentation(id)
-                    if (desktopPresentationFailure != null) {
-                        // The blank-root probe succeeded but XFCE could not be presented. Tear down
-                        // this exact pipeline before starting :2; never leave both displays alive.
-                        commandClient.runInstalledHost(
-                            action = "stop",
-                            arguments = listOf(id),
-                            timeout = 30.seconds,
-                        )
-                        closeNativeDisplayAndWait()
-                        EmbeddedX11ServiceController.stopAndWait(context)
-                        startAndVerifyCompatibilityDisplay(id, desktopPresentationFailure)
-                        backend = DesktopDisplayBackend.COMPATIBILITY_VNC
-                        startAndProbeHost(id)
-                    }
-                }
-
-                if (backend == DesktopDisplayBackend.COMPATIBILITY_VNC) {
-                    delay(COMPATIBILITY_VIEWER_OPEN_DELAY_MILLIS)
-                    withContext(Dispatchers.Main.immediate) {
-                        VncFallbackActivity.open(context)
-                    }
+                // The VNC fallback was removed (its first-time provisioning took
+                // ~30 minutes through a nested proot — worse than failing): a
+                // desktop that cannot be PRESENTED on native X11 is a start
+                // failure with diagnostics, never a silent degraded mode.
+                val desktopPresentationFailure = verifyNativeDesktopPresentation(id)
+                if (desktopPresentationFailure != null) {
+                    throw desktopPresentationFailure
                 }
 
                 setActiveSession(id, backend)
@@ -352,15 +334,6 @@ class LinuxDesktopRepository(private val context: Context) {
                 timeout = 20.seconds,
             )
         }.getOrDefault("")
-        val compatibilityLogs = runCatching {
-            commandClient.runBundledVncScript(
-                script = vncScript,
-                action = "logs",
-                arguments = listOf("400"),
-                timeout = 20.seconds,
-            )
-        }.getOrDefault("")
-
         buildString {
             append("===== Android process / memory =====\n")
             append(ProcessExitDiagnostics.report(context))
@@ -368,8 +341,6 @@ class LinuxDesktopRepository(private val context: Context) {
             append(desktopLogs.ifBlank { "ログはありません。" })
             append("\n\n===== Native Termux:X11 =====\n")
             append(x11Logs.ifBlank { "ネイティブX11ログはありません。" })
-            append("\n\n===== Compatibility X11 / VNC =====\n")
-            append(compatibilityLogs.ifBlank { "互換表示ログはありません。" })
         }
     }
 
@@ -714,7 +685,6 @@ class LinuxDesktopRepository(private val context: Context) {
     fun openDisplay() {
         when (activeDisplayBackend()) {
             DesktopDisplayBackend.NATIVE_X11 -> EmbeddedX11ServiceController.openDisplay(context)
-            DesktopDisplayBackend.COMPATIBILITY_VNC -> VncFallbackActivity.open(context)
             null -> Unit
         }
     }
@@ -735,16 +705,12 @@ class LinuxDesktopRepository(private val context: Context) {
     }
 
     private suspend fun selectAndStartDisplayBackend(id: String): DesktopDisplayBackend {
-        return try {
-            startAndVerifyNativeX11(id)
-            DesktopDisplayBackend.NATIVE_X11
-        } catch (nativeFailure: Throwable) {
-            if (nativeFailure is CancellationException) throw nativeFailure
-            closeNativeDisplayAndWait()
-            EmbeddedX11ServiceController.stopAndWait(context)
-            startAndVerifyCompatibilityDisplay(id, nativeFailure)
-            DesktopDisplayBackend.COMPATIBILITY_VNC
-        }
+        // Native X11 is the only backend. The VNC fallback was removed: its
+        // first-time guest provisioning took ~30 minutes through a nested proot
+        // and even a warm start took minutes — failing fast with the native
+        // diagnostics is the better experience.
+        startAndVerifyNativeX11(id)
+        return DesktopDisplayBackend.NATIVE_X11
     }
 
     private suspend fun startAndVerifyNativeX11(id: String) {
@@ -763,7 +729,6 @@ class LinuxDesktopRepository(private val context: Context) {
             var legacyRetryUseful = true
             attemptedModes += mode
             try {
-                runCatching { commandClient.runInstalledVnc("stop", timeout = 15.seconds) }
                 EmbeddedX11ServiceController.restartAndWait(
                     context = context,
                     legacyDrawing = mode == NATIVE_X11_MODE_LEGACY,
@@ -857,96 +822,10 @@ class LinuxDesktopRepository(private val context: Context) {
         )
     }
 
-    private suspend fun startAndVerifyCompatibilityDisplay(id: String, nativeFailure: Throwable?) {
-        try {
-            Log.i(LIFECYCLE_LOG_TAG, "compatibility display start id=$id")
-            commandClient.runBundledVncScript(
-                script = vncScript,
-                action = "start",
-                arguments = listOf(id),
-                timeout = COMPATIBILITY_START_TIMEOUT_MINUTES.minutes,
-            )
-            commandClient.runBundledVncScript(
-                script = vncScript,
-                action = "probe",
-                arguments = listOf(id),
-                timeout = 45.seconds,
-            )
-            Log.i(LIFECYCLE_LOG_TAG, "compatibility display probe ready id=$id")
-        } catch (compatibilityFailure: Throwable) {
-            if (compatibilityFailure is CancellationException) throw compatibilityFailure
-            Log.e(LIFECYCLE_LOG_TAG, "compatibility display failed id=$id", compatibilityFailure)
-            val compatibilityLogs = runCatching {
-                commandClient.runInstalledVnc("logs", listOf("350"), 20.seconds)
-            }.getOrDefault("")
-            throw TermuxCommandException(
-                buildString {
-                    if (nativeFailure != null) {
-                        append("ネイティブX11と互換X11の両方を起動できませんでした。")
-                        nativeFailure.message?.takeIf { it.isNotBlank() }?.let {
-                            append("\n\nNative X11:\n")
-                            append(it.takeLast(3000))
-                        }
-                    } else {
-                        append("互換X11表示を起動できませんでした。")
-                    }
-                    compatibilityFailure.message?.takeIf { it.isNotBlank() }?.let {
-                        append("\n\nCompatibility X11:\n")
-                        append(it.takeLast(3000))
-                    }
-                    if (compatibilityLogs.isNotBlank()) {
-                        append("\n\nCompatibility log:\n")
-                        append(compatibilityLogs.takeLast(5000))
-                    }
-                },
-                compatibilityFailure,
-            )
-        }
-    }
-
     private suspend fun heartbeatDisplay(id: String): Boolean {
         return when (activeDisplayBackend()) {
-            DesktopDisplayBackend.COMPATIBILITY_VNC -> heartbeatCompatibilityDisplay(id)
             DesktopDisplayBackend.NATIVE_X11 -> heartbeatNativeDisplay(id)
             null -> false
-        }
-    }
-
-    private suspend fun heartbeatCompatibilityDisplay(id: String): Boolean {
-        return try {
-            commandClient.runInstalledVnc(
-                action = "heartbeat",
-                arguments = listOf(id),
-                timeout = 60.seconds,
-            )
-            true
-        } catch (heartbeatFailure: Throwable) {
-            if (heartbeatFailure is CancellationException) throw heartbeatFailure
-            try {
-                // A dead VNC server also terminates its X clients. Recreate the worker after the
-                // replacement :2 endpoint is ready instead of reusing a stale tmux session.
-                commandClient.runInstalledHost(
-                    action = "stop",
-                    arguments = listOf(id, PRESERVE_CHROME_RESTORE),
-                    timeout = 30.seconds,
-                )
-                closeCompatibilityDisplayAndWait()
-                commandClient.runInstalledVnc("stop", timeout = 20.seconds)
-                startAndVerifyCompatibilityDisplay(id, null)
-                startAndProbeHost(id)
-                setActiveSession(id, DesktopDisplayBackend.COMPATIBILITY_VNC)
-                withContext(Dispatchers.Main.immediate) {
-                    VncFallbackActivity.open(context)
-                }
-                true
-            } catch (recoveryFailure: Throwable) {
-                if (recoveryFailure is CancellationException) {
-                    cleanupCancelledRecovery(id)
-                    throw recoveryFailure
-                }
-                handleUnrecoverableDisplayFailure(id)
-                false
-            }
         }
     }
 
@@ -1043,29 +922,10 @@ class LinuxDesktopRepository(private val context: Context) {
                 setActiveSession(id, DesktopDisplayBackend.NATIVE_X11)
                 true
             } else {
-                try {
-                    commandClient.runInstalledHost(
-                        action = "stop",
-                        arguments = listOf(id, PRESERVE_CHROME_RESTORE),
-                        timeout = 30.seconds,
-                    )
-                    closeNativeDisplayAndWait()
-                    EmbeddedX11ServiceController.stopAndWait(context)
-                    startAndVerifyCompatibilityDisplay(id, nativeRecoveryFailure)
-                    startAndProbeHost(id)
-                    setActiveSession(id, DesktopDisplayBackend.COMPATIBILITY_VNC)
-                    withContext(Dispatchers.Main.immediate) {
-                        VncFallbackActivity.open(context)
-                    }
-                    true
-                } catch (fallbackFailure: Throwable) {
-                    if (fallbackFailure is CancellationException) {
-                        cleanupCancelledRecovery(id)
-                        throw fallbackFailure
-                    }
-                    handleUnrecoverableDisplayFailure(id)
-                    false
-                }
+                // No VNC fallback any more: an unrecoverable native display is a
+                // stopped desktop with diagnostics, not a degraded mode.
+                handleUnrecoverableDisplayFailure(id)
+                false
             }
         }
     }
@@ -1328,7 +1188,6 @@ class LinuxDesktopRepository(private val context: Context) {
 
     private suspend fun stopAllDisplayServers() {
         EmbeddedX11ServiceController.stopAndWait(context)
-        runCatching { commandClient.runInstalledVnc("stop", timeout = 20.seconds) }
     }
 
     /**
@@ -1436,34 +1295,6 @@ class LinuxDesktopRepository(private val context: Context) {
 
     private suspend fun closeAllDisplaysAndWait() {
         closeNativeDisplayAndWait()
-        closeCompatibilityDisplayAndWait()
-    }
-
-    private suspend fun closeCompatibilityDisplayAndWait() {
-        withContext(Dispatchers.Main.immediate) {
-            VncFallbackActivity.close()
-        }
-        var stableClosedPolls = 0
-        var requiredStablePolls = DISPLAY_CLOSE_STABLE_POLLS_WHEN_ALREADY_CLOSED
-        repeat(COMPATIBILITY_ACTIVITY_CLOSE_ATTEMPTS) {
-            val open = withContext(Dispatchers.Main.immediate) {
-                VncFallbackActivity.isOpen()
-            }
-            if (open) {
-                stableClosedPolls = 0
-                requiredStablePolls = DISPLAY_CLOSE_STABLE_POLLS
-                withContext(Dispatchers.Main.immediate) {
-                    VncFallbackActivity.close()
-                }
-            } else {
-                stableClosedPolls++
-                if (stableClosedPolls >= requiredStablePolls) return
-            }
-            delay(COMPATIBILITY_ACTIVITY_CLOSE_POLL_MILLIS)
-        }
-        throw TermuxCommandException(
-            "互換VNC viewerを安全に終了できませんでした。表示サーバーの切り替えを中止します。",
-        )
     }
 
     private fun setActiveSession(id: String, backend: DesktopDisplayBackend) {
@@ -1553,15 +1384,6 @@ class LinuxDesktopRepository(private val context: Context) {
         private const val NATIVE_X11_POST_ACTIVITY_STABILIZE_MILLIS = 1000L
         private const val NATIVE_X11_RETRY_DELAY_MILLIS = 1000L
 
-        // The first compatibility start apt-installs the whole TigerVNC/noVNC
-        // stack inside the guest (and may first --fix-broken a dpkg state an
-        // interrupted run left behind) — at guest-proot speeds that exceeded
-        // the old 12-minute budget and the timeout killed apt mid-flight,
-        // recreating the very interruption it then had to repair.
-        private const val COMPATIBILITY_START_TIMEOUT_MINUTES = 30
-        private const val COMPATIBILITY_VIEWER_OPEN_DELAY_MILLIS = 700L
-        private const val COMPATIBILITY_ACTIVITY_CLOSE_POLL_MILLIS = 100L
-        private const val COMPATIBILITY_ACTIVITY_CLOSE_ATTEMPTS = 50
         private const val DISPLAY_CLOSE_STABLE_POLLS = 10
 
         // Fast-exit for the common start case where NOTHING is open yet (cold or
