@@ -48,7 +48,8 @@ Console の各画面へコピー&ペーストするための確定文面。英�
 ### 動画
 
 - YouTube 限定公開でアップロードし、URL をフォームに貼る
-- 素材: `~/LDFA-release-assets/ldfa-fgs-demo.mp4`
+- 素材（リポジトリ直下のローカル `release-assets/`）:
+  `ldfa-fgs-demo-part1.mp4`、`ldfa-fgs-demo-part2.mp4`
 - 内容: ホーム画面 → 「Debian XFCEを開く」→ 通知シェードにフォアグラウンド
   サービス通知 → XFCE デスクトップ操作 → 「停止」で終了
 
@@ -207,7 +208,7 @@ LDFA is published under GPLv3: https://github.com/hatake716/LDFA
 1. [ ] デベロッパーアカウント登録（$25・本人確認）
 2. [ ] アプリ作成（LDFA / 日本語 / 無料）
 3. [ ] 内部テストへ app-release.aab をアップロード（Play App Signing 登録）
-4. [ ] ストア掲載情報（上記 4 + アイコン 512x512 + フィーチャーグラフィック 1024x500 + スクリーンショット `~/LDFA-release-assets/`）
+4. [ ] ストア掲載情報（上記 4 + アイコン 512x512 + フィーチャーグラフィック 1024x500 + スクリーンショット `release-assets/`）
 5. [ ] プライバシーポリシー URL 設定（docs/privacy.html を main へ）
 6. [ ] データセーフティ（上記 2）
 7. [ ] コンテンツレーティング（上記 5）

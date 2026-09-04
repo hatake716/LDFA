@@ -17,3 +17,6 @@ gradle/wrapper/gradle-wrapper.jar
 
 # Play upload signing (machine-local; keystore lives outside the repo)
 /keystore.properties
+
+# Local Play submission bundles, screenshots, videos and verification records
+/release-assets/

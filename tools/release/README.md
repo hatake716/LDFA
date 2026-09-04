@@ -1,5 +1,37 @@
 # LDFA リリースビルド（Google Play 提出用）
 
+## 開発フォルダと提出素材
+
+Google Play 向けの現行ソースは、リポジトリの既定ブランチ `main` で管理します。
+旧版や別の作業フォルダと分ける場合は、次のように独立したフォルダへ取得します。
+
+```bash
+git clone --recurse-submodules --branch main https://github.com/hatake716/LDFA.git LDFA-google-play
+cd LDFA-google-play
+```
+
+SDK の設定は `local.properties`、アップロード署名の設定は `keystore.properties` に
+置きます。両方とも Git 管理対象外です。キーストア本体は引き続きリポジトリ外で管理します。
+
+既存の提出用 AAB、画像、動画は、必要に応じてリポジトリ直下の `release-assets/` に
+まとめます。このディレクトリも Git 管理対象外で、clone には含まれません。
+
+```text
+LDFA-google-play/
+  app/、termux-runtime/、embedded-x11/、vendor/  現行ソース
+  tools/release/                              ビルド・Play Console の説明
+  release-assets/                             ローカルの提出素材
+    LDFA-v1.1.0-release.aab
+    feature-graphic-1024x500.png
+    shot-1-home.png ほか
+    ldfa-fgs-demo-part1.mp4
+    ldfa-fgs-demo-part2.mp4
+```
+
+`release-assets/` に保管した既存 AAB と、以下のコマンドで新しく生成する AAB は
+区別してください。新規ビルドの出力先は `app/build/outputs/bundle/release/` です。
+提出文面と素材の用途は [play-console.md](play-console.md) を参照してください。
+
 ## 成果物
 
 Play へ提出するのは **AAB**（App Bundle）:
