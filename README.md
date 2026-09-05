@@ -11,7 +11,7 @@ root化や、別のTermux・X11アプリのインストールは不要です。
 
 **検証版：1.2.0 / versionCode 21**
 
-Android 15 / x86_64 / 4KBでLinuxの導入・表示・日本語入力・バックアップ復元を確認しています。ARM64実機での最終確認は未完了のため、GitHubではプレリリースとして提供します。
+Android 15 / x86_64 / 4KBでLinuxの導入・表示・日本語入力・バックアップ復元を確認しています。Pixel 10a（Android 17 / ARM64 / 4KB）へのインストールと初回画面の表示も確認済みです。ARM64実機でのLinuxの導入・実行は未確認のため、GitHubではプレリリースとして提供します。
 
 [リリースとAPK](https://github.com/hatake716/LDFA/releases) · [導入手順](docs/INSTALLATION.md) · [プライバシーポリシー](https://hatake716.github.io/LDFA/privacy.html)
 
