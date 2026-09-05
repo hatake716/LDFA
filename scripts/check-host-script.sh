@@ -89,12 +89,12 @@ HOME="$fresh_panel_home" XDG_STATE_HOME="$fresh_panel_state" bash "$panel_block"
 cmp "$test_sandbox/fresh-panel-expected.xml" \
   "$fresh_panel_config.ldfa-before-mobile-optimization"
 required=(
-  'VERSION="1.1.0"'
+  'VERSION="1.2.0"'
   'LINUX_IMAGE="debian:12"'
   'install_help="$(pd install --help 2>&1 || true)"'
   '[[ "$install_help" == *"--name"* ]]'
-  'pd install --name "$id" "$image"'
-  'pd install "$legacy_distro" --override-alias "$id"'
+  'pd install --name "$install_id" "$image"'
+  'pd install "$legacy_distro" --override-alias "$install_id"'
   'unset PROOT_NO_SECCOMP'
   'pd_login "$id" --bind "$shared:/mnt/android" --'
   'storage_linked() {'
@@ -291,7 +291,10 @@ required=(
   'stop_one "$id" 1'
   "tmux list-panes -t \"\$session\" -F '#{pane_pid}'"
   'acquire_controller_lock()'
-  'bootstrap|create|ensure-apps|start|resume|health|stop|delete|audio-probe|heartbeat|repair'
+  'bootstrap|create|ensure-apps|prepare-apps|finish-apps|start|resume|health|stop|delete|audio-probe|heartbeat|repair'
+  'guest_apps_script()'
+  'cmd_prepare_apps()'
+  'cmd_finish_apps()'
   'getprop persist.sys.timezone'
   'ln -sfn "/usr/share/zoneinfo/$tz" "$rootfs/etc/localtime"'
   'ln -sfn "/usr/share/zoneinfo/$LDFA_TZ" /etc/localtime'

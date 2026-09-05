@@ -136,7 +136,7 @@ jobs:
             Java_com_termux_x11_EmbeddedX11Display_nativeSuccessfulPresentSerial
             Java_com_termux_x11_EmbeddedX11Display_nativeRendererReady
           )
-          for ABI in arm64-v8a armeabi-v7a x86 x86_64; do
+          for ABI in arm64-v8a x86_64; do
             grep -Fqx "lib/$ABI/libXlorie.so" "$VERIFY_DIR/entries.txt"
             PACKAGED_LIB="$VERIFY_DIR/libXlorie-$ABI.so"
             STRIPPED_LIB="app/build/intermediates/stripped_native_libs/debug/stripDebugDebugSymbols/out/lib/$ABI/libXlorie.so"
@@ -166,6 +166,7 @@ jobs:
           # (READ/WRITE are not user-grantable at targetSdk 35 anyway).
           ! grep -Fq 'android.permission.READ_EXTERNAL_STORAGE' "$VERIFY_DIR/manifest.xml"
           ! grep -Fq 'android.permission.WRITE_EXTERNAL_STORAGE' "$VERIFY_DIR/manifest.xml"
+          ! grep -Fq 'requestLegacyExternalStorage' "$VERIFY_DIR/manifest.xml"
           # The VNC fallback is gone, and with it the last cleartext consumer:
           # neither a network-security-config nor usesCleartextTraffic may ship
           # (the platform default blocks cleartext).
@@ -190,7 +191,8 @@ jobs:
 
           # LDFA branding and Material 3 tools are included.
           grep -Fxq 'com.hatake716.linuxdesktop' "$VERIFY_DIR/application-id.txt"
-          grep -Fq "versionCode='20' versionName='1.1.0'" "$VERIFY_DIR/badging.txt"
+          grep -Fq "versionCode='21' versionName='1.2.0'" "$VERIFY_DIR/badging.txt"
+          grep -Fq "targetSdkVersion:'36'" "$VERIFY_DIR/badging.txt"
           grep -Fq "application-label:'LDFA'" "$VERIFY_DIR/badging.txt"
           grep -Fq 'ToolsScreen' "$VERIFY_DIR/dex-strings.txt"
           grep -Fq 'ProcessExitDiagnostics' "$VERIFY_DIR/dex-strings.txt"
@@ -209,10 +211,11 @@ jobs:
           ! grep -Fq -- '--single-process' "$VERIFY_DIR/ldfa-host.sh"
           ! grep -Fq -- '--enable-low-end-device-mode' "$VERIFY_DIR/ldfa-host.sh"
 
+          python3 scripts/verify-release-contents.py --apk "$APK" --report "$VERIFY_DIR/native-contents.json"
           "$ANDROID_HOME/build-tools/36.0.0/zipalign" -c -P 16 4 "$APK"
           "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify "$APK"
 
-          cp "$APK" app/build/outputs/apk/debug/LDFA-v1.1.0-debug.apk
+          cp "$APK" app/build/outputs/apk/debug/LDFA-v1.2.0-debug.apk
 
       - name: Upload Gradle diagnostics
         if: always()
@@ -227,7 +230,7 @@ jobs:
         if: success()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: LDFA-v1.1.0-debug-apk
-          path: app/build/outputs/apk/debug/LDFA-v1.1.0-debug.apk
+          name: LDFA-v1.2.0-debug-apk
+          path: app/build/outputs/apk/debug/LDFA-v1.2.0-debug.apk
           if-no-files-found: error
           retention-days: 14

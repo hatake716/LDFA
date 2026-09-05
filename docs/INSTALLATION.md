@@ -1,121 +1,60 @@
-# インストール手順
+# LDFAの導入とデータ移行
 
-## 1. 事前確認
+この手順は`com.hatake716.linuxdesktop`を使用するLDFA 1.2.0向けです。
 
-LDFAはTermuxの固定プレフィックスを使うためapplication IDが`com.termux`です。署名が異なる公式Termuxとは同時にインストールできません。既存Termuxに必要なデータがある場合は、共有ストレージへバックアップしてからLDFAをインストールしてください。外部Termux:X11と外部VNCクライアントは通常不要です。
+## 新しくはじめる
 
-Debian環境1つにつき3〜5GB以上の空き容量と、初回セットアップ時のインターネット接続を推奨します。
+1. Android 8.0以降のARM64端末に、[現行リリース](https://github.com/hatake716/LDFA/releases)のAPKをインストールします。
+2. LDFAを開き、空き容量が5GB以上あることを確認します。Wi-Fiと充電をおすすめします。
+3. デスクトップの名前を入力し「Linuxをインストール」を押します。
+4. 内蔵実行環境の準備、Debianのダウンロード、基本パッケージ・XFCE・日本語入力の構築が進みます。
+5. ホームに「起動できます」と表示されたら「デスクトップを開く」を押します。
 
-## 2. APKを用意
+root化、外部Termux、外部X11クライアント、手動コマンドの貼り付けは不要です。
+通知を許可すると実行中の状態を確認できます。共有ストレージ全体へのアクセス権限は要求しません。
 
-正式版は [Releases v1.1.0](https://github.com/hatake716/LDFA/releases/tag/v1.1.0) の
-`LDFA-v1.1.0-debug.apk` を使用します。音声出力・表示倍率・起動高速化を含み、CIで検証済みです。
-配布APKはデバッグ署名ですが、署名鍵をリポジトリに固定しているため、旧バージョンへの上書き更新が可能です。
+処理中は、画面を離れたり回転したりしても導入が継続します。Androidがアプリのプロセスを終了した場合は、次回アプリを開いたときに中断した導入の再開を試みます。通信障害などで失敗と表示された場合は、接続を確認してカードの「導入・起動を修復」を選んでください。
 
-ソースから作る場合は、音声修正を含むworking treeのrootで実行します。修正commitが
-公開されるまでは`origin/main`を新しくcloneしても今回のAPKにはなりません。
+展開済みのDebianは再利用します。未完了環境を自動的に削除してやり直すことはありません。新しく作り直す場合は、必要なファイルを退避したうえで、対象環境のメニューから明示的に削除します。
 
-```bash
-cd /home/takeshi/StudioProjects/LDFA-fix
-bash ./gradlew assembleDebug
-```
+## 日常の操作
 
-生成先は`app/build/outputs/apk/debug/app-debug.apk`です。ADBからインストールする場合:
+| 操作 | 場所 |
+| --- | --- |
+| デスクトップを起動・再表示 | ホームの「デスクトップを開く」 |
+| Linuxを停止 | ホームの「停止」または実行中の通知 |
+| 環境を追加 | ホームの「Linuxを追加」 |
+| 詳細ログを見る | 導入カードの「詳細ログを見る」、または各カードのメニュー |
+| 表示倍率・特殊キー・配列 | 「設定」 |
+| ターミナルを開く | 「ツール → 内蔵ターミナル」 |
+| バックアップ・復元 | 「ツール」 |
 
-```bash
-adb install -r app/build/outputs/apk/debug/app-debug.apk
-```
+## バックアップからはじめる
 
-## 3. 初回セットアップ
+初回画面の「バックアップから復元する」を選ぶと、必要な実行環境を準備してからファイル選択へ進みます。`.ldfa`ファイルを選ぶと、既存のLinuxへ上書きせず、新しいIDの環境として復元します。元の端末とCPUアーキテクチャが一致している必要があります。
 
-アプリの案内に従って次を準備します。
+既存環境を使っている場合も、「ツール → 復元」から同じ操作ができます。
 
-1. 内蔵Termux runtimeを展開
-2. 内蔵X11機能を確認
-3. Android共有ストレージへのアクセスを許可
-4. tmux、proot-distroなどDebian実行基盤を準備
+## 保存と機種変更
 
-外部アプリへの切り替えや手動コマンド貼り付けは不要です。
+1. 対象のLinuxを停止します。
+2. 「ツール → バックアップ」で環境を選んで保存します。
+3. Android 10以降では「ダウンロード / LinuxDesktop」から`.ldfa`を別端末やPCへコピーします。
+4. Android 8〜9では、完了画面に出るアプリ専用の保存先からコピーします。この場所のファイルはアンインストール時に消えます。
+5. 新しい端末で「バックアップから復元する」を選びます。
 
-## 4. Debian XFCE環境を作成
+バックアップにはLinuxのrootfsと管理情報が含まれます。Android側の別の共有ファイルは含まれません。暗号化されていないため、アカウント情報や個人ファイルを含むバックアップは自分で安全に保管してください。
 
-ホーム画面の追加ボタンから環境名を入力します。proot-distroのDebian 12（Bookworm）rootfs、XFCE、日本語locale、Noto CJK、Fcitx5/Mozc、公式Google Chrome stable、Pulse／ALSA音声client、sudo、X11診断ツールを自動設定します。rootfsはPRoot互換性と再現性のため`debian:12`へ固定しています。インストールはtmux内で継続し、画面にはリアルタイムログを表示します。
+## 旧版からの移行と署名
 
-Google ChromeはGoogle公式の`amd64`／`arm64`パッケージを環境作成時に取得します。既存環境では、アプリ更新後の最初のデスクトップ起動前にChromeと音声clientを確認し、必要な場合だけ追加します。そのため初回起動や更新直後はデスクトップ表示まで数分かかることがあります。実行中の旧sessionがある状態でAPKを上書きした場合は、環境を一度停止してから開き直してください。
+GitHub配布版v1.1.0以前のアプリIDは`com.termux`です。現行版とは別アプリのため、旧版で`.ldfa`を作成して現行版で復元します。公式Termuxと現行LDFAは共存できます。
 
-Chrome本体と依存パッケージの追加使用量は約460MBです。
+同じアプリIDでも署名鍵が異なるAPKには上書き更新できません。Play App Signingで署名されたGoogle Play版と、GitHubの署名済みAPKも、署名設定により相互に上書きできない場合があります。エラーが出ても、バックアップ前に既存アプリを削除しないでください。
 
-## 5. Debian XFCEを起動
+## 困ったとき
 
-環境カードの「Debian XFCEを開く」を選びます。LDFAは次を順に確認します。
-
-起動中は「デスクトップが表示されるまで少し時間がかかる」旨を管理画面に表示します。表示Activityへ切り替わるまで画面を閉じずに待ってください。
-
-1. `com.termux:x11` Foreground Serviceと世代UUID
-2. Xorg PID、`:1` Unix socket、`xset q`
-3. 表示Activityへのdirect Binder接続とX connection FD
-4. Android SurfaceとEGL rendererのREADY状態
-5. `xrefresh`後のsuccessful presentation serial増分
-6. （best-effort）app-private PulseAudio socketとAndroid実出力sink。失敗時は記録してGUIを継続
-7. Debian worker、`xfsettingsd`、`xfwm4`、`xfce4-panel`、`xfdesktop`と実際のEWMHウィンドウ
-8. XFCE起動後の2回目のpresentation serial増分
-
-native通常描画が利用できない場合はlegacy描画を試し、対応可能なnative経路がなければ`DISPLAY=:2`のloopback VNCへ自動で切り替えます。
-
-Google ChromeはAndroid PRootの制約に合わせ、一般ユーザー`desktop`から`--no-sandbox`付きの専用ランチャーで起動します。Android、ソフトウェアキーボード、XFCEの余裕を残すため、Webコンテンツ用rendererを最大2個に制限し、拡張機能とbackground modeを無効化し、glibcのarena数を抑えます。Chrome UI用rendererが別に1個動く場合があります。既存環境の古いlauncherもデスクトップ起動前に自動更新します。PRootとChromeを強いセキュリティ境界として扱わないでください。初回起動時にはGoogleの利用規約確認が表示されます。
-
-Electron／Chromium製のGUIアプリ（Claude Desktopなど）は、PRoot内でsetuidの`chrome-sandbox`もuser namespaceも成立せず、そのままでは起動時のsandbox初期化で異常終了します。デスクトップsessionと`desktop`ユーザーのシェル設定に`ELECTRON_DISABLE_SANDBOX=1`を設定し、Electronが自動で`--no-sandbox`を付けて起動できるようにします。
-
-Debianの音声は`PULSE_SERVER=unix:/tmp/ldfa-pulse/native`から内蔵runtimeへ送る構成です。
-起動時に専用socketとAndroid実sinkを確認しますが、音声はGUIの必須gateではありません。
-失敗時は`audio_ready=0`とhost logを残し、GUIを無音で継続します。Unix bridgeの実装と
-APK package検査は完了していますが、本体speaker、Bluetooth、イヤホンの可聴出力と
-XFCE panel操作は修正版APKで実機再確認が必要です。再生専用機能のためマイク権限は
-要求しません。
-
-PRootでは`xfce4-session`のICE lockが安定しないため、LDFAは`xfsettingsd`、`xfwm4`、Panel、Desktopを直接起動します。常駐supervisorは外部コマンドを定期実行せず、子プロセスの終了イベントを待ちます。AndroidがChromeまたはいずれかのXFCE要素だけを終了した場合は、XFCEを再構成し、異常終了したChromeの前回セッションを自動復元します。
-
-履歴やGmailから戻る通常経路では、現在のcontainerとXFCE／ChromeをAndroidの`/proc`だけで照合し、PRootを追加起動しません。Chrome本体までAndroidに終了された場合は自動再起動して前回sessionを復元しますが、これは既存processを再表示する通常復帰とは異なり、Chrome内容が戻るまで数秒かかることがあります。
-
-## 6. 日本語入力とsudo
-
-Debian側では次を自動設定します。
-
-- `ja_JP.UTF-8`
-- Noto CJK / Noto Color Emoji
-- Fcitx5 + Mozc
-- `GTK_IM_MODULE=fcitx`
-- `QT_IM_MODULE=fcitx`
-- `XMODIFIERS=@im=fcitx`
-- 日本語キーボードlayout
-- `desktop`ユーザーのパスワードなしsudo
-
-Linuxパッケージを追加する例:
-
-```bash
-sudo apt update
-sudo apt install <package>
-```
-
-## 7. Android共有フォルダ
-
-```text
-Android: /sdcard/LinuxDesktop/<environment-id>
-Debian:  /mnt/android
-XFCE:    /home/desktop/Desktop/Android共有
-```
-
-環境削除時に、Android共有フォルダを残すか同時に削除するかを選択できます。
-
-## 8. ログと復旧
-
-環境メニューからAndroid process/memory診断、Debian/XFCEログ、表示serverログを確認できます。Android 11以降では、前回のmain／`:x11` processがlow-memory、Java crash、native crash、signalのどれで終了したかを`ApplicationExitInfo`から保存します。同一アプリUIDで動くChrome／Debian／XFCEを含む現在のRSSとswapも集計します。ADBでは次が有用です。
-
-```bash
-adb shell pidof com.termux:x11
-adb logcat -s LorieNative gles-renderer MainActivity
-```
-
-Androidのバッテリー設定は「制限なし」を推奨します。処理が中断した場合は設定またはツール画面の自動修復を実行してください。保存済み共有ファイルは自動修復では削除しません。
-
-Gmailなど別アプリから戻る通常操作では、履歴画面でLDFAを選んでから1〜2秒以内にChrome／XFCE全体が表示されることを確認してください。Androidが子プロセスを終了していた場合は再起動分だけ長くなりますが、マウスポインタだけの黒画面に留まらず自動復旧します。
+- **空き容量不足**：アプリ内のLinuxデータを消去せず、端末の不要なファイルを整理します。バックアップ作成にも追加の空き容量が必要です。
+- **ダウンロード失敗**：ネットワークを確認し、修復から再開します。詳細ログに失敗した処理が残ります。
+- **画面が表示されない**：管理画面へ戻り、環境を停止してから起動します。起動判定はX11への接続と実際の描画を確認しているため、表示できない状態を成功とは扱いません。
+- **バックグラウンドで終了する**：「設定」からAndroidのバッテリー設定を開いて確認します。省電力の設定だけで全ての終了を防ぐことはできません。
+- **音声が出ない**：AndroidとLinuxの両方の音量・ミュートを確認します。音声の準備に失敗してもデスクトップ表示は継続し、ログに記録します。

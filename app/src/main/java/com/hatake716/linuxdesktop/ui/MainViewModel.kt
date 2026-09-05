@@ -41,7 +41,9 @@ data class SetupSnapshot(
 data class MainUiState(
     val initialLoading: Boolean = true,
     val refreshing: Boolean = false,
+    val environmentError: String? = null,
     val bootstrapping: Boolean = false,
+    val installation: com.hatake716.linuxdesktop.InstallationProgress = com.hatake716.linuxdesktop.InstallationProgress(),
     val operationInProgress: Boolean = false,
     val desktopStartInProgress: Boolean = false,
     val setup: SetupSnapshot = SetupSnapshot(),
@@ -62,9 +64,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val state: StateFlow<MainUiState> = _state.asStateFlow()
     private var pollingJob: Job? = null
     private var containerRefreshJob: Job? = null
+    private var environmentRefreshJob: Job? = null
+    private var environmentRefreshRequested = false
 
     init {
         refreshEnvironment(showLoading = true)
+        viewModelScope.launch {
+            linuxDesktopApplication.installation.collect { progress ->
+                _state.update { it.copy(installation = progress, errorMessage = progress.error) }
+                if (progress.phase >= 2 || !progress.busy) refreshEnvironment()
+            }
+        }
     }
 
     /**
@@ -84,95 +94,67 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun refreshEnvironment(showLoading: Boolean = false) {
-        viewModelScope.launch {
+        if (environmentRefreshJob?.isActive == true) {
+            environmentRefreshRequested = true
+            return
+        }
+        environmentRefreshJob = viewModelScope.launch {
             _state.update {
-                it.copy(
-                    initialLoading = showLoading && it.containers.isEmpty(),
-                    refreshing = !showLoading,
-                )
+                it.copy(initialLoading = showLoading && it.containers.isEmpty(), refreshing = !showLoading)
             }
-
             val runtime = repository.runtimeStatus()
-            val doctor = if (runtime.terminalReady) {
-                runCatching { repository.doctor() }.getOrNull()
-            } else {
-                null
-            }
-
-            val containers = if (runtime.terminalReady) {
-                runCatching { repository.listContainers() }.getOrDefault(emptyList())
-            } else {
-                emptyList()
-            }
-            val liveLogs = if (runtime.terminalReady) {
-                loadLiveInstallationLogs(containers)
-            } else {
-                emptyMap()
-            }
-
-            _state.update {
-                it.copy(
-                    initialLoading = false,
-                    refreshing = false,
-                    setup = SetupSnapshot(
-                        runtime = runtime,
-                        doctor = doctor,
-                        desktopScalePercent = repository.desktopScalePercent(),
-                        extraKeysVisible = repository.extraKeysVisible(),
-                        keyboardLayout = repository.keyboardLayout(),
-                    ),
-                    containers = containers,
-                    liveInstallationLogs = liveLogs,
-                )
-            }
-        }
-    }
-
-    fun bootstrapHost() {
-        viewModelScope.launch {
-            _state.update { it.copy(bootstrapping = true, errorMessage = null) }
-            runCatching { repository.bootstrapHost() }
-                .onSuccess { doctor ->
-                    _state.update {
-                        it.copy(
-                            bootstrapping = false,
-                            setup = it.setup.copy(doctor = doctor),
-                            noticeMessage = "Debian XFCEの実行基盤を準備しました。",
-                        )
-                    }
-                    refreshContainers()
-                }
-                .onFailure(::showError)
-        }
-    }
-
-    fun createContainer(name: String) {
-        if (name.isBlank()) return
-        viewModelScope.launch {
-            _state.update {
-                it.copy(
-                    operationInProgress = true,
-                    desktopStartInProgress = false,
-                    errorMessage = null,
-                )
-            }
-            runCatching {
-                repository.createContainer(name)
-                DesktopKeepAliveService.start(getApplication())
-            }.onSuccess {
+            try {
+                val doctor = if (runtime.terminalReady) repository.doctor() else null
+                val containers = if (runtime.terminalReady) repository.listContainers() else emptyList()
+                val liveLogs = if (runtime.terminalReady) loadLiveInstallationLogs(containers) else emptyMap()
                 _state.update {
                     it.copy(
-                        operationInProgress = false,
-                        desktopStartInProgress = false,
-                        noticeMessage = "「${name.trim()}」のDebian XFCEインストールを開始しました。",
+                        initialLoading = false,
+                        refreshing = false,
+                        environmentError = null,
+                        setup = SetupSnapshot(
+                            runtime = runtime,
+                            doctor = doctor,
+                            desktopScalePercent = repository.desktopScalePercent(),
+                            extraKeysVisible = repository.extraKeysVisible(),
+                            keyboardLayout = repository.keyboardLayout(),
+                        ),
+                        containers = containers,
+                        liveInstallationLogs = liveLogs,
                     )
                 }
-                refreshContainers()
-            }.onFailure(::showError)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                // A failed probe is not evidence that the user's saved environments are gone.
+                _state.update {
+                    it.copy(
+                        initialLoading = false,
+                        refreshing = false,
+                        setup = it.setup.copy(runtime = runtime),
+                        environmentError = "Linux環境の状態を確認できませんでした。再確認してください。\n" +
+                            (failure.message ?: "実行環境から応答がありません。"),
+                    )
+                }
+            } finally {
+                if (environmentRefreshRequested) {
+                    environmentRefreshRequested = false
+                    environmentRefreshJob = null
+                    refreshEnvironment()
+                }
+            }
         }
     }
 
+    fun prepareForRestore() = linuxDesktopApplication.installLinux("", prepareOnly = true)
+
+    fun createContainer(name: String) = linuxDesktopApplication.installLinux(name)
+
     fun startContainer(container: ContainerInfo) {
+        if (container.state == ContainerState.RUNNING) {
+            repository.openDisplay()
+            return
+        }
         viewModelScope.launch {
             _state.update {
                 it.copy(
@@ -248,32 +230,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun repairInterruptedWork() {
-        viewModelScope.launch {
-            _state.update {
-                it.copy(
-                    operationInProgress = true,
-                    desktopStartInProgress = false,
-                    errorMessage = null,
-                )
-            }
-            runCatching {
-                repository.repairInterruptedWork()
-                // 修復 is the explicit retry: bypass the once-per-process resume
-                // guard so a failed auto-resume can be attempted again.
-                repository.resumeInterruptedInstalls(_state.value.containers, force = true)
-            }
-                .onSuccess {
-                    _state.update {
-                        it.copy(
-                            operationInProgress = false,
-                            desktopStartInProgress = false,
-                            noticeMessage = "中断されたDebian処理を再開しました。",
-                        )
-                    }
-                    refreshContainers()
-                }
-                .onFailure(::showError)
-        }
+        linuxDesktopApplication.resumeInstallations(force = true)
     }
 
     fun loadLogs(container: ContainerInfo) {
@@ -419,17 +376,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 !it.sessionAlive
         }
         if (interrupted.isEmpty()) return
-        viewModelScope.launch {
-            val resumed = runCatching {
-                repository.resumeInterruptedInstalls(interrupted)
-            }.getOrDefault(0)
-            if (resumed > 0) {
-                _state.update {
-                    it.copy(noticeMessage = "中断されていたインストールを再開しました。")
-                }
-                refreshContainers(silent = true)
-            }
-        }
+        linuxDesktopApplication.resumeInstallations()
     }
 
     private suspend fun loadLiveInstallationLogs(

@@ -16,17 +16,79 @@ import com.termux.x11.MainActivity as X11MainActivity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.CancellationException
+import com.termux.app.EmbeddedBootstrapInstaller
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import java.io.File
 
+data class InstallationProgress(
+    val busy: Boolean = false,
+    val phase: Int = 0,
+    val message: String = "",
+    val error: String? = null,
+)
+
 class LinuxDesktopApplication : TermuxApplication() {
     val repository: LinuxDesktopRepository by lazy { LinuxDesktopRepository(this) }
     private val sessionScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var pendingSessionStart: Pair<String, Deferred<DesktopDisplayBackend>>? = null
     private var viewerResumeRecovery: Job? = null
+    private var installationJob: Job? = null
+    private val _installation = MutableStateFlow(InstallationProgress())
+    val installation = _installation.asStateFlow()
+    val preparingInstallation: Boolean get() = _installation.value.busy
+
+    /** User-initiated work belongs to the application, including the rootfs request wait. */
+    @Synchronized
+    fun installLinux(name: String, prepareOnly: Boolean = false) {
+        if (installationJob?.isActive == true || (!prepareOnly && name.isBlank())) return
+        _installation.value = InstallationProgress(true, 1, "アプリ内の実行環境を準備しています")
+        DesktopKeepAliveService.start(this)
+        installationJob = sessionScope.launch {
+            try {
+                check(prepareOnly || filesDir.usableSpace >= 5L * 1024 * 1024 * 1024) {
+                    "Linuxの導入には空き容量が5GB以上必要です。空き容量を増やして再試行してください。"
+                }
+                EmbeddedBootstrapInstaller.install(this@LinuxDesktopApplication)
+                _installation.value = InstallationProgress(true, 2, "Linuxの導入準備を確認しています")
+                repository.bootstrapHost()
+                if (prepareOnly) {
+                    _installation.value = InstallationProgress()
+                    return@launch
+                }
+                _installation.value = InstallationProgress(true, 3, "Debianをダウンロードしています")
+                repository.createContainer(name)
+                _installation.value = InstallationProgress(message = "Linuxの構築を開始しました")
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                _installation.value = InstallationProgress(error = failure.message ?: "Linuxの導入に失敗しました")
+            }
+        }
+    }
+
+    @Synchronized
+    fun resumeInstallations(force: Boolean = false) {
+        if (installationJob?.isActive == true) return
+        _installation.value = InstallationProgress(true, 3, "中断したLinuxの導入を再開しています")
+        DesktopKeepAliveService.start(this)
+        installationJob = sessionScope.launch {
+            try {
+                if (force) repository.repairInterruptedWork()
+                repository.resumeInterruptedInstalls(repository.listContainers(), force)
+                _installation.value = InstallationProgress()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                _installation.value = InstallationProgress(error = failure.message ?: "導入を再開できませんでした")
+            }
+        }
+    }
 
     /**
      * The X11 viewer is a separate Activity. Keep the launch transaction owned by the Application
@@ -40,6 +102,7 @@ class LinuxDesktopApplication : TermuxApplication() {
             return pending.second
         }
 
+        DesktopKeepAliveService.start(this, id)
         val operation = sessionScope.async {
             val backend = repository.startContainer(id)
             DesktopKeepAliveService.start(this@LinuxDesktopApplication, id)

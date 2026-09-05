@@ -51,7 +51,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.hatake716.linuxdesktop.R
-import com.hatake716.linuxdesktop.backup.BackupPaths
 import com.hatake716.linuxdesktop.data.ContainerInfo
 import com.hatake716.linuxdesktop.data.ContainerState
 import com.hatake716.linuxdesktop.service.BackupService
@@ -69,7 +68,6 @@ internal fun BackupScreen(
     onClose: () -> Unit,
 ) {
     val context = LocalContext.current
-    val paths = remember { BackupPaths(context) }
     val serviceState by BackupService.state.collectAsStateWithLifecycle()
 
     // Only stopped, installed environments are safe to back up.
@@ -246,14 +244,14 @@ private fun DestinationCard() {
                 )
                 Spacer(Modifier.width(10.dp))
                 Text(
-                    text = stringResource(R.string.backup_dest_default),
+                    text = stringResource(if (android.os.Build.VERSION.SDK_INT >= 29) R.string.backup_dest_default else R.string.backup_dest_legacy),
                     style = MaterialTheme.typography.bodyLarge,
                     fontWeight = FontWeight.Medium,
                 )
             }
             Spacer(Modifier.height(10.dp))
             Text(
-                text = stringResource(R.string.backup_dest_hint),
+                text = stringResource(if (android.os.Build.VERSION.SDK_INT >= 29) R.string.backup_dest_hint else R.string.backup_hint_legacy),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

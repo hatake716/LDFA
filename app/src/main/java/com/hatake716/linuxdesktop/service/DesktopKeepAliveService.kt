@@ -81,7 +81,8 @@ class DesktopKeepAliveService : Service() {
             var idleCycles = 0
             while (isActive) {
                 val activeId = repository.activeContainerId() ?: containerId
-                val busy = repository.heartbeat(activeId)
+                val preparing = installationRunning()
+                val busy = preparing || repository.heartbeat(activeId)
                 if (!busy && repository.activeContainerId() == null) {
                     idleCycles += 1
                     if (idleCycles >= IDLE_CYCLES_BEFORE_STOP) {
@@ -92,6 +93,7 @@ class DesktopKeepAliveService : Service() {
                 } else {
                     idleCycles = 0
                 }
+                getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, buildNotification(activeId))
                 delay(HEARTBEAT_INTERVAL_MILLIS)
             }
         }
@@ -128,10 +130,13 @@ class DesktopKeepAliveService : Service() {
         }
     }
 
+    private fun installationRunning() =
+        (application as LinuxDesktopApplication).preparingInstallation || repository.hasActiveInstallation()
+
     private fun buildNotification(containerId: String?) = NotificationCompat.Builder(this, CHANNEL_ID)
         .setSmallIcon(R.drawable.ic_notification)
-        .setContentTitle(getString(R.string.keep_alive_notification_title))
-        .setContentText(getString(R.string.keep_alive_notification_text))
+        .setContentTitle(if (installationRunning()) "Linuxを準備中" else getString(R.string.keep_alive_notification_title))
+        .setContentText(if (installationRunning()) "Linuxを準備しています。進捗はアプリで確認できます。" else getString(R.string.keep_alive_notification_text))
         .setOngoing(true)
         .setOnlyAlertOnce(true)
         .setCategory(NotificationCompat.CATEGORY_SERVICE)
@@ -144,19 +149,19 @@ class DesktopKeepAliveService : Service() {
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             ),
         )
-        .addAction(
+        .apply { if (containerId != null) addAction(
             0,
             getString(R.string.stop),
             PendingIntent.getService(
-                this,
+                this@DesktopKeepAliveService,
                 11,
-                Intent(this, DesktopKeepAliveService::class.java).apply {
+                Intent(this@DesktopKeepAliveService, DesktopKeepAliveService::class.java).apply {
                     action = ACTION_STOP_SESSION
-                    if (containerId != null) putExtra(EXTRA_CONTAINER_ID, containerId)
+                    putExtra(EXTRA_CONTAINER_ID, containerId)
                 },
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             ),
-        )
+        ) }
         .build()
 
     private fun createNotificationChannel() {

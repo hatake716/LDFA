@@ -40,7 +40,8 @@ public final class EmbeddedTermuxRuntime {
 
     public static boolean isBootstrapInstalled() {
         return FileUtils.directoryFileExists(TermuxConstants.TERMUX_PREFIX_DIR_PATH, true) &&
-            !com.termux.shared.termux.file.TermuxFileUtils.isTermuxPrefixDirectoryEmpty();
+            new File(TermuxConstants.TERMUX_PREFIX_DIR, "bin/bash").isFile() &&
+            new File(TermuxConstants.TERMUX_PREFIX_DIR, "bin/proot-distro").isFile();
     }
 
     public static void setupBootstrapIfNeeded(Activity activity, Runnable whenDone) {

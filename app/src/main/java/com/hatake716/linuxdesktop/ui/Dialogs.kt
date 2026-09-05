@@ -58,7 +58,7 @@ internal fun CreateContainerDialog(
                 Spacer(Modifier.height(16.dp))
                 TextField(
                     value = name,
-                    onValueChange = { name = it.take(40) },
+                    onValueChange = { name = it.take(60) },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
                     label = { Text("環境の名前") },
@@ -79,7 +79,7 @@ internal fun CreateContainerDialog(
                     )
                     Spacer(Modifier.width(8.dp))
                     Text(
-                        "3〜5GB以上の空き容量を推奨します。",
+                        "新しい環境の導入には、空き容量5GB以上が必要です。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -112,7 +112,7 @@ internal fun DeleteContainerDialog(
         title = { Text("${container.name}を削除") },
         text = {
             Column {
-                Text("Debian環境内のアプリと設定は完全に削除され、元に戻せません。")
+                Text("このLinux環境のファイル・アプリ・設定を削除します。元に戻すことはできないため、必要なデータは先にバックアップしてください。")
             }
         },
         confirmButton = {

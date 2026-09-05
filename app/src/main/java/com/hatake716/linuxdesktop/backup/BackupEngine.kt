@@ -49,7 +49,12 @@ class BackupEngine(
 
     // ---- create ------------------------------------------------------------
 
-    suspend fun createFull(id: String, outputDir: File, listener: ProgressListener?): BackupOutput {
+    suspend fun createFull(id: String, outputDir: File, listener: ProgressListener?): BackupOutput =
+        com.hatake716.linuxdesktop.data.ContainerOperationLocks.withLock(id) {
+            createFullLocked(id, outputDir, listener)
+        }
+
+    private suspend fun createFullLocked(id: String, outputDir: File, listener: ProgressListener?): BackupOutput {
         if (!paths.isStopped(id)) {
             throw BackupError("バックアップの前に環境を停止してください。")
         }
@@ -58,7 +63,7 @@ class BackupEngine(
         val metaDir = paths.metaDir(id).takeIf { it.isDirectory }
 
         val displayName = paths.displayName(id)
-        val timestamp = OffsetDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmm"))
+        val timestamp = OffsetDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss-SSS"))
         val finalName = BackupFormat.safeFileName(displayName, timestamp, BackupManifest.Scope.FULL, false)
         outputDir.mkdirs()
         val finalFile = File(outputDir, finalName)
@@ -81,8 +86,9 @@ class BackupEngine(
 
         val manifest = buildManifest(id, displayName, counts)
 
+        if (finalFile.exists() || !partFile.createNewFile()) throw BackupError("同じ名前のバックアップが存在します。もう一度お試しください。")
         try {
-            partFile.outputStream().use { rawFos ->
+            val result = partFile.outputStream().use { rawFos ->
                 val out = BufferedOutputStream(rawFos, 1 shl 16)
                 BackupFormat.writeHeader(out, manifest)
                 val result = writer.write(
@@ -99,22 +105,22 @@ class BackupEngine(
                 )
                 BackupFormat.writeTrailer(out, result.payloadSha256, result.payloadLength)
                 out.flush()
-                if (!partFile.renameTo(finalFile)) {
-                    // Cross-filesystem rename can fail; copy+delete as a fallback is
-                    // undesirable for GBs, so surface it instead.
-                    throw BackupError("保存先へ書き込めませんでした。別の保存先を選んでください。")
-                }
-                return BackupOutput(
-                    file = finalFile,
-                    sizeBytes = finalFile.length(),
-                    sha256Prefix = result.payloadSha256.take(8).joinToString("") { "%02x".format(it) },
-                    skippedSpecial = result.skippedSpecial,
-                    unreadableCount = result.unreadable.size,
-                )
+                rawFos.fd.sync()
+                result
             }
+            coroutineContext.ensureActive()
+            if (!partFile.renameTo(finalFile)) {
+                throw BackupError("保存先へ書き込めませんでした。別の保存先を選んでください。")
+            }
+            return BackupOutput(
+                file = finalFile,
+                sizeBytes = finalFile.length(),
+                sha256Prefix = result.payloadSha256.take(8).joinToString("") { "%02x".format(it) },
+                skippedSpecial = result.skippedSpecial,
+                unreadableCount = result.unreadable.size,
+            )
         } catch (t: Throwable) {
             partFile.delete()
-            finalFile.takeIf { it.exists() && t !is BackupError }?.delete()
             throw t
         }
     }
@@ -180,6 +186,7 @@ class BackupEngine(
                     rootfsOut = plan.rootfsDir,
                     metaOut = plan.metaDir,
                     total = manifest.payload.entryCount,
+                    sourceContainer = manifest.container,
                     progress = object : BackupReader.Progress {
                         override fun onProgress(processedEntries: Long, totalEntries: Long) {
                             listener?.onPhase(Phase.Extracting(processedEntries, totalEntries))

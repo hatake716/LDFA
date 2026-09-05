@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 set -Eeuo pipefail
 
-VERSION="1.1.0"
+VERSION="1.2.0"
 
 # Termux normally exports these, but a worker launched via `setsid` from inside a
 # native-library proot (the Google Play / targetSdk-35 path) can start with a bare
@@ -448,12 +448,35 @@ ensure_machine_id() {
     '
 }
 
+# PID files survive an app process. Check the command as well as the numeric PID
+# before treating it as our worker or signalling it; Android may have reused the PID.
+session_pid_owned() {
+    local session="$1" pid="$2" id action index
+    local -a arguments=()
+    [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null || return 1
+    case "$session" in
+        ldfa-install-*) id="${session#ldfa-install-}"; action=worker-install ;;
+        ldfa-run-*) id="${session#ldfa-run-}"; action=worker-run ;;
+        *) return 1 ;;
+    esac
+    mapfile -d '' -t arguments < "/proc/$pid/cmdline" 2>/dev/null || return 1
+    for (( index=0; index+2<${#arguments[@]}; index++ )); do
+        if [[ "${arguments[index+1]}" == "$action" && "${arguments[index+2]}" == "$id" ]] &&
+            [[ "${arguments[index]}" == "$SELF" || "${arguments[index]}" -ef "$SELF" ]]; then
+            return 0
+        fi
+    done
+    # /data/data and /data/user/0 are also mount aliases on Android: readlink -f
+    # alone cannot identify them. -ef compares the controller's device/inode.
+    return 1
+}
+
 # True if the named session is alive.
 session_alive() {
     local session="$1"
     if native_proot_mode; then
         local pid; pid="$(cat "$(session_pid_file "$session")" 2>/dev/null || true)"
-        [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null
+        session_pid_owned "$session" "$pid"
     else
         tmux_alive "$session"
     fi
@@ -477,7 +500,7 @@ session_kill() {
     local session="$1"
     if native_proot_mode; then
         local pid; pid="$(cat "$(session_pid_file "$session")" 2>/dev/null || true)"
-        if [[ "$pid" =~ ^[0-9]+$ ]]; then
+        if session_pid_owned "$session" "$pid"; then
             kill -TERM "$pid" 2>/dev/null || true
         fi
         rm -f "$(session_pid_file "$session")" "$(desktop_ready_marker)"
@@ -832,7 +855,7 @@ guest_audio_ready() {
 desktop_session_script() {
     cat <<'SESSION'
 #!/bin/bash
-# LDFA_SESSION_RUNTIME_VERSION=36
+# LDFA_SESSION_RUNTIME_VERSION=37
 # Hardened LDFA Session Script
 set -Eeuo pipefail
 
@@ -1602,7 +1625,7 @@ ensure_desktop_runtime() {
         # side effects); -p prepends so ~/.local/bin wins, matching bash.
         install -d -m 0755 /etc/fish/conf.d
         cat > /etc/fish/conf.d/00-ldfa.fish <<'"'"'LDFA_FISH'"'"'
-# LDFA_SESSION_RUNTIME_VERSION=36
+# LDFA_SESSION_RUNTIME_VERSION=37
 # Managed by LDFA. fish ignores ~/.profile and ~/.bashrc, so the PATH and env
 # LDFA sets for bash are re-applied here for fish users. conf.d is sourced in
 # every fish mode (login, interactive, script), so no status guard is needed.
@@ -2472,8 +2495,8 @@ start_install_worker() {
     session_start "$session" "$SELF" worker-install "$id"
 }
 
-cmd_create() {
-    local id="${1:-}" name="${2:-Linux Desktop}" dir
+cmd_create() (
+    local id="${1:-}" name="${2:-Linux Desktop}" dir staging original_meta_root
     validate_id "$id"
     has tmux || die "Linux基盤が未準備です。先にセットアップを実行してください。"
     has proot-distro || die "proot-distroが未インストールです。"
@@ -2482,7 +2505,13 @@ cmd_create() {
     dir="$(meta_dir "$id")"
     [[ ! -e "$dir" ]] || die "同じIDの環境がすでにあります。"
 
-    mkdir -p "$dir" "$(shared_path "$id")"
+    # Shared storage is optional. Its denial must not leave an empty environment.
+    mkdir -p "$(shared_path "$id")" 2>/dev/null || true
+    original_meta_root="$META_ROOT"
+    staging="$META_ROOT/.create-$id-$$"
+    trap 'rm -rf "$staging"' EXIT
+    mkdir -p "$staging/$id"
+    local META_ROOT="$staging"
     write_meta "$id" name "$name"
     write_meta "$id" desktop "xfce"
     write_meta "$id" distribution "debian"
@@ -2491,14 +2520,16 @@ cmd_create() {
     write_meta "$id" created_at "$(date +%s)"
     write_meta "$id" installed 0
     set_status "$id" queued 1 "Debian XFCEのインストールを開始します…"
+    mv -T "$staging/$id" "$dir"
+    META_ROOT="$original_meta_root"
     : > "$(log_file "$id")"
     start_install_worker "$id"
     say "$id"
-}
+)
 
 worker_failed() {
     local id="$1" rc="$2" line="$3"
-    trap - ERR INT TERM
+    trap - ERR INT TERM EXIT
     set +e
     printf '\n[%s] worker failed: exit=%s line=%s\n' \
         "$(date -Iseconds)" "$rc" "$line" >> "$(log_file "$id")"
@@ -2508,36 +2539,95 @@ worker_failed() {
     exit "$rc"
 }
 
+# Publish only a fully extracted image. The staging alias has no user-visible
+# environment metadata, so interrupted extraction can be retried without deleting
+# the final rootfs or exposing a half-extracted image as an installed environment.
+publish_staged_rootfs() {
+    local id="$1" staging_id="$2" source destination
+    source="$(rootfs_dir "$staging_id")" || return 1
+    [[ -f "$source/bin/bash" || -f "$source/usr/bin/bash" ]] || return 1
+    destination="$PREFIX/var/lib/proot-distro/containers/$id/rootfs"
+    [[ ! -e "$destination" ]] || die "既存のLinuxデータを保護するため展開を中断しました。"
+    mkdir -p "$(dirname "$destination")"
+    mv "$source" "$destination"
+}
+
 install_container() {
-    local id="$1" attempt image="$LINUX_IMAGE" legacy_distro="${LINUX_IMAGE%%:*}" install_help
+    local id="$1" attempt image="$LINUX_IMAGE" legacy_distro="${LINUX_IMAGE%%:*}" install_help install_id
+    install_id="$id"
+    if native_proot_mode; then
+        install_id="ldfa-image-$id"
+        # This reserved alias is used only for image extraction, never for user work.
+        pd remove "$install_id" >/dev/null 2>&1 || true
+    fi
     install_help="$(pd install --help 2>&1 || true)"
     for attempt in 1 2 3; do
         printf '[%s] Installing %s as %s (attempt %s/3)\n' \
             "$(date -Iseconds)" "$image" "$id" "$attempt"
-        # PRoot-Distro 5 accepts OCI image references directly. Keep the old
-        # plugin name only for the legacy CLI, where tags are not supported.
+        local installed=0
         if [[ "$install_help" == *"--name"* ]]; then
-            if pd install --name "$id" "$image"; then
-                return 0
-            fi
+            pd install --name "$install_id" "$image" && installed=1
         else
-            if pd install "$legacy_distro" --override-alias "$id"; then
-                return 0
-            fi
+            pd install "$legacy_distro" --override-alias "$install_id" && installed=1
         fi
-        pd remove "$id" >/dev/null 2>&1 || true
+        if (( installed )); then
+            if native_proot_mode; then
+                publish_staged_rootfs "$id" "$install_id" || return 1
+                pd remove "$install_id" >/dev/null 2>&1 || true
+            fi
+            return 0
+        fi
+        pd remove "$install_id" >/dev/null 2>&1 || true
         (( attempt < 3 )) && sleep 5
     done
     return 1
 }
 
+# Emit the same guest-only setup for initial installation and later upgrades.
+# The adapter executes each existing setup command in this guest, without
+# launching a nested PRoot (which can reject apt's rename syscalls with ENOSYS).
+guest_apps_script() {
+    printf '#!/bin/bash\nset -Eeuo pipefail\n'
+    local variable
+    for variable in AUDIO_CLIENT_MARKER DESKTOP_RUNTIME_MARKER CHROME_LAUNCHER_MARKER \
+        NODEJS_MARKER NODEJS_VERSION NODEJS_SHA256_x64 NODEJS_SHA256_arm64; do
+        printf '%s=%q\n' "$variable" "${!variable}"
+    done
+    declare -f say die validate_id desktop_session_script desktop_runtime_ready ensure_desktop_runtime \
+        audio_client_ready ensure_audio_client google_chrome_ready ensure_google_chrome nodejs_ready ensure_nodejs
+    cat <<'GUEST_APPS'
+pd_login() {
+    shift
+    local -a timer=()
+    if [[ "${1:-}" == --timeout ]]; then timer=(timeout "${2}s"); shift 2; fi
+    [[ "${1:-}" == -- ]] || return 64
+    shift
+    "${timer[@]}" "$@"
+}
+step() {
+    printf '\n[%s] %s\n' "$(date -Iseconds)" "$*"
+    printf '%s\n' "$*" > /root/.ldfa-provision.phase.tmp
+    mv /root/.ldfa-provision.phase.tmp /root/.ldfa-provision.phase
+}
+step "Debianの音声クライアントを設定しています"
+ensure_audio_client guest
+step "デスクトップ監視機能を設定しています"
+ensure_desktop_runtime guest
+step "Google Chromeをインストールしています"
+ensure_google_chrome guest
+step "Node.jsランタイムを準備しています"
+if ! ensure_nodejs guest; then
+    printf '警告: Node.jsの自動導入に失敗しました。次回起動時に再試行します。\n' >&2
+fi
+GUEST_APPS
+}
+
 worker_install() {
-    local id="$1" shared log expected_image current_image
+    local id="$1" shared log expected_image
     validate_id "$id"
     shared="$(shared_path "$id")"
     log="$(log_file "$id")"
     expected_image="$LINUX_IMAGE"
-    current_image="$(read_meta "$id" image '')"
     # Under native proot $HOME/storage/shared can be a dangling symlink (Android
     # shared storage isn't bound into this proot), which makes `mkdir -p` fail
     # "File exists" and, with `set -e`, would abort the worker. It's non-essential
@@ -2548,8 +2638,8 @@ worker_install() {
     # finds an interrupted install (this worker is a child of the app process
     # and dies with it). A live worker keeps ownership of the id; when
     # relaunching over a dead one, drop its stale provision request so the app
-    # cannot launch a provision proot against a rootfs this run is about to
-    # delete and rebuild. On the legacy path this worker RUNS INSIDE the tmux
+    # cannot launch a stale provision generation while this worker prepares
+    # the next request. On the legacy path this worker RUNS INSIDE the tmux
     # install session, so the same check would see itself and always bail.
     if native_proot_mode; then
         if session_alive "$(install_session "$id")"; then
@@ -2570,6 +2660,9 @@ worker_install() {
 
     exec >>"$log" 2>&1
     trap 'worker_failed "$id" "$?" "$LINENO"' ERR
+    # die/exit do not trigger ERR. Record those failures too, otherwise the UI
+    # keeps an exited installation in "installing" indefinitely.
+    trap 'exit_code=$?; (( exit_code == 0 )) || worker_failed "$id" "$exit_code" "$LINENO"' EXIT
     trap 'worker_failed "$id" 130 "$LINENO"' INT
     trap 'worker_failed "$id" 143 "$LINENO"' TERM
 
@@ -2577,15 +2670,10 @@ worker_install() {
     printf '[%s] target image: %s\n' "$(date -Iseconds)" "$expected_image"
     termux-wake-lock >/dev/null 2>&1 || true
 
-    if container_exists "$id" && [[ "$(read_meta "$id" installed 0)" != 1 ]]; then
-        set_status "$id" installing 3 "以前の未完了環境を削除しています…"
-        pd remove "$id" >/dev/null 2>&1 || true
-        # The registry can miss a container the rootfs probe sees (context
-        # mismatch, interrupted install) — sweep the on-disk layouts too so a
-        # half-installed rootfs cannot survive and poison the reinstall.
-        rm -rf "${XDG_DATA_HOME:-$HOME/.local/share}/proot-distro/containers/$id" \
-            "$PREFIX/var/lib/proot-distro/containers/$id" \
-            "$PREFIX/var/lib/proot-distro/installed-rootfs/$id" 2>/dev/null || true
+    # A completed extraction is reusable. Package installation is idempotent and
+    # dpkg repairs its interrupted transaction below; never discard a user's rootfs.
+    if container_exists "$id"; then
+        set_status "$id" installing 12 "保存済みのDebianから導入を再開しています…"
     fi
 
     if ! container_exists "$id"; then
@@ -2614,29 +2702,22 @@ export DEBIAN_FRONTEND=noninteractive
 export LC_ALL=C.UTF-8
 APT=(apt-get -o Acquire::Retries=3 -o Dpkg::Use-Pty=0)
 
-step() { printf '\n[%s] %s\n' "$(date -Iseconds)" "$*"; }
+step() {
+    printf '\n[%s] %s\n' "$(date -Iseconds)" "$*"
+    printf '%s\n' "$*" > /root/.ldfa-provision.phase.tmp
+    mv /root/.ldfa-provision.phase.tmp /root/.ldfa-provision.phase
+}
 
 step "パッケージソースを確認しています"
-# Mirror rewrite to a Japan mirror (Debian 12 uses the deb822 debian.sources, not the
-# legacy sources.list — rewrite whichever exists).
-sed -i 's/deb\.debian\.org/ftp.jp.debian.org/g' /etc/apt/sources.list 2>/dev/null || true
-sed -i 's/deb\.debian\.org/ftp.jp.debian.org/g' /etc/apt/sources.list.d/debian.sources 2>/dev/null || true
-
-# GPG bootstrap (break the chicken-and-egg): the minimal OCI base image ships NO gnupg and
-# its debian.sources `Signed-By:` points at a keyring file that isn't present, so apt's
-# apt-key fallback dies with "Unknown error executing apt-key" and `apt update` fails for
-# bookworm-updates/security. We can't `apt install gnupg` before a successful update. So do
-# a FIRST update that tolerates the unsigned repos, install gnupg + the real
-# debian-archive-keyring (which provides /usr/share/keyrings/debian-archive-keyring.gpg that
-# the sources already reference), then a SECOND, fully-verified update.
-step "パッケージ一覧を更新しています（初回・鍵ブートストラップ）"
-"${APT[@]}" -o Acquire::AllowInsecureRepositories=true update || true
-step "GPG鍵とgnupgをインストールしています"
-"${APT[@]}" install -y --no-install-recommends \
-    -o APT::Get::AllowUnauthenticated=true \
-    gnupg debian-archive-keyring
+# Keep Debian's regional CDN and signature verification. Recover dpkg's journal
+# before apt resumes so a process death does not require downloading a new rootfs.
+if ! dpkg --configure -a; then
+    step "中断したパッケージの依存関係を修復します"
+fi
 step "パッケージ一覧を更新しています"
 "${APT[@]}" update
+"${APT[@]}" -f install -y
+dpkg --configure -a
 
 step "基本パッケージをインストールしています"
 "${APT[@]}" install -y --no-install-recommends \
@@ -2783,7 +2864,7 @@ CONTAINER_SETUP
         layout="$(read_meta "$id" keyboard_layout jis)"
 
         # Fresh markers each run (a stale .done from a re-install would falsely pass).
-        rm -f "$done_marker" "$failed_marker"
+        rm -f "$done_marker" "$failed_marker" "$(dirname "$provision_script")/.ldfa-provision.phase"
 
         # Wrap the pure-guest body so it self-reports: all output goes to a guest-side
         # log (/root/.ldfa-provision.log) which the outer worker tails into the debian
@@ -2797,6 +2878,7 @@ CONTAINER_SETUP
             printf '%s\n' 'exec >>/root/.ldfa-provision.log 2>&1'
             printf '%s\n' 'trap '\''rc=$?; printf "\n[provision] FAILED rc=%s at line %s: %s\n" "$rc" "$LINENO" "$BASH_COMMAND"; rm -f /root/.ldfa-provision.done; : > /root/.ldfa-provision.failed; exit $rc'\'' ERR'
             printf '%s\n' "$provision_body"
+            guest_apps_script
             printf '%s\n' 'rm -f /root/.ldfa-provision.failed'
             printf '%s\n' ': > /root/.ldfa-provision.done'
         } > "$provision_script"
@@ -2812,7 +2894,8 @@ CONTAINER_SETUP
             printf 'SHARED=%s\n' "$shared"
             printf 'LDFA_TZ=%s\n' "$tz"
             printf 'LDFA_KEYBOARD_LAYOUT=%s\n' "$layout"
-        } > "$request"
+        } > "$request.tmp"
+        mv "$request.tmp" "$request"
 
         # Stream the guest provision's log into the debian log so the UI's live log and
         # any failure are visible (the provision proot is a separate app-launched process
@@ -2827,10 +2910,29 @@ CONTAINER_SETUP
         # failure breaks us out promptly. A hard SIGKILL of the provision proot would leave
         # NO marker; a generous wall-clock deadline (1h — the install is minutes even on
         # slow ARM/network) is a last-resort deadlock breaker treated as failure below.
-        local waited=0
+        local waited=0 last_phase=""
         while [[ ! -f "$done_marker" && ! -f "$failed_marker" && ! -f "$(stop_file "$id")" ]]; do
             sleep 2
             waited=$((waited + 2))
+            local phase progress
+            phase="$(cat "$(dirname "$provision_script")/.ldfa-provision.phase" 2>/dev/null || true)"
+            case "$phase" in
+                基本パッケージ*) progress=25 ;;
+                XFCEデスクトップ*) progress=40 ;;
+                日本語フォント*) progress=60 ;;
+                APTキャッシュ*) progress=72 ;;
+                日本語ロケール*|タイムゾーン*) progress=76 ;;
+                Debian\ XFCE*) progress=80 ;;
+                Debianの音声*) progress=82 ;;
+                デスクトップ監視*) progress=84 ;;
+                Google\ Chrome*) progress=86 ;;
+                Node.js*) progress=90 ;;
+                *) progress=18 ;;
+            esac
+            if [[ -n "$phase" && "$phase" != "$last_phase" ]]; then
+                set_status "$id" installing "$progress" "$phase"
+                last_phase="$phase"
+            fi
             (( waited >= 3600 )) && break
         done
 
@@ -2844,6 +2946,7 @@ CONTAINER_SETUP
         fi
         if [[ ! -f "$done_marker" ]]; then
             # Provision proot wrote the failed marker, or died without either marker.
+            tail -n 50 "$(dirname "$provision_script")/.ldfa-provision-launch.log" 2>/dev/null || true
             rm -f "$provision_script" "$failed_marker"
             die "Debianの初回設定に失敗しました。リアルタイムログを確認して再試行できます。"
         fi
@@ -2861,25 +2964,23 @@ CONTAINER_SETUP
                 /bin/bash -s
     fi
 
-    # ensure_audio_client/ensure_desktop_runtime/ensure_google_chrome/ensure_nodejs
-    # stay in the OUTER worker for BOTH paths, AFTER the heavy provision phase above.
-    # On the native path they still pd_login into the guest (a brief double-proot),
-    # which is accepted: they are small (a runtime helper install, a network+small-apt
-    # Chrome/Node fetch), NOT the thousands-of-tiny-files xfce unpack that the split
-    # above made single-layer. Splitting them too would add code for negligible gain.
+    # The native guest completed all package writes in one PRoot. Legacy hosts
+    # can still enter the guest directly here, since they have no outer PRoot.
+    if ! native_proot_mode; then
     set_status "$id" installing 82 "Debianの音声クライアントを設定しています…"
     ensure_audio_client "$id"
     set_status "$id" installing 84 "デスクトップ監視機能を設定しています…"
     ensure_desktop_runtime "$id"
     set_status "$id" installing 86 "Google Chromeをインストールしています…"
     ensure_google_chrome "$id"
+    ensure_nodejs "$id" || true
+    fi
     if google_chrome_ready "$id"; then
         write_meta "$id" google_chrome 1
     else
         write_meta "$id" google_chrome 0
     fi
-    set_status "$id" installing 90 "Node.jsランタイムを準備しています…"
-    if ensure_nodejs "$id"; then
+    if nodejs_ready "$id"; then
         write_meta "$id" nodejs 1
     else
         write_meta "$id" nodejs 0
@@ -2890,6 +2991,9 @@ CONTAINER_SETUP
     write_meta "$id" desktop "xfce"
     write_meta "$id" distribution "debian"
     write_meta "$id" image "$expected_image"
+    if [[ "$(read_meta "$id" nodejs 0)" == 1 ]] && apps_combined_ready "$id" >/dev/null; then
+        write_meta "$id" apps_provisioned "$(apps_provisioned_fingerprint)"
+    fi
     set_status "$id" ready 100 "Debian XFCEを起動できます"
     printf '[%s] Linux Desktop installation completed\n' "$(date -Iseconds)"
     termux-wake-unlock >/dev/null 2>&1 || true
@@ -2902,6 +3006,9 @@ start_run_worker() {
     session="$(run_session "$id")"
     session_alive "$session" && return 0
     rm -f "$(stop_file "$id")"
+    # An interrupted worker may have left the previous display/scale request.
+    # Only the next worker may publish the new session's settings.
+    rm -f "$(session_request_file "$session")"
     if native_proot_mode; then
         # A worker cannot outlive the proot that spawns it (proot kills its tracees
         # on exit; setsid does not escape that). This `start` command runs in a
@@ -3111,6 +3218,49 @@ apps_combined_ready() {
         2>/dev/null
 }
 
+cmd_prepare_apps() {
+    local id="${1:-}" rootfs request
+    validate_id "$id"
+    [[ "$(read_meta "$id" installed 0)" == 1 ]] || die "この環境のインストールは完了していません。"
+    rootfs="$(rootfs_dir "$id")" || die "Debian環境が見つかりません。"
+    request="$RUN_ROOT/ldfa-apps-$id.session-request"
+    rm -f "$request"
+    ensure_timezone "$id" >> "$(log_file "$id")" 2>&1 || true
+    if [[ "$(read_meta "$id" apps_provisioned '')" == "$(apps_provisioned_fingerprint)" ]] && \
+        apps_combined_ready "$id" >/dev/null; then
+        say 'apps_ready=1'
+        return
+    fi
+    {
+        printf '#!/bin/bash\nexec >>/root/.ldfa-apps.log 2>&1\n'
+        guest_apps_script
+    } > "$rootfs/root/.ldfa-apps.sh.tmp"
+    mv "$rootfs/root/.ldfa-apps.sh.tmp" "$rootfs/root/.ldfa-apps.sh"
+    : > "$rootfs/root/.ldfa-apps.log"
+    {
+        printf 'ROOTFS=%s\nCHANGE_ID=0:0\nLDFA_TZ=%s\n' "$rootfs" "$(host_timezone)"
+    } > "$request.tmp"
+    mv "$request.tmp" "$request"
+}
+
+cmd_finish_apps() {
+    local id="${1:-}" rootfs combined
+    validate_id "$id"
+    rootfs="$(rootfs_dir "$id")" || die "Debian環境が見つかりません。"
+    tail -n 200 "$rootfs/root/.ldfa-apps.log" >> "$(log_file "$id")" 2>/dev/null || true
+    tail -n 50 "$rootfs/root/.ldfa-apps-launch.log" >> "$(log_file "$id")" 2>/dev/null || true
+    rm -f "$RUN_ROOT/ldfa-apps-$id.session-request" "$rootfs/root/.ldfa-apps.sh"
+    combined="$(apps_combined_ready "$id")" || die "デスクトップの設定を完了できませんでした。ログを確認してください。"
+    [[ "$combined" == *chrome=1* ]] && write_meta "$id" google_chrome 1 || write_meta "$id" google_chrome 0
+    if [[ "$combined" == *node=1* ]]; then
+        write_meta "$id" nodejs 1
+        write_meta "$id" apps_provisioned "$(apps_provisioned_fingerprint)"
+    else
+        write_meta "$id" nodejs 0
+        write_meta "$id" apps_provisioned ''
+    fi
+}
+
 cmd_ensure_apps() {
     local id="${1:-}" fingerprint combined chrome_state
     validate_id "$id"
@@ -3213,7 +3363,7 @@ cmd_ensure_apps() {
 }
 
 worker_run() {
-    local id="$1" display_number="${2:-${LDFA_DISPLAY_NUMBER:-$(read_meta "$1" display "$DEFAULT_DISPLAY_NUMBER")}}" shared log rc=0 wait_count=0 xset_attempt xset_ready=0 audio_ready=0 session_tz session_env
+    local id="$1" display_number="${2:-${LDFA_DISPLAY_NUMBER:-$(read_meta "$1" display "$DEFAULT_DISPLAY_NUMBER")}}" shared log rc=0 wait_count=0 xset_attempt xset_ready=0 audio_ready=0 session_tz session_env request
     validate_id "$id"
     validate_display_number "$display_number"
     # Under native proot the app launched this worker in its own persistent proot;
@@ -3239,7 +3389,7 @@ worker_run() {
 
     exec >>"$log" 2>&1
     cleanup_run_worker() {
-        local exit_code=$?
+        local exit_code=$? id="$1"
         set +e
         if [[ -f "$(stop_file "$id")" ]]; then
             set_status "$id" ready 100 "Linuxデスクトップを起動できます"
@@ -3251,7 +3401,7 @@ worker_run() {
         fi
         return "$exit_code"
     }
-    trap cleanup_run_worker EXIT
+    trap "cleanup_run_worker '$id'" EXIT
 
     printf '\n[%s] Linux Desktop worker started: %s display=:%s\n' "$(date -Iseconds)" "$id" "$DISPLAY_NUMBER"
     termux-wake-lock >/dev/null 2>&1 || true
@@ -3319,6 +3469,7 @@ worker_run() {
     # running the `session-run` verb — single-layer, XFCE composes in ~1s (measured).
     # The request carries exactly the env the guest session needs; the app also binds
     # $shared:/mnt/android and the PulseAudio socket on that single layer.
+    request="$(session_request_file "$(run_session "$id")")"
     {
         printf 'ROOTFS=%s\n' "$(rootfs_dir "$id")"
         printf 'CHANGE_ID=%s\n' "$(pd_login_uidgid "$(rootfs_dir "$id")" desktop)"
@@ -3329,7 +3480,8 @@ worker_run() {
         printf 'LDFA_SCALE=%s\n' "$(read_meta "$id" scale 100)"
         printf 'LDFA_KEYBOARD_LAYOUT=%s\n' "$(read_meta "$id" keyboard_layout jis)"
         [[ -n "$session_tz" ]] && printf 'TZ=%s\n' "$session_tz"
-    } > "$(session_request_file "$(run_session "$id")")"
+    } > "$request.tmp.$$"
+    mv -f "$request.tmp.$$" "$request"
 
     set_status "$id" running 100 "Linuxデスクトップを実行中"
     # Host-side supervisor: stay alive (holding the wake lock and the audio bridge) until
@@ -3669,7 +3821,7 @@ main() {
     [[ -n "$command" ]] || { usage; exit 2; }
     shift || true
     case "$command" in
-        bootstrap|create|ensure-apps|start|resume|health|stop|delete|audio-probe|heartbeat|repair|restore-cleanup)
+        bootstrap|create|ensure-apps|prepare-apps|finish-apps|start|resume|health|stop|delete|audio-probe|heartbeat|repair|restore-cleanup)
             acquire_controller_lock
             locked=1
             trap release_controller_lock EXIT INT TERM
@@ -3683,6 +3835,8 @@ main() {
         create) cmd_create "$@" ;;
         worker-install) worker_install "$@" ;;
         ensure-apps) cmd_ensure_apps "$@" ;;
+        prepare-apps) cmd_prepare_apps "$@" ;;
+        finish-apps) cmd_finish_apps "$@" ;;
         start) cmd_start "$@" ;;
         resume) cmd_resume "$@" ;;
         health) cmd_health "$@" ;;

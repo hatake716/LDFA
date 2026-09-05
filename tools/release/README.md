@@ -1,89 +1,98 @@
-# LDFA リリースビルド（Google Play 提出用）
+# LDFAの署名・リリース手順
 
-## 開発フォルダと提出素材
-
-Google Play 向けの現行ソースは、リポジトリの既定ブランチ `main` で管理します。
-旧版や別の作業フォルダと分ける場合は、次のように独立したフォルダへ取得します。
+現行ソースは既定ブランチ`main`です。独立した開発フォルダの例：
 
 ```bash
 git clone --recurse-submodules --branch main https://github.com/hatake716/LDFA.git LDFA-google-play
 cd LDFA-google-play
 ```
 
-SDK の設定は `local.properties`、アップロード署名の設定は `keystore.properties` に
-置きます。両方とも Git 管理対象外です。キーストア本体は引き続きリポジトリ外で管理します。
+SDKの場所は`local.properties`、署名設定は`keystore.properties`に置きます。いずれもGit管理外です。秘密鍵本体はリポジトリ外で保管してください。
 
-既存の提出用 AAB、画像、動画は、必要に応じてリポジトリ直下の `release-assets/` に
-まとめます。このディレクトリも Git 管理対象外で、clone には含まれません。
+## 1.2.0の成果物
 
 ```text
-LDFA-google-play/
-  app/、termux-runtime/、embedded-x11/、vendor/  現行ソース
-  tools/release/                              ビルド・Play Console の説明
-  release-assets/                             ローカルの提出素材
-    LDFA-v1.1.0-release.aab
-    feature-graphic-1024x500.png
-    shot-1-home.png ほか
-    ldfa-fgs-demo-part1.mp4
-    ldfa-fgs-demo-part2.mp4
+release-assets/v1.2.0/
+  LDFA-v1.2.0-release.apk       インストール用APK
+  LDFA-v1.2.0-play.aab          Google Play提出用（ARM64）
+  SHA256SUMS
+  materials/                  日本語・英語の提出資料
+  screenshots/                新しい画面のスクリーンショット
+  verification/               検証結果・署名とパッケージの記録
+  icon-512.png
+  feature-graphic-1024x500.png
+  ldfa-fgs-demo.mp4
 ```
 
-`release-assets/` に保管した既存 AAB と、以下のコマンドで新しく生成する AAB は
-区別してください。新規ビルドの出力先は `app/build/outputs/bundle/release/` です。
-提出文面と素材の用途は [play-console.md](play-console.md) を参照してください。
+`release-assets/`全体はGit管理外です。旧1.1.0の成果物は上書きせず、バージョン別のフォルダで区別します。
 
-## 成果物
+## ビルド
 
-Play へ提出するのは **AAB**（App Bundle）:
+JDK 17、SDK 36、NDK 29.0.14206865を使用します。全submoduleを初期化してください。
+
+```bash
+./gradlew testDebugUnitTest :app:lintDebug :termux-runtime:lintDebug :embedded-x11:lintDebug
+bash scripts/check-host-script.sh
+bash scripts/test-host-controller.sh
+bash scripts/check-x11-controller.sh
+```
+
+Google Play向けのAABは既定設定でARM64だけを含みます。
 
 ```bash
 ./gradlew :app:bundleRelease
-# → app/build/outputs/bundle/release/app-release.aab
+# app/build/outputs/bundle/release/app-release.aab
 ```
 
-リリースは **arm64-v8a のみ**（app/build.gradle.kts の release ブロックで固定）。
-理由: native-proot の prebuilt（jniLibs/libpdrt.so ほか）は arm64 のみ存在し、
-残り 3 アーキの bootstrap zip は upstream com.termux ビルドのままで
-このアプリの prefix では動作しない（同梱してはならない）。
-デバッグビルドは全 ABI のままなので x86_64 エミュレータでの開発は従来どおり。
-
-## 署名（アップロード鍵）
-
-- キーストア: `~/keystores/ldfa-upload-key.jks`（**リポジトリ外**・コミット禁止）
-  - alias `ldfa-upload`, RSA 4096, 有効期間 30 年
-- 資格情報: repo ルートの `keystore.properties`（gitignore 済み）。
-  雛形は `keystore.properties.example`
-- `keystore.properties` が無い環境（CI・新規 clone）では release は**未署名**で
-  ビルドされる（失敗はしない）
-
-新しい鍵を作る場合:
+インストール用の署名済みAPK：
 
 ```bash
-keytool -genkeypair -keystore ~/keystores/ldfa-upload-key.jks \
-  -alias ldfa-upload -keyalg RSA -keysize 4096 -validity 10950 \
-  -dname "CN=LDFA, OU=Play Upload, O=hatake716"
-```
-
-**キーストアとパスワードは必ずリポジトリ外にバックアップすること**
-（パスワードマネージャ等）。Play App Signing に登録すればアップロード鍵は
-紛失時に Google 経由でリセット可能だが、バックアップが第一。
-
-## 検証
-
-```bash
-# AAB の署名
-jarsigner -verify app/build/outputs/bundle/release/app-release.aab
-
-# 同梱 ABI が arm64-v8a のみであること
-unzip -l app/build/outputs/bundle/release/app-release.aab | grep '\.so$' | awk '{print $4}' | cut -d/ -f1-2 | sort -u
-
-# APK 側の確認（applicationId / native-code / extractNativeLibs=true）
 ./gradlew :app:assembleRelease
-"$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs \
-  app/build/outputs/apk/release/app-release.apk
-"$ANDROID_HOME/build-tools/36.0.0/aapt2" dump badging \
-  app/build/outputs/apk/release/app-release.apk | grep -E "package:|native-code"
+# app/build/outputs/apk/release/app-release.apk
 ```
 
-`extractNativeLibs=true`（packaging の useLegacyPackaging）は必須 —
-libpdrt.so を nativeLibraryDir から execve する W^X 回避の前提条件。
+エミュレーターと実機で同じAPKを検証する場合は、専用prefixのx86_64 bootstrapとPRootライブラリを用意し、次のABI指定で作成します。
+
+```bash
+./gradlew :app:assembleRelease -Pldfa.releaseAbis=arm64-v8a,x86_64
+```
+
+AABはその後にABI指定なしで作成します。実行基盤を同梱していないABIを指定しないでください。
+bootstrapはアプリIDごとの絶対パスを含むため、公式Termuxの`com.termux`用zipを代用品にはできません。再ビルド方法は[bootstrap手順](../bootstrap/README.md)を参照してください。
+
+## 署名
+
+`keystore.properties.example`を参考に、ローカルの`keystore.properties`へ既存のアップロード鍵を設定します。設定がない環境ではreleaseは未署名の出力になります。
+
+- アップロード鍵の例：`~/keystores/ldfa-upload-key.jks`
+- キーストア・パスワードはGitHubへアップロードしません。
+- デバッグ鍵とリリース鍵は異なります。
+- Play App Signingの配信鍵がGitHub APKの鍵と異なる場合、相互の上書き更新はできません。データ移行はバックアップ・復元を使用します。
+
+## パッケージ検証
+
+```bash
+jarsigner -verify app/build/outputs/bundle/release/app-release.aab
+java -jar /path/to/bundletool.jar validate --bundle=app/build/outputs/bundle/release/app-release.aab
+bash /path/to/Android/Sdk/build-tools/36.0.0/apksigner verify --verbose --print-certs \
+  app/build/outputs/apk/release/app-release.apk
+```
+
+同梱ファイルの照合とELF検査は次のコマンドでも実行できます。
+
+```bash
+python3 scripts/verify-release-contents.py --apk path/to/release.apk \
+  --bundle path/to/release.aab --report path/to/contents-report.json
+```
+
+APKとAABのアプリID、バージョン、targetSdk、ABIを確認します。全ネイティブELFのLOAD segment alignmentと、対応するAPK / AAB内のARM64ライブラリ・ホストスクリプトが一致することも確認します。
+
+`extractNativeLibs=true`（`jniLibs.useLegacyPackaging = true`）を維持してください。ネイティブPRootをAPKから展開された実行可能領域で起動するために必要です。
+
+署名検証の自己署名証明書・タイムスタンプの警告と、実際の署名検証失敗を区別します。Androidアプリの署名は一般のWeb PKI証明書とは異なります。
+
+## 公開
+
+検証済みAPK、SHA256SUMSとリリースノートをGitHub Releaseに添付します。Google Play提出用AABとストア素材はローカルのバージョン別フォルダへ保存します。
+
+Google Play掲載文面・前景サービスの説明・動画の用途は[play-console.md](play-console.md)を参照してください。AAB・資料作成、Google Playへのアップロード、審査通過、公開はそれぞれ別の状態として記録します。

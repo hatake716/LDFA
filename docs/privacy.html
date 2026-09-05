@@ -25,12 +25,12 @@
 <body>
 
 <h1>LDFA プライバシーポリシー</h1>
-<p class="updated">最終更新日: 2026年8月28日</p>
+<p class="updated">最終更新日: 2026年9月5日</p>
 
 <p>LDFA（Linux Desktop for Android、アプリID: <code>com.hatake716.linuxdesktop</code>、以下「本アプリ」）は、hatake716（以下「開発者」)が提供する、Android 端末上で Linux デスクトップ環境を実行するアプリです。</p>
 
 <h2>1. 収集する情報</h2>
-<p><strong>本アプリは、個人情報を収集・送信しません。</strong></p>
+<p><strong>本アプリは、個人情報を開発者へ収集・自動送信する機能を持ちません。</strong></p>
 <ul>
   <li>アカウント登録はありません。</li>
   <li>解析（アナリティクス）SDK・広告 SDK を含みません。</li>
@@ -39,15 +39,15 @@
 </ul>
 
 <h2>2. ネットワーク通信について</h2>
-<p>本アプリは、次の目的でのみインターネットへ接続します。いずれも「ダウンロード」であり、ユーザーのデータを外部へ送信するものではありません。</p>
+<p>本アプリの環境構築機能は、次のソフトウェアのダウンロードのために接続します。配布元のサーバーには接続元IPアドレス等の通信情報が伝わりますが、開発者が解析目的で収集する仕組みはありません。</p>
 <ul>
   <li>Debian 公式リポジトリ等からの Linux 環境（OSイメージ・ソフトウェアパッケージ）の取得</li>
-  <li>ユーザーの選択による Google Chrome、Node.js など追加ソフトウェアの取得</li>
+  <li>Linux導入操作に伴う Google Chrome、Node.js など追加ソフトウェアの取得</li>
 </ul>
 <p>Linux 環境内でユーザーが自ら行う通信（ブラウザの閲覧、各種 CLI ツールへのログイン等）は、それぞれのソフトウェア・サービス提供者のプライバシーポリシーに従います。</p>
 
 <h2>3. 端末内に保存されるデータ</h2>
-<p>Linux 環境（Debian のファイル・設定・ユーザーが作成したデータ）は、すべて端末内のアプリ専用領域にのみ保存されます。バックアップ機能を使用した場合、バックアップファイル（.ldfa）は端末の「ダウンロード」フォルダに保存されます。これらが開発者や第三者へ送信されることはありません。アプリをアンインストールすると、アプリ専用領域のデータは削除されます。</p>
+<p>Linux 環境（Debian のファイル・設定・ユーザーが作成したデータ）は、すべて端末内のアプリ専用領域にのみ保存されます。バックアップ機能を使用した場合、バックアップファイル（.ldfa）は、Android 10以降では「ダウンロード / LinuxDesktop」、Android 8〜9ではアプリ専用の保存先に保存されます。バックアップは暗号化されません。開発者のサーバーへ自動送信しません。ユーザーが別のサービスへコピー・送信した場合は、そのサービスの扱いに従います。アプリをアンインストールすると、アプリ専用領域のデータと、そこに保存されたAndroid 8〜9のバックアップは削除されます。</p>
 
 <h2>4. 権限について</h2>
 <ul>
@@ -69,12 +69,12 @@
 <hr class="sep">
 
 <h1>LDFA Privacy Policy</h1>
-<p class="updated">Last updated: August 28, 2026</p>
+<p class="updated">Last updated: September 5, 2026</p>
 
 <p>LDFA (Linux Desktop for Android, application ID <code>com.hatake716.linuxdesktop</code>, the “App”) is provided by hatake716 (the “Developer”) and runs a Linux desktop environment on Android devices.</p>
 
 <h2>1. Information We Collect</h2>
-<p><strong>The App does not collect or transmit any personal information.</strong></p>
+<p><strong>The App has no feature that collects personal information for, or automatically sends it to, the Developer.</strong></p>
 <ul>
   <li>No account registration exists.</li>
   <li>No analytics or advertising SDKs are included.</li>
@@ -83,10 +83,10 @@
 </ul>
 
 <h2>2. Network Access</h2>
-<p>The App connects to the Internet only to <em>download</em> software: the Debian operating system and packages from official repositories, and — at the user’s choice — additional software such as Google Chrome and Node.js. No user data is uploaded. Any network activity the user performs <em>inside</em> the Linux environment (web browsing, logging into CLI tools, etc.) is governed by the privacy policies of those respective services.</p>
+<p>The environment setup feature downloads the Debian operating system and packages from their repositories, including additional software such as Google Chrome and Node.js as part of user-initiated Linux installation. Download servers receive connection information such as the IP address. The Developer does not operate an analytics collection feature. Any network activity the user performs <em>inside</em> the Linux environment (web browsing, logging into CLI tools, etc.) is governed by the privacy policies of those respective services.</p>
 
 <h2>3. Data Stored on the Device</h2>
-<p>Linux environments (Debian files, settings, and user-created data) are stored only in the App’s private storage on the device. Backup files (.ldfa) created by the backup feature are saved to the device’s Download folder. Nothing is transmitted to the Developer or third parties. Uninstalling the App deletes its private data.</p>
+<p>Linux environments (Debian files, settings, and user-created data) are stored only in the App’s private storage on the device. Backups (.ldfa) are saved in Downloads/LinuxDesktop on Android 10 and later, or in app-specific storage on Android 8–9. Backups are not encrypted. They are not automatically sent to a Developer server; user-initiated copying or sharing through another service is subject to that service’s practices. Uninstalling the App deletes its private data, including backups kept in app-specific storage on Android 8–9.</p>
 
 <h2>4. Permissions</h2>
 <ul>

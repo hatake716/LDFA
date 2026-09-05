@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 set -Eeuo pipefail
 
-VERSION="1.1.0"
+VERSION="1.2.0"
 DISPLAY_NUMBER=1
 PACKAGE_ID="com.hatake716.linuxdesktop"
 BASE="${XDG_DATA_HOME:-$HOME/.local/share}/linux-desktop-for-android"

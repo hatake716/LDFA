@@ -8,6 +8,7 @@ android {
     ndkVersion project.properties.ndkVersion
 
     defaultConfig {
+        ndk { abiFilters 'arm64-v8a', 'x86_64' }
         minSdkVersion 26
         targetSdkVersion project.properties.targetSdkVersion.toInteger()
         buildConfigField 'String', 'VERSION_NAME', '"1.03.01-embedded"'

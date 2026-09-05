@@ -1,218 +1,166 @@
-# Play Console 提出資料一式（LDFA v1.1.0 / com.hatake716.linuxdesktop）
+# Google Play 提出資料 — LDFA 1.2.0
 
-Console の各画面へコピー&ペーストするための確定文面。英語欄は英語文面を、
-日本語欄は日本語文面をそのまま使う。
+対象：`com.hatake716.linuxdesktop` / versionCode `21` / targetSdk `36`。
+新しい成果物・画像・提出文面は、ローカルの`release-assets/v1.2.0/`にまとめます。
+旧`release-assets/LDFA-v1.1.0-release.aab`とは区別してください。
 
----
+## ストア掲載情報（日本語）
 
-## 1. specialUse フォアグラウンドサービス申告
+**アプリ名**
 
-場所: **ポリシー → アプリのコンテンツ → フォアグラウンド サービスの権限**
-
-### 共通説明（申告フォームの本文。英語）
-
-> LDFA runs a complete Debian Linux desktop (XFCE) locally on the user's
-> device, inside a userspace sandbox (PRoot). When the user explicitly opens
-> their Linux desktop, the app must keep long-lived local infrastructure
-> running even while the screen is off or the user briefly switches apps:
-> the Linux session itself, the X11 display server that renders it, and a
-> lightweight health monitor. Stopping these on backgrounding would destroy
-> the user's running Linux applications and unsaved work, which is the core
-> product promise (a persistent desktop computer experience).
->
-> No predefined foreground service type fits: this is not media playback,
-> not location, not a connected device, and dataSync is both semantically
-> wrong and time-limited (~6h) while a desktop session legitimately runs
-> for many hours. All services start only after an explicit user action
-> (opening the desktop / starting an installation), show persistent
-> notifications, and stop automatically when the user stops the desktop or
-> the app detects it is idle.
->
-> The four declared services:
-> 1. TermuxService — owns the Linux session processes (terminal runtime the
->    desktop runs in). Started when the user opens the desktop; stops with it.
-> 2. RunCommandService — dispatches the user's management operations
->    (install / start / stop) into the Linux runtime. Short-lived per
->    operation.
-> 3. EmbeddedX11ServerService — the X11 display server rendering the
->    desktop (separate process so a graphics crash cannot take down the
->    app). Alive exactly while a desktop is running.
-> 4. DesktopKeepAliveService — a heartbeat that repairs the desktop session
->    (e.g. after process death) while it is supposed to be running; stops
->    itself after two idle checks.
->
-> A demonstration video is provided showing the user starting the desktop,
-> the foreground service notifications, use of the Linux desktop, and the
-> services stopping when the user stops the desktop.
-
-### 動画
-
-- YouTube 限定公開でアップロードし、URL をフォームに貼る
-- 素材（リポジトリ直下のローカル `release-assets/`）:
-  `ldfa-fgs-demo-part1.mp4`、`ldfa-fgs-demo-part2.mp4`
-- 内容: ホーム画面 → 「Debian XFCEを開く」→ 通知シェードにフォアグラウンド
-  サービス通知 → XFCE デスクトップ操作 → 「停止」で終了
-
----
-
-## 2. データ セーフティ（アプリのコンテンツ → データ セーフティ）
-
-| 設問 | 回答 |
-|---|---|
-| ユーザーデータを収集しますか | **いいえ** |
-| ユーザーデータを第三者と共有しますか | **いいえ** |
-| データは転送中に暗号化されますか | （収集なしのため設問スキップ） |
-| データの削除をリクエストできますか | （収集なしのため設問スキップ） |
-| 独立したセキュリティ審査 | いいえ |
-
-補足（もし「アプリがインターネットに接続するのに収集なし?」と確認された場合の考え方）:
-通信はすべて Debian/Google/Node.js 公式サーバーからの**ダウンロード**であり、
-ユーザーデータのアップロードは一切ない。解析・広告 SDK なし。
-Linux 環境内でユーザーが自発的に行う通信（ブラウザ等）は「アプリによる収集」に該当しない。
-
----
-
-## 3. レビュアーノート（アプリのコンテンツ → アプリへのアクセス の補足欄）
-
-「すべての機能が制限なく利用可能」を選択した上で、メモ欄に:
-
-> All functionality is available without login. Note for policy review:
-> LDFA is a Linux environment app (comparable to Termux or UserLAnd). It
-> downloads the Debian OS and Linux software from official repositories at
-> the user's request and executes them ONLY inside a userspace PRoot
-> sandbox as an unprivileged process. Downloaded code cannot modify the
-> signed APK or the app's behavior — this falls under the interpreter /
-> virtual-machine exception of the Device and Network Abuse policy. The
-> security model is documented publicly:
-> https://github.com/hatake716/LDFA/blob/main/SECURITY.md
-> The bundled Linux userland is rebuilt from source for this app's own
-> application ID; the app is unrelated to, and does not impersonate, the
-> Termux project's Play listing.
-
----
-
-## 4. ストア掲載情報
-
-### 日本語
-
-**アプリ名**（30 文字以内）:
-`LDFA - Linuxデスクトップ`
-
-**簡単な説明**（80 文字以内）:
-`AndroidにDebian+XFCEのLinuxデスクトップを丸ごと構築。日本語入力・バックアップ対応。root不要。`
-
-**詳しい説明**（4000 文字以内）:
-
-```
-LDFA（Linux Desktop for Android）は、Android スマートフォン・タブレットの中に本物の Debian Linux デスクトップを構築するアプリです。root 化は不要。ボタンひとつで、XFCE デスクトップ・日本語入力・ブラウザまで自動でセットアップされます。
-
-■ 特長
-・Debian 12 + XFCE デスクトップをワンタップで自動構築
-・日本語 UI・日本語フォント・Fcitx5 + Mozc による日本語入力を最初から設定済み
-・Google Chrome を自動インストール（本物のデスクトップ版ブラウザ）
-・Node.js 22 を同梱セットアップ。npm で各種 CLI ツールを導入可能
-・内蔵 X11 サーバーによるネイティブ描画。タッチ・マウス・物理キーボード対応
-・JIS / US キーボード配列の切り替え、画面全体の表示スケール調整（100〜250%）
-・環境まるごとを 1 つの .ldfa ファイルへバックアップ。機種変更時は新しい端末で復元
-・すべて端末内で完結。アカウント登録・広告・解析なし
-
-■ こんな方に
-・スマホやタブレットを「もう一台の Linux PC」として使いたい
-・外出先でデスクトップ版ブラウザや Linux の開発環境が必要
-・Linux を勉強したいが、PC を用意せずに始めたい
-
-■ 動作の仕組み
-LDFA は Termux 由来のユーザーランドと PRoot 技術を使い、Android のセキュリティモデルの内側（アプリのサンドボックス内）で Linux を実行します。システム領域には一切変更を加えません。アプリを削除すれば、Linux 環境も一緒に消去されます。
-
-■ 動作要件
-・64bit ARM（arm64-v8a）端末
-・空き容量: 1 環境につき 3〜5GB 以上を推奨
-・メモリ 4GB 以上を推奨
-・初回セットアップに安定したインターネット接続（数 GB のダウンロードが発生します）
-
-■ 注意事項
-・初回インストールには回線速度により 30 分〜1 時間程度かかります
-・PRoot 上で動作するため、実 PC と比べて処理速度は低下します
-・Google Chrome は Google 社の、Debian は Debian プロジェクトの商標・成果物です。本アプリはユーザーの操作により各公式配布元からこれらを取得します
-
-■ オープンソース
-本アプリは GPLv3 で公開されています: https://github.com/hatake716/LDFA
+```text
+LDFA - Linuxデスクトップ
 ```
 
-### English
+**簡単な説明**
 
-**App name** (≤30 chars):
-`LDFA - Linux Desktop`
-
-**Short description** (≤80 chars):
-`A full Debian + XFCE Linux desktop on your Android device. No root required.`
-
-**Full description** (≤4000 chars):
-
+```text
+AndroidにDebianとXFCEの作業環境を。日本語入力、ブラウザー、バックアップに対応。root化不要。
 ```
-LDFA (Linux Desktop for Android) builds a real Debian Linux desktop inside your Android phone or tablet. No root required — one tap sets up the XFCE desktop, input methods, and a desktop-class browser automatically.
 
-FEATURES
-• Debian 12 + XFCE desktop, fully automated one-tap setup
-• Google Chrome installed automatically (the real desktop browser)
-• Node.js 22 preconfigured — install CLI tools with npm
-• Built-in X11 server with native rendering; touch, mouse and physical keyboards supported
-• Japanese input (Fcitx5 + Mozc) preconfigured; JIS/US keyboard layouts; 100–250% display scaling
-• Back up a whole environment to a single .ldfa file and restore it on a new device
-• Everything stays on your device: no account, no ads, no analytics
+**詳しい説明**
 
-HOW IT WORKS
-LDFA runs Linux inside Android's own security model using a Termux-derived userland and PRoot — a userspace sandbox. It never modifies the system. Uninstalling the app removes the Linux environments with it.
+```text
+Androidに、Linuxの作業場所を。
+
+LDFA（Linux Desktop for Android）は、Debian 12とXFCEデスクトップをAndroidアプリ内に導入するアプリです。root化や外部のTermux・X11アプリは必要ありません。
+
+■ はじめやすい導入
+必要な容量と通信を確認し、名前を入力して「Linuxをインストール」を押すだけ。実行環境、Debian、XFCE、日本語入力を順に準備します。構築中の段階と詳細ログを確認でき、中断した処理は保存済みの環境から再開できます。
+
+■ Linuxで作業
+・Debian 12とXFCEのデスクトップ
+・Google ChromeとNode.js 22 LTS
+・日本語ロケール、Noto CJK、Fcitx5 / Mozc
+・ターミナルとコマンド操作
+・タッチ、マウス、ソフトウェア・物理キーボード入力
+・表示倍率100〜250%、特殊キーの表示切り替え、JIS / US配列
+・Androidスピーカーへの音声出力
+
+■ データを持ち運ぶ
+複数のLinux環境を作成できます。停止した環境は.ldfaファイルへバックアップし、新しい環境として復元できます。初回画面からバックアップの取り込みを始めることもできます。
+
+■ 必要な環境
+Android 8.0以降のARM64端末。新規導入には空き容量5GB以上とインターネット接続が必要です。Wi-Fiと充電をおすすめします。所要時間は端末と回線によって異なります。
+
+■ ご利用にあたって
+LinuxはAndroidカーネル上のPRootで動作します。PCの仮想マシンと同じ機能を提供するものではなく、systemdや一部の低レベル機能には制約があります。Chromeは互換性のためsandboxを無効にして動作します。Androidによるメモリ管理・省電力で終了する場合があります。
+
+アプリをアンインストールするとアプリ内のLinuxデータも削除されます。必要なファイルは事前にバックアップしてください。バックアップは暗号化されません。Android 10以降ではダウンロード/LinuxDesktopへ保存し、Android 8〜9では表示されるアプリ専用の保存先から端末外へコピーできます。
+
+LDFAは独立したオープンソースプロジェクトです。Termux、Debian、XFCE、Googleの公式アプリではありません。
+```
+
+## Store listing (English)
+
+**App name**
+
+```text
+LDFA - Linux Desktop
+```
+
+**Short description**
+
+```text
+Debian and XFCE on Android, with Japanese input and backups. No root required.
+```
+
+**Full description**
+
+```text
+A Linux workspace on your Android device.
+
+LDFA (Linux Desktop for Android) installs Debian 12 and the XFCE desktop inside one Android app. No root access or separate Termux or X11 app is required.
+
+GET STARTED
+Check storage and connectivity, name your desktop, and tap the install button. LDFA prepares the runtime, Debian, XFCE and Japanese input in sequence. Follow the installation stages and open detailed logs when needed. Interrupted setup can resume using the saved environment.
+
+WORK IN LINUX
+• Debian 12 and XFCE
+• Google Chrome and Node.js 22 LTS
+• Japanese locale, Noto CJK fonts and Fcitx5 / Mozc
+• Terminal and command-line tools
+• Touch, mouse, software and physical keyboard input
+• Desktop scaling from 100% to 250%, optional extra keys, JIS / US layout
+• Audio output through Android speakers
+
+KEEP YOUR ENVIRONMENT
+Create multiple Linux environments. Back up a stopped environment to an .ldfa file and restore it as a new environment. You can also start from a backup on the welcome screen.
 
 REQUIREMENTS
-• 64-bit ARM (arm64-v8a) device
-• 3–5 GB of free storage per environment recommended
-• 4 GB+ RAM recommended
-• A stable Internet connection for the first setup (several GB will be downloaded)
+Android 8.0 or later on an ARM64 device, at least 5 GB of free space for a new installation, and an internet connection. Wi-Fi and charging are recommended. Installation time depends on your device and connection.
 
-NOTES
-• The first installation takes roughly 30–60 minutes depending on your connection
-• Running under PRoot is slower than a physical PC
-• Google Chrome is a trademark of Google LLC; Debian is a product of the Debian Project. The app fetches them from their official distribution servers at the user's request
+LIMITATIONS
+Linux runs through PRoot on the Android kernel. It is not a full PC virtual machine; systemd and some low-level features are unavailable. Chrome runs without its browser sandbox for compatibility. Android memory and battery management may stop running processes.
 
-OPEN SOURCE
-LDFA is published under GPLv3: https://github.com/hatake716/LDFA
+Uninstalling the app deletes its Linux data. Back up important files first. Backups are not encrypted. Android 10 and later save backups in Downloads/LinuxDesktop. On Android 8–9, copy the archive out of the app-specific location shown after completion before uninstalling.
+
+LDFA is an independent open-source project, not an official app from Termux, Debian, XFCE or Google.
 ```
 
----
+## リリースノート
 
-## 5. コンテンツレーティング（IARC）回答案
+```text
+<ja-JP>
+Linuxの導入画面を刷新し、準備からデスクトップ起動までの流れを分かりやすくしました。画面の再作成や中断に強い導入処理、構築段階に応じた進捗、起動・停止の安定性、バックアップの保存・復元処理とChromeの起動を改善しました。アプリアイコンと配色を更新し、Android 16を対象とした設定に対応しました。
+</ja-JP>
+<en-US>
+Redesigned Linux onboarding and the app icon. Setup now survives screen recreation, reports installation stages, and resumes using saved data. Improved desktop process cleanup, Chrome startup, backup storage and restoration of internal Linux links. Updated the Android target to Android 16.
+</en-US>
+```
 
-- カテゴリ: ユーティリティ・生産性・通信・その他
-- 暴力・性的内容・不適切な言葉・ギャンブル・薬物: すべて **なし**
-- **ユーザー間の交流/コンテンツ共有**: なし（アプリ自体には SNS 機能なし）
-- **無制限のインターネットアクセス**: **はい**（ブラウザを含む Linux 環境を提供するため）
-- 個人情報の共有: なし / 位置情報の共有: なし / デジタル購入: なし
+## App access / reviewer notes
 
-→ 想定レーティング: 3+/全年齢相当（無制限インターネットの注記付き）
+```text
+No account or login is required to use LDFA. Test on an ARM64 device with at least 5 GB of free storage and an internet connection. On the welcome screen, tap “Linuxをインストール” (Install Linux), wait for setup to finish, then tap “デスクトップを開く” (Open desktop). Installation includes a large download; timing depends on the device and connection.
 
----
+LDFA runs Debian Linux programs through PRoot as its unprivileged Android application UID. Its bundled runtime is built for com.hatake716.linuxdesktop. The app downloads the Linux rootfs and software at the user's request. These files do not replace the signed APK, Android dex files, or packaged native libraries. PRoot is not a separate Android application sandbox, and Chrome uses --no-sandbox for compatibility. Please review this architecture and the declared foreground service uses; we do not claim automatic eligibility for a policy exception.
 
-## 6. その他の申告
+Source and security documentation:
+https://github.com/hatake716/LDFA
+https://github.com/hatake716/LDFA/blob/main/SECURITY.md
+```
 
-- ターゲット年齢層: **18 歳以上**
-- 広告の有無: **広告なし**
-- ニュースアプリ: いいえ / 政府向け: いいえ / 健康アプリ: いいえ
-- プライバシーポリシー URL: `https://hatake716.github.io/LDFA/privacy.html`
-  （docs/privacy.html を main へマージ後に有効化）
+## 前景サービスの説明
 
----
+**specialUse**
 
-## 7. 提出チェックリスト
+```text
+LDFA provides a local interactive Linux desktop. A user starts installation, opens the terminal, or opens the desktop from the visible app. The app keeps the local Linux processes, X11 display service and session monitor running while the user temporarily switches screens. Interrupting them during an active task can terminate Linux applications or interrupt installation.
 
-1. [ ] デベロッパーアカウント登録（$25・本人確認）
-2. [ ] アプリ作成（LDFA / 日本語 / 無料）
-3. [ ] 内部テストへ app-release.aab をアップロード（Play App Signing 登録）
-4. [ ] ストア掲載情報（上記 4 + アイコン 512x512 + フィーチャーグラフィック 1024x500 + スクリーンショット `release-assets/`）
-5. [ ] プライバシーポリシー URL 設定（docs/privacy.html を main へ）
-6. [ ] データセーフティ（上記 2）
-7. [ ] コンテンツレーティング（上記 5）
-8. [ ] specialUse FGS 申告（上記 1 + 動画 URL）
-9. [ ] ターゲット年齢層ほか（上記 6）
-10. [ ] クローズドテスト: テスター 12 人以上 × 14 日間（個人アカウント要件）
-11. [ ] 本番申請
+TermuxService owns terminal command sessions; RunCommandService dispatches management operations; EmbeddedX11ServerService owns Xorg in a dedicated process; DesktopKeepAliveService monitors the active desktop or installation. These are local execution and display tasks. The app shows ongoing notifications and provides a desktop stop action. The monitor stops after detecting inactivity. Interrupted installation is resumed when the user returns to the app, with bounded retries.
+
+The demonstration shows the user action, desktop display, ongoing notifications, a return from the Android home screen, and explicit stopping of the session.
+```
+
+**dataSync（バックアップ・復元）**
+
+```text
+The user explicitly starts a backup or restore from LDFA. BackupService compresses a stopped Linux environment into a local .ldfa archive or verifies and extracts a selected archive into a new environment. It reports progress through a notification and the app, supports cancellation, and stops when the operation completes or fails. The service handles the Android dataSync timeout by cancelling work and stopping. No boot receiver starts this operation.
+```
+
+[前景サービスの申告要件](https://support.google.com/googleplay/android-developer/answer/13392821?hl=en)と[サービス型](https://developer.android.com/develop/background-work/services/fgs/service-types)に沿って、Consoleで用途とデモ動画URLを登録します。specialUseの適否はGoogle Playの審査対象です。
+
+## データセーフティの入力根拠
+
+LDFA本体には広告・解析SDK、開発者向けのデータ送信・アカウント登録を実装していません。Linuxのファイルと設定は端末内に保存します。ファイル選択・バックアップはユーザー操作によるものです。
+
+「開発者がデータを収集・共有するか」は、この実装を根拠に回答します。Linuxのダウンロード先サーバーへの接続情報や、Linux内でユーザーが利用するWebサイト・CLIサービスへの通信は別途発生します。「インターネットへの送信が一切ない」とは説明しません。提出時にはGoogle Playが表示する最新版の設問・定義に照合してください。
+
+プライバシーポリシー：<https://hatake716.github.io/LDFA/privacy.html>
+
+## 素材と提出順
+
+1. `release-assets/v1.2.0/`のAAB、SHA256SUMS、検証結果を確認します。
+2. ストアアイコン512×512、フィーチャー画像1024×500、新しい画面のスクリーンショットを登録します。
+3. デモ動画を限定公開でアップロードし、閲覧可能なURLをサービス申告に登録します。ローカルの動画作成と、外部サービスへの動画公開は別の作業です。
+4. 上記の掲載文面、アクセス説明、サービス型、データセーフティ、プライバシーポリシーを入力します。
+5. AABをテストトラックへアップロードし、Console側の検査と審査結果を確認して公開を進めます。
+
+Google Playへのアップロード・審査申請は、この資料やAABを生成しただけでは完了しません。
+
+## 提出前の実測状況
+
+2026-09-05時点で、API 35 / x86_64 / 4KBの署名済みAPKによる新規導入、日本語入力、Chrome表示、起動・停止、バックアップ復元を確認しています。ARM64実機での最終確認は未完了です。APKとAABのARM64コードの一致・署名・16KB ELF配置は検査済みですが、ARM64 16KBでのLinux実行を実測した結果ではありません。x86_64のAndroid 17 / 16KBプレビューではゲスト起動時にSIGBUSが再現します。テストトラックで対象端末の導入・復帰・停止を確認してから本番配信を判断してください。
+
+資料に記載したデモ動画はローカルファイルです。URLの登録とPlay Consoleでの審査申請は未実施です。

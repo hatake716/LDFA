@@ -84,8 +84,7 @@ internal fun DesktopsScreen(
 ) {
     LazyColumn(
         modifier = modifier
-            .fillMaxSize()
-            .statusBarsPadding(),
+            .fillMaxSize(),
         contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 24.dp, bottom = 110.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
@@ -96,6 +95,16 @@ internal fun DesktopsScreen(
             )
         }
 
+        (state.environmentError ?: state.installation.error)?.let { error ->
+            item {
+                Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.errorContainer) {
+                    Column(Modifier.padding(16.dp)) {
+                        Text(error, style = MaterialTheme.typography.bodyMedium)
+                        TextButton(onClick = onRefresh) { Text("状態を再確認") }
+                    }
+                }
+            }
+        }
         item {
             OverviewCard(state.containers)
         }
@@ -264,6 +273,7 @@ private fun ContainerCard(
     onDelete: () -> Unit,
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
+    var showInstallLog by androidx.compose.runtime.saveable.rememberSaveable(container.id) { mutableStateOf(false) }
     val accent = stateColor(container.state)
     val installationActive = container.state == ContainerState.QUEUED ||
         container.state == ContainerState.INSTALLING
@@ -325,7 +335,8 @@ private fun ContainerCard(
                         )
                         HorizontalDivider()
                         DropdownMenuItem(
-                            text = { Text("削除", color = MaterialTheme.colorScheme.error) },
+                            text = { Text(if (container.state.isBusy || container.sessionAlive) "停止してから削除" else "削除", color = MaterialTheme.colorScheme.error) },
+                            enabled = !container.state.isBusy && !container.sessionAlive,
                             leadingIcon = {
                                 Icon(
                                     Icons.Rounded.Delete,
@@ -363,10 +374,11 @@ private fun ContainerCard(
 
             if (installationActive) {
                 Spacer(Modifier.height(10.dp))
-                LiveInstallationLogPanel(
-                    logs = liveInstallationLog,
-                    onOpenFullLogs = onLogs,
-                )
+                Text("画面を離れても導入は続きます。完了したらこのカードから開けます。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                TextButton(onClick = { showInstallLog = !showInstallLog }) {
+                    Text(if (showInstallLog) "詳細ログを閉じる" else "詳細ログを見る")
+                }
+                if (showInstallLog) LiveInstallationLogPanel(logs = liveInstallationLog, onOpenFullLogs = onLogs)
             }
 
             Spacer(Modifier.height(13.dp))
@@ -378,6 +390,14 @@ private fun ContainerCard(
             Spacer(Modifier.height(16.dp))
 
             when {
+                container.state == ContainerState.RUNNING -> Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Button(onClick = onStart, modifier = Modifier.weight(1f), shape = RoundedCornerShape(14.dp)) {
+                        Icon(Icons.Rounded.Computer, null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("デスクトップを開く")
+                    }
+                    OutlinedButton(onClick = onStop, shape = RoundedCornerShape(14.dp)) { Text("停止") }
+                }
                 container.canStop -> Button(
                     onClick = onStop,
                     modifier = Modifier.fillMaxWidth(),
@@ -398,7 +418,7 @@ private fun ContainerCard(
                 ) {
                     Icon(Icons.Rounded.PlayArrow, null)
                     Spacer(Modifier.width(8.dp))
-                    Text("Debian XFCEを開く")
+                    Text("デスクトップを開く")
                 }
                 container.state == ContainerState.FAILED -> OutlinedButton(
                     onClick = onRepair,
@@ -407,7 +427,7 @@ private fun ContainerCard(
                 ) {
                     Icon(Icons.Rounded.Refresh, null)
                     Spacer(Modifier.width(8.dp))
-                    Text("インストールを再開")
+                    Text("導入・起動を修復")
                 }
                 else -> FilledTonalButton(
                     onClick = {},
@@ -415,7 +435,7 @@ private fun ContainerCard(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(14.dp),
                 ) {
-                    Text("処理中")
+                    Text(if (container.state == ContainerState.UNKNOWN) "状態不明" else "処理中")
                 }
             }
         }

@@ -31,13 +31,13 @@ android {
         // TERMUX_APP__PACKAGE_NAME set to match — see docs/ and the bootstrap zips.
         applicationId = "com.hatake716.linuxdesktop"
         minSdk = 26
-        targetSdk = 35
-        versionCode = 20
-        versionName = "1.1.0"
+        targetSdk = 36
+        versionCode = 21
+        versionName = "1.2.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
-        buildConfigField("String", "HOST_SCRIPT_VERSION", "\"1.1.0\"")
+        buildConfigField("String", "HOST_SCRIPT_VERSION", "\"1.2.0\"")
     }
 
     signingConfigs {
@@ -67,6 +67,7 @@ android {
 
     buildTypes {
         debug {
+            ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
             signingConfig = signingConfigs.getByName("debug")
         }
         release {
@@ -76,13 +77,12 @@ android {
                 "proguard-rules.pro",
             )
             signingConfig = signingConfigs.findByName("release")
-            // Play release ships arm64-v8a ONLY. The native-proot prebuilts
-            // (jniLibs: libpdrt.so etc.) exist only for arm64, and the other
-            // three bootstrap zips are still the upstream com.termux builds —
-            // broken under this app's prefix and must not ship. Debug keeps
-            // every ABI so x86_64 emulator work stays possible.
+            // Play bundles default to ARM64. The release APK can include the
+            // separately built x86_64 runtime for testing the same signed APK
+            // on an emulator before installing it on an ARM64 physical device.
+            // Never include an ABI without both its own-prefix bootstrap and PRoot.
             ndk {
-                abiFilters += "arm64-v8a"
+                abiFilters += providers.gradleProperty("ldfa.releaseAbis").orElse("arm64-v8a").get().split(",")
             }
         }
     }

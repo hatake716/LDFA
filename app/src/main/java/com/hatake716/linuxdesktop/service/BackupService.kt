@@ -66,6 +66,12 @@ class BackupService : Service() {
         return START_NOT_STICKY
     }
 
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        job?.cancel()
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf(startId)
+    }
+
     override fun onDestroy() {
         job?.cancel()
         wakeLock?.let { if (it.isHeld) it.release() }
@@ -111,7 +117,7 @@ class BackupService : Service() {
                         humanSize(out.sizeBytes),
                     ),
                     detail = buildString {
-                        append(getString(R.string.backup_done_location)).append("\n\n")
+                        append(getString(if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) R.string.backup_done_location else R.string.backup_done_location_legacy)).append("\n\n")
                         append(getString(R.string.backup_dest_fullpath, exportedPath)).append('\n')
                         append("SHA-256: ").append(out.sha256Prefix)
                         if (out.skippedSpecial > 0 || out.unreadableCount > 0) {
@@ -146,7 +152,9 @@ class BackupService : Service() {
      */
     private fun exportToDownloads(file: File): String {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
-            return file.absolutePath
+            return com.hatake716.linuxdesktop.backup.BackupExport.retain(
+                file, File(applicationContext.getExternalFilesDir(null) ?: filesDir, "backups"),
+            ).absolutePath
         }
         val resolver = applicationContext.contentResolver
         val values = android.content.ContentValues().apply {

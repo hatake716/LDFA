@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -67,8 +66,7 @@ internal fun SettingsScreen(
 ) {
     LazyColumn(
         modifier = modifier
-            .fillMaxSize()
-            .statusBarsPadding(),
+            .fillMaxSize(),
         contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 24.dp, bottom = 90.dp),
         verticalArrangement = Arrangement.spacedBy(18.dp),
     ) {
@@ -109,7 +107,7 @@ internal fun SettingsScreen(
                     icon = Icons.Rounded.CloudDone,
                     title = "Debian実行基盤",
                     ready = state.setup.hostReady,
-                    readyText = "XFCEと日本語環境を構築済み",
+                    readyText = "Linux環境を管理できます",
                     pendingText = "セットアップが必要です",
                 )
             }

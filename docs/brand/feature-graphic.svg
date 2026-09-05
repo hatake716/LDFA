@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="500" viewBox="0 0 1024 500">
+  <defs>
+    <linearGradient id="background" x2="1" y2="1">
+      <stop stop-color="#19244C"/><stop offset="1" stop-color="#323F7D"/>
+    </linearGradient>
+  </defs>
+  <rect width="1024" height="500" fill="url(#background)"/>
+  <circle cx="940" cy="90" r="280" fill="#4856A8" opacity=".42"/>
+  <circle cx="850" cy="430" r="210" fill="#006B62" opacity=".25"/>
+  <g font-family="Noto Sans CJK JP, sans-serif" fill="#FFFFFF">
+    <text x="60" y="82" font-size="26" font-weight="700" letter-spacing="4">LDFA</text>
+    <text x="60" y="187" font-size="49" font-weight="700">Androidに、</text>
+    <text x="60" y="261" font-size="49" font-weight="700">Linuxの作業場所を。</text>
+    <text x="62" y="326" font-size="22" fill="#CED8FF">Debian + XFCE デスクトップ</text>
+    <rect x="60" y="379" width="102" height="38" rx="19" fill="#73E1CD"/>
+    <text x="111" y="405" text-anchor="middle" fill="#152B3E" font-size="16" font-weight="700">root不要</text>
+    <text x="184" y="405" font-size="18" fill="#E1E7FF">日本語入力・バックアップ対応</text>
+  </g>
+  <g transform="translate(690 80) scale(3.2)">
+    <path fill="#FFFFFF" d="M14,17H60Q67,17 67,24V51Q67,58 60,58H14Q7,58 7,51V24Q7,17 14,17Z"/>
+    <path fill="#253467" d="M13,26H61V51H13Z"/>
+    <path fill="#73E1CD" d="M14,21H18V23H14ZM21,21H25V23H21ZM17,30H29V47H17Z"/>
+    <path fill="#FFFFFF" d="M35,32L41,37L35,42V38.5L37,37L35,35.5ZM42,42H55V44H42Z"/>
+    <path fill="#FFFFFF" d="M33,57H41V65H50V69H24V65H33Z"/>
+  </g>
+  <path d="M672 346H944" stroke="#73E1CD" stroke-width="2" opacity=".35"/>
+  <text x="808" y="379" text-anchor="middle" font-family="sans-serif" font-size="15" letter-spacing="2" fill="#C1D8ED">LINUX DESKTOP FOR ANDROID</text>
+</svg>

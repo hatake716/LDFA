@@ -12,11 +12,12 @@ import com.hatake716.linuxdesktop.data.*
 @Composable
 fun LinuxDesktopRoot(
     viewModel: MainViewModel,
-    onPrepareRuntime: () -> Unit,
     onStartContainer: (ContainerInfo) -> Unit,
+    onInstall: (String) -> Unit,
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
+    var showRestore by rememberSaveable { mutableStateOf(false) }
     var showCreateDialog by rememberSaveable { mutableStateOf(false) }
     var deleteTarget by remember { mutableStateOf<ContainerInfo?>(null) }
 
@@ -28,22 +29,26 @@ fun LinuxDesktopRoot(
         }
     }
 
-    // Storage access is OPTIONAL: at targetSdk 35 WRITE_EXTERNAL_STORAGE cannot
-    // be granted by the user at all (the permissions page doesn't even list it),
-    // so it must never gate the main screen — only terminal/X11/Debian do.
+    // A prepared host without a Linux environment stays on the introduction screen.
     val setupComplete = state.setup.terminalReady &&
         state.setup.x11Ready &&
-        state.setup.hostReady
+        state.setup.hostReady && state.containers.isNotEmpty()
 
     Box(Modifier.fillMaxSize()) {
-        if (state.initialLoading) {
+        if (showRestore && state.setup.hostReady) {
+            RestoreScreen(
+                existingNames = state.containers.map { it.name }.toSet(),
+                onRestored = { viewModel.refreshEnvironment() },
+                onClose = { showRestore = false },
+            )
+        } else if (state.initialLoading) {
             LoadingScreen()
         } else if (!setupComplete) {
             SetupScreen(
                 state = state,
-                onPrepareRuntime = onPrepareRuntime,
                 onRefresh = { viewModel.refreshEnvironment() },
-                onBootstrap = viewModel::bootstrapHost,
+                onInstall = onInstall,
+                onRestore = { showRestore = true; viewModel.prepareForRestore() },
             )
         } else {
             MainShell(
@@ -85,11 +90,11 @@ fun LinuxDesktopRoot(
 
     if (showCreateDialog) {
         CreateContainerDialog(
-            busy = state.operationInProgress,
+            busy = state.operationInProgress || state.installation.busy,
             onDismiss = { showCreateDialog = false },
             onCreate = { name ->
                 showCreateDialog = false
-                viewModel.createContainer(name)
+                onInstall(name)
             },
         )
     }

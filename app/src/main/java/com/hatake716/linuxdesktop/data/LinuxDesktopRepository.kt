@@ -22,6 +22,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import java.io.File
 import java.util.Locale
 import java.util.UUID
@@ -76,6 +77,9 @@ class LinuxDesktopRepository(private val context: Context) {
     private val x11Script: String by lazy {
         context.assets.open("ldfa-x11.sh").bufferedReader().use { it.readText() }
     }
+
+    fun hasActiveInstallation(): Boolean = prootInstallWorkers.values.any { it.isAlive } ||
+        prootInstallSessions.values.any { it.isAlive }
 
     fun runtimeStatus(): RuntimeStatus = RuntimeStatus(
         terminalReady = commandClient.isRuntimeInstalled(),
@@ -162,7 +166,7 @@ class LinuxDesktopRepository(private val context: Context) {
      * Relaunch the install worker + provision for an install whose app process died
      * mid-flight: the native worker/provision proots are children of this process and
      * die with it, and cmd_repair's tmux-based revival cannot help on the native path.
-     * The relaunched worker cleans the partial container and reinstalls; its re-entry
+     * The relaunched worker preserves the extracted rootfs and resumes provisioning; its re-entry
      * guard makes a redundant relaunch a no-op. Returns true when a resume launched.
      */
     suspend fun resumeInterruptedInstalls(
@@ -181,141 +185,170 @@ class LinuxDesktopRepository(private val context: Context) {
             if (!resumedInstalls.add(id)) continue
             Log.i(LIFECYCLE_LOG_TAG, "resuming interrupted install id=$id")
             // The dead run's provision request must not race the fresh worker
-            // (it points at a rootfs the worker is about to delete). The worker
+            // (it belongs to a previous provisioning generation). The worker
             // clears it too; deleting here closes the poll-window race.
-            runCatching { prootWorkerLauncher.installRequestFile(id).delete() }
-            launchNativeProotInstallWorkerIfNeeded(id)
-            launchNativeProotInstallProvisionIfNeeded(id)
+            ContainerOperationLocks.withLock(id) {
+                // A supervisor can exit while its separate guest PRoot still runs.
+                // Finish that generation before repairing dpkg or publishing a new request.
+                stopInstallProvision(id)
+                prootWorkerLauncher.installRequestFile(id).delete()
+                launchNativeProotInstallWorkerIfNeeded(id)
+                launchNativeProotInstallProvisionIfNeeded(id)
+            }
             resumed++
         }
         resumed
     }
 
-    suspend fun startContainer(id: String): DesktopDisplayBackend = withContext(Dispatchers.IO) {
-        x11LifecycleMutex.withLock {
-            holdTermuxServiceLifetime()
-            clearActiveSession()
-            try {
-                // A previous run can still own a stale worker generation. Stop it before
-                // starting a new one.
-                try {
-                    commandClient.runInstalledHost(
-                        action = "stop",
-                        arguments = listOf(id),
-                        timeout = 30.seconds,
-                    )
-                } catch (exception: CancellationException) {
-                    throw exception
-                } catch (_: Throwable) {
-                }
-                closeAllDisplaysAndWait()
-                stopAllDisplayServers()
-                ensureBundledDesktopApps(id)
-
-                val backend = selectAndStartDisplayBackend(id)
-                startAndProbeHost(id)
-
-                // The VNC fallback was removed (its first-time provisioning took
-                // ~30 minutes through a nested proot — worse than failing): a
-                // desktop that cannot be PRESENTED on native X11 is a start
-                // failure with diagnostics, never a silent degraded mode.
-                val desktopPresentationFailure = verifyNativeDesktopPresentation(id)
-                if (desktopPresentationFailure != null) {
-                    throw desktopPresentationFailure
-                }
-
-                setActiveSession(id, backend)
-                backend
-            } catch (throwable: Throwable) {
-                Log.e(LIFECYCLE_LOG_TAG, "startContainer failed id=$id", throwable)
-                withContext(NonCancellable) {
-                    clearActiveSession()
-                    runCatching {
-                        commandClient.runInstalledHost(
-                            action = "stop",
-                            arguments = listOf(id),
-                            timeout = 30.seconds,
-                        )
+    suspend fun startContainer(id: String): DesktopDisplayBackend {
+        val affectedIds = listOfNotNull(id, activeContainerId()).distinct()
+        return ContainerOperationLocks.withLocks(affectedIds) {
+            withContext(Dispatchers.IO) {
+                x11LifecycleMutex.withLock {
+                    check(activeContainerId()?.let { it in affectedIds } != false) {
+                        "実行中の環境が変わりました。状態を確認してもう一度起動してください。"
                     }
-                    val displayCleanup = runCatching {
+                    holdTermuxServiceLifetime()
+                    val previousId = activeContainerId()
+                    clearActiveSession()
+                    try {
+                        if (previousId != null && previousId != id) {
+                            try {
+                                commandClient.runInstalledHost(action = "stop", arguments = listOf(previousId), timeout = 30.seconds)
+                            } finally {
+                                teardownNativeProot(previousId)
+                            }
+                        }
+                        // A previous run can still own a stale worker generation. Stop it before
+                        // starting a new one.
+                        try {
+                            commandClient.runInstalledHost(
+                                action = "stop",
+                                arguments = listOf(id),
+                                timeout = 30.seconds,
+                            )
+                        } catch (exception: CancellationException) {
+                            throw exception
+                        } catch (_: Throwable) {
+                        }
+                        teardownNativeProot(id)
                         closeAllDisplaysAndWait()
                         stopAllDisplayServers()
-                    }
-                    if (displayCleanup.isSuccess) {
-                        releaseTermuxServiceLifetime()
-                    } else {
-                        Log.e(
-                            LIFECYCLE_LOG_TAG,
-                            "display cleanup failed; retaining Termux service lease id=$id",
-                            displayCleanup.exceptionOrNull(),
-                        )
+                        ensureBundledDesktopApps(id)
+
+                        val backend = selectAndStartDisplayBackend(id)
+                        startAndProbeHost(id)
+
+                        // The VNC fallback was removed (its first-time provisioning took
+                        // ~30 minutes through a nested proot — worse than failing): a
+                        // desktop that cannot be PRESENTED on native X11 is a start
+                        // failure with diagnostics, never a silent degraded mode.
+                        val desktopPresentationFailure = verifyNativeDesktopPresentation(id)
+                        if (desktopPresentationFailure != null) {
+                            throw desktopPresentationFailure
+                        }
+
+                        setActiveSession(id, backend)
+                        backend
+                    } catch (throwable: Throwable) {
+                        Log.e(LIFECYCLE_LOG_TAG, "startContainer failed id=$id", throwable)
+                        withContext(NonCancellable) {
+                            clearActiveSession()
+                            runCatching {
+                                commandClient.runInstalledHost(
+                                    action = "stop",
+                                    arguments = listOf(id),
+                                    timeout = 30.seconds,
+                                )
+                            }
+                            teardownNativeProot(id)
+                            val displayCleanup = runCatching {
+                                closeAllDisplaysAndWait()
+                                stopAllDisplayServers()
+                            }
+                            if (displayCleanup.isSuccess) {
+                                releaseTermuxServiceLifetime()
+                            } else {
+                                Log.e(
+                                    LIFECYCLE_LOG_TAG,
+                                    "display cleanup failed; retaining Termux service lease id=$id",
+                                    displayCleanup.exceptionOrNull(),
+                                )
+                            }
+                        }
+                        throw throwable
                     }
                 }
-                throw throwable
             }
         }
     }
 
-    suspend fun stopContainer(id: String) = withContext(Dispatchers.IO) {
-        x11LifecycleMutex.withLock {
-            val ownsDisplay = activeContainerId() == id
-            var failure: Throwable? = null
-            var displayCleanupComplete = false
-            if (ownsDisplay) {
-                holdTermuxServiceLifetime()
-                clearActiveSession()
-                EmbeddedX11ServiceController.cancelPendingDisplayOpen()
+    suspend fun stopContainer(id: String) = ContainerOperationLocks.withLock(id) {
+        withContext(Dispatchers.IO) {
+            x11LifecycleMutex.withLock {
+                val ownsDisplay = activeContainerId() == id
+                var failure: Throwable? = null
+                var displayCleanupComplete = false
+                if (ownsDisplay) {
+                    holdTermuxServiceLifetime()
+                    clearActiveSession()
+                    EmbeddedX11ServiceController.cancelPendingDisplayOpen()
+                }
+                try {
+                    commandClient.runBundledHostScript(
+                        script = hostScript,
+                        action = "stop",
+                        arguments = listOf(id),
+                        timeout = 45.seconds,
+                    )
+                } catch (throwable: Throwable) {
+                    failure = throwable
+                } finally {
+                    // Reap the native single-layer desktop and worker Processes (no-op on the
+                    // legacy path). The host `stop` sets the stop file, but the app owns these
+                    // Processes, so it must destroy them to tear the proots down.
+                    teardownNativeProot(id)
+                    if (ownsDisplay) {
+                        withContext(NonCancellable) {
+                            try {
+                                // Viewer teardown is the acknowledgement barrier.  Do not stop its
+                                // server first, even when the host command was cancelled or failed.
+                                closeAllDisplaysAndWait()
+                                stopAllDisplayServers()
+                                displayCleanupComplete = true
+                            } catch (cleanupFailure: Throwable) {
+                                if (failure == null) failure = cleanupFailure
+                                else failure?.addSuppressed(cleanupFailure)
+                            }
+                            if (displayCleanupComplete) releaseTermuxServiceLifetime()
+                        }
+                    }
+                }
+                failure?.let { throw it }
             }
-            try {
+        }
+    }
+
+    suspend fun deleteContainer(id: String, deleteSharedFiles: Boolean) = ContainerOperationLocks.withLock(id) {
+        withContext(Dispatchers.IO) {
+            x11LifecycleMutex.withLock {
+                val wasActive = activeContainerId() == id
+                if (wasActive) {
+                    holdTermuxServiceLifetime()
+                    clearActiveSession()
+                    closeAllDisplaysAndWait()
+                    stopAllDisplayServers()
+                    releaseTermuxServiceLifetime()
+                }
+                commandClient.runInstalledHost(action = "stop", arguments = listOf(id), timeout = 45.seconds)
+                teardownNativeProot(id)
                 commandClient.runBundledHostScript(
                     script = hostScript,
-                    action = "stop",
-                    arguments = listOf(id),
-                    timeout = 45.seconds,
+                    action = "delete",
+                    arguments = listOf(id, if (deleteSharedFiles) "1" else "0"),
+                    timeout = 10.minutes,
                 )
-            } catch (throwable: Throwable) {
-                failure = throwable
-            } finally {
-                // Reap the native single-layer desktop and worker Processes (no-op on the
-                // legacy path). The host `stop` sets the stop file, but the app owns these
-                // Processes, so it must destroy them to tear the proots down.
-                teardownNativeProot(id)
-                if (ownsDisplay) {
-                    withContext(NonCancellable) {
-                        try {
-                            // Viewer teardown is the acknowledgement barrier.  Do not stop its
-                            // server first, even when the host command was cancelled or failed.
-                            closeAllDisplaysAndWait()
-                            stopAllDisplayServers()
-                            displayCleanupComplete = true
-                        } catch (cleanupFailure: Throwable) {
-                            if (failure == null) failure = cleanupFailure
-                            else failure?.addSuppressed(cleanupFailure)
-                        }
-                        if (displayCleanupComplete) releaseTermuxServiceLifetime()
-                    }
-                }
             }
-            failure?.let { throw it }
-        }
-    }
-
-    suspend fun deleteContainer(id: String, deleteSharedFiles: Boolean) = withContext(Dispatchers.IO) {
-        x11LifecycleMutex.withLock {
-            val wasActive = activeContainerId() == id
-            if (wasActive) {
-                holdTermuxServiceLifetime()
-                clearActiveSession()
-                closeAllDisplaysAndWait()
-                stopAllDisplayServers()
-                releaseTermuxServiceLifetime()
-            }
-            commandClient.runBundledHostScript(
-                script = hostScript,
-                action = "delete",
-                arguments = listOf(id, if (deleteSharedFiles) "1" else "0"),
-                timeout = 10.minutes,
-            )
         }
     }
 
@@ -805,9 +838,9 @@ class LinuxDesktopRepository(private val context: Context) {
         throw TermuxCommandException(
             buildString {
                 if (attemptedModes.size == NATIVE_X11_RENDER_MODES.size) {
-                    append("ネイティブTermux:X11を通常描画・legacy描画の両方で安定起動できませんでした。互換表示へ切り替えます。")
+                    append("ネイティブTermux:X11を通常描画・legacy描画の両方で安定起動できませんでした。デスクトップの起動を中断しました。")
                 } else {
-                    append("Android表示Activity、SurfaceまたはEGL rendererを準備できませんでした。legacy描画では改善しないため互換表示へ切り替えます。")
+                    append("Android表示Activity、SurfaceまたはEGL rendererを準備できませんでした。legacy描画では改善しないためデスクトップの起動を中断しました。")
                 }
                 lastFailure?.message?.takeIf { it.isNotBlank() }?.let {
                     append("\n\nNative failure:\n")
@@ -898,6 +931,7 @@ class LinuxDesktopRepository(private val context: Context) {
                     arguments = listOf(id, PRESERVE_CHROME_RESTORE),
                     timeout = 30.seconds,
                 )
+                teardownNativeProot(id)
                 closeNativeDisplayAndWait()
                 EmbeddedX11ServiceController.stopAndWait(context)
                 if (viewerWasOpen) {
@@ -970,6 +1004,7 @@ class LinuxDesktopRepository(private val context: Context) {
             )
         }
         val displayCleanup = runCatching {
+            teardownNativeProot(id)
             closeAllDisplaysAndWait()
             stopAllDisplayServers()
         }
@@ -1062,35 +1097,54 @@ class LinuxDesktopRepository(private val context: Context) {
      * guest's success/failure marker; the app just keeps this proot alive until the
      * provision exits, then reaps it. Torn down on stop alongside the worker.
      */
-    private fun launchNativeProotInstallProvisionIfNeeded(id: String) {
+    private suspend fun launchNativeProotInstallProvisionIfNeeded(id: String) {
         if (!prootWorkerLauncher.usable) return
         prootInstallSessions[id]?.let { if (it.isAlive) return }
         val request = prootWorkerLauncher.installRequestFile(id)
         // The worker writes the request after install_container extracts the rootfs
         // (a Debian download+unpack). Poll generously; bail if the worker died first.
         var waited = 0
-        while (!request.isFile && waited < 300_000) {
-            if (prootInstallWorkers[id]?.isAlive == false) {
-                Log.w(LIFECYCLE_LOG_TAG, "native-proot install worker died before provision request id=$id")
-                return
+        while (!request.isFile && waited < 1_800_000) {
+            if (prootInstallWorkers[id]?.isAlive != true) {
+                error("Linuxのダウンロードが中断されました。環境のログを確認し「導入・起動を修復」を選んでください。")
             }
-            Thread.sleep(500); waited += 500
+            delay(500); waited += 500
         }
         if (!request.isFile) {
-            Log.w(LIFECYCLE_LOG_TAG, "install provision request never appeared id=$id")
-            return
+            File(request.parentFile, "$id.stop").writeText("request timeout")
+            teardownNativeProot(id)
+            error("Linuxのダウンロードが時間内に完了しませんでした。接続を確認して導入を再開してください。")
         }
         val process = prootWorkerLauncher.startInstallProvision(id)
         if (process != null) {
-            prootInstallSessions[id] = process
+            synchronized(prootInstallSessions) { prootInstallSessions[id] = process }
             Log.i(LIFECYCLE_LOG_TAG, "native-proot install provision launched (single-layer) id=$id")
             Thread {
                 runCatching { process.waitFor() }
-                prootInstallSessions.remove(id, process)
+                // SIGKILL cannot run the guest ERR trap. Only the current process may
+                // report failure; a late callback from a stopped generation must not
+                // poison the next request using the same rootfs.
+                synchronized(prootInstallSessions) {
+                    if (prootInstallSessions[id] === process) {
+                        runCatching {
+                            val rootfs = request.takeIf { it.isFile }?.readLines()
+                                ?.firstOrNull { it.startsWith("ROOTFS=") }?.removePrefix("ROOTFS=")
+                            if (rootfs != null) {
+                                val root = File(rootfs, "root")
+                                if (!File(root, ".ldfa-provision.done").exists() && request.exists()) {
+                                    File(root, ".ldfa-provision.failed").writeText("guest process exited")
+                                }
+                            }
+                        }
+                        prootInstallSessions.remove(id, process)
+                    }
+                }
                 Log.i(LIFECYCLE_LOG_TAG, "native-proot install provision finished id=$id")
             }.apply { isDaemon = true; name = "ldfa-provision-hold-$id" }.start()
         } else {
-            Log.w(LIFECYCLE_LOG_TAG, "native-proot install provision launch returned null id=$id")
+            File(request.parentFile, "$id.stop").writeText("provision launch failed")
+            teardownNativeProot(id)
+            error("Linuxの構築処理を起動できませんでした。ログを確認して導入を再開してください。")
         }
     }
 
@@ -1100,7 +1154,7 @@ class LinuxDesktopRepository(private val context: Context) {
      * Process. One layer deep (not nested in the worker's proot) is what lets XFCE
      * compose in ~1s. Destroyed on stop alongside the worker.
      */
-    private fun launchNativeProotSessionIfNeeded(id: String) {
+    private suspend fun launchNativeProotSessionIfNeeded(id: String) {
         if (!prootWorkerLauncher.usable) return
         prootSessions[id]?.let { if (it.isAlive) return }
         val request = prootWorkerLauncher.sessionRequestFile(id)
@@ -1112,7 +1166,7 @@ class LinuxDesktopRepository(private val context: Context) {
                 Log.w(LIFECYCLE_LOG_TAG, "native-proot worker died before session request id=$id")
                 return
             }
-            Thread.sleep(500); waited += 500
+            delay(500); waited += 500
         }
         if (!request.isFile) {
             Log.w(LIFECYCLE_LOG_TAG, "session request never appeared id=$id")
@@ -1133,10 +1187,27 @@ class LinuxDesktopRepository(private val context: Context) {
      * proot) are reaped instead of lingering. Safe to call when nothing is running.
      */
     private fun teardownNativeProot(id: String) {
-        prootSessions.remove(id)?.destroyForcibly()
-        prootWorkers.remove(id)?.destroyForcibly()
-        prootInstallSessions.remove(id)?.destroyForcibly()
-        prootInstallWorkers.remove(id)?.destroyForcibly()
+        var failure: Throwable? = null
+        for (processes in listOf(prootSessions, prootWorkers, prootInstallSessions, prootInstallWorkers)) {
+            val process = processes[id] ?: continue
+            try {
+                process.destroyForcibly()
+                check(process.waitFor(5, java.util.concurrent.TimeUnit.SECONDS)) { "Linuxの実行処理を停止できませんでした。" }
+                processes.remove(id, process)
+            } catch (error: Throwable) {
+                if (failure == null) failure = error else failure.addSuppressed(error)
+            }
+        }
+        failure?.let { throw it }
+    }
+
+    private fun stopInstallProvision(id: String) {
+        val process = prootInstallSessions[id] ?: return
+        process.destroyForcibly()
+        check(process.waitFor(5, java.util.concurrent.TimeUnit.SECONDS)) {
+            "以前のLinux構築処理を停止できませんでした。アプリを開き直して再試行してください。"
+        }
+        prootInstallSessions.remove(id, process)
     }
 
     private fun readMetaDisplay(id: String): Int {
@@ -1149,6 +1220,27 @@ class LinuxDesktopRepository(private val context: Context) {
 
     private suspend fun ensureBundledDesktopApps(id: String) {
         Log.i(LIFECYCLE_LOG_TAG, "bundled desktop app provisioning start id=$id")
+        if (prootWorkerLauncher.usable) {
+            commandClient.runBundledHostScript(hostScript, "prepare-apps", listOf(id), timeout = 45.seconds)
+            if (prootWorkerLauncher.appsRequestFile(id).isFile) {
+                val process = prootWorkerLauncher.startAppsProvision(id)
+                    ?: throw TermuxCommandException("Linuxアプリの設定処理を起動できませんでした。")
+                synchronized(prootInstallSessions) { prootInstallSessions[id] = process }
+                try {
+                    withTimeout(30.minutes.inWholeMilliseconds) {
+                        while (process.isAlive) delay(250)
+                    }
+                    val exitCode = process.exitValue()
+                    commandClient.runBundledHostScript(hostScript, "finish-apps", listOf(id), timeout = 45.seconds)
+                    check(exitCode == 0) { "Linuxアプリの設定に失敗しました（exit=$exitCode）。ログを確認してください。" }
+                } finally {
+                    withContext(NonCancellable) { stopInstallProvision(id) }
+                    prootWorkerLauncher.appsRequestFile(id).delete()
+                }
+            }
+            Log.i(LIFECYCLE_LOG_TAG, "bundled desktop app provisioning ready id=$id")
+            return
+        }
         commandClient.runBundledHostScript(
             script = hostScript,
             action = "ensure-apps",

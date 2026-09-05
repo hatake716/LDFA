@@ -1,240 +1,88 @@
-# テスト方針
+# LDFA 1.2.0 検証資料
 
-## ホストコントローラー
+対象：versionName `1.2.0`、versionCode `21`、`com.hatake716.linuxdesktop`。
+ローカルの検証ログ・スクリーンショットは`release-assets/v1.2.0/verification/`にまとめます。
 
-```bash
-bash ./scripts/check-host-script.sh
-bash ./scripts/test-host-controller.sh
-```
-
-確認対象:
-
-- Debian、XFCE、Fcitx5/Mozc、日本語locale、Google Chrome、sudo
-- Chrome公式amd64／arm64 package URL、package metadata検査、PRoot互換ランチャー
-- 既存環境のChrome launcher世代更新、コンテンツrenderer上限2、background mode停止
-- XFCE 4要素のdirect／event-driven supervisorと、定常時に外部polling processを生成しないこと
-- `xset`、`xrefresh`、`xprop`の明示依存
-- `.profile`、`.xprofile`、`.xinputrc`、Android共有symlink
-- metadataのatomic更新、controller lock、tmux worker
-- native`:1`／VNC`:2`のDISPLAY伝播
-- app-private PulseAudio Unix socket、daemon再利用／stale復旧、AAudio fallback成功経路
-- Debian Pulse／ALSA system drop-in、user pathへ直接書かず旧v1完全一致時だけ削除する静的契約
-- XFCE panelのPulseAudio音量項目を保持し、旧`panel-mobile-v1`から一度だけ復元
-- 日本語表示名と共有ファイルの保持／削除
-
-両方のAndroid sink loadが失敗した実workerのdegraded継続と、任意内容のuser Pulse／ALSA
-設定が前後でbyte一致することは、現行shell gateの動的実行範囲には含みません。下記の
-実機回帰で別に記録します。
-
-## X11 controllerと生成overlay
+## 自動検証
 
 ```bash
-bash ./scripts/check-x11-controller.sh
+bash scripts/check-host-script.sh
+bash scripts/test-host-controller.sh
+bash scripts/check-x11-controller.sh
+./gradlew testDebugUnitTest :app:lintDebug :termux-runtime:lintDebug :embedded-x11:lintDebug
 ```
 
-確認対象:
+- ホストの導入・停止・音声制御と、生成X11 overlayの契約を検査します。共有ストレージへ書き込めない場合の環境作成、メタデータ書き込み失敗時の後始末、明示的exit時の失敗状態、PIDのパス別名、生成ゲストスクリプトの標準入力・失敗伝達も確認します。
+- 単体テストではメタデータ・設定・ログ・PRoot・バックアップの往復を確認します。
+- 1.2.0ではバックアップの保存先維持、同名ファイル保護、未導入状態の拒否、XDG rootfsの検出、バックアップと起動の直列化、破損・途中で切れたアーカイブの拒否、復元先IDへのPRoot内部リンクの付け替えを追加しています。
 
-- Android所有の`:x11` Service、direct Binder、世代UUID／PID barrier
-- 旧`app_process`、loader APK、TCP 7892経路が復活していないこと
-- viewer-first teardownとpending bind cancellation
-- normal／legacy／VNC fallback
-- Surface/EGL READY、successful-presentation serial probe、Surface再生成後のroot全画面damage
-- JNI annotation/ABI、renderer mutex、EGL error、FD reconnect hardening
-- 固定Termux:X11入力からJava/native overlayを再生成できること
+ビルド成功と、Linuxの導入・表示成功は別々に確認します。
 
-## Kotlin単体テスト
+## エミュレーターでの確認手順
 
-```bash
-bash ./gradlew testDebugUnitTest
-```
+検証用の独立したAVDを使用し、利用者のLinuxデータや別アプリのTermux環境には触れません。
+他のAndroid作業と共有しないADBサーバー（ローカル検証ではポート5047）と明示的なエミュレーターserialを使用します。
+対象ABI用に、同じアプリIDのbootstrapとネイティブPRootを収録したAPKを使用します。
 
-環境状態解析、ホストスクリプト互換変換、DISPLAY metadata、strict X11 preflight、ログ整形などを検証します。
+1. 未導入状態で初回画面・容量説明・復元の入口を確認。
+2. Linuxの導入を開始し、通知の表示と実行段階の進捗を確認。
+3. 準備・導入中の回転、ホームへの移動、管理画面の再作成を確認。
+4. 通信障害やプロセス終了後、展開済みのファイルを残して再開できることを確認。
+5. 実際のXFCE画面、Chrome、日本語入力、画面移動と復帰を確認。
+6. 停止・再起動を繰り返し、古いworkerやサービスが次のセッションに干渉しないことを確認。
+7. 停止した環境をバックアップし、新しいIDへ復元して保存したファイルを照合。
+8. ダークテーマ、横画面、大きい文字で操作入口が切れないことを確認。
 
-## 完全Androidビルド
+X11のプロセスが存在するだけで成功とはしません。Surfaceへの描画と、実際のデスクトップ画面を確認します。
 
-```bash
-git submodule update --init --recursive
-bash ./gradlew --no-daemon \
-  clean \
-  testDebugUnitTest \
-  :app:lintDebug \
-  :termux-runtime:lintDebug \
-  :embedded-x11:lintDebug \
-  assembleDebug
-```
+## パッケージ検証
 
-CIはさらに次を検証します。
+- APKの署名証明書・アプリID・バージョン・targetSdk・同梱ABI
+- AABの署名、bundletool validation、同梱ABI
+- すべてのネイティブELFのLOAD segment alignment
+- APK内のARM64ライブラリ・スクリプト・DEXコードとAAB内の対応ファイルの一致
+- merged manifestのサービス型、非公開コンポーネント、不要な共有ストレージ権限の不在
+- 署名鍵、ローカル設定、検証用一時ファイルのGit混入がないこと
 
-- Gradle 8.13 wrapper JARとdistributionのSHA-256
-- `arm64-v8a`、`armeabi-v7a`、`x86`、`x86_64`の`libXlorie.so`
-- Manifestの非公開`:x11` Foreground Service
-- `com.termux` application ID、versionCode 20、versionName 1.1.0、LDFA label
-- `ToolsScreen`、X11/VNC assets
-- APK内`ldfa-host.sh`とsourceのbyte一致、同じ音声static gateの再実行
-- 再生専用buildに不要な`RECORD_AUDIO`／microphone foreground permissionがないこと
-- 旧loader/app_process commandの不在
-- APKのzip alignmentと署名
+16KB対応はELF検査と16KB環境の動作を区別します。x86_64エミュレーターでの合格はARM64 16KB端末での実測を代替しません。
 
-## 実機で必要な確認
+## 実機への最終インストール
 
-- 初回Termux bootstrapとDebian PRootインストール
-- native通常／legacyおよびVNC fallbackの実画面
-- XFCE表示、回転、background復帰、viewer再接続
-- タッチ、マウス、software/physical keyboard（Gboardのcomposition開始を含む）
-- 日本語表示、Fcitx5/Mozc入力、`sudo apt update`
-- Google Chromeの初回起動、利用規約確認、Webページ描画
-- Chrome動画と既知のWAVを再生し、本体speaker／Bluetoothから音が出ること
-- Google本人確認で別アプリへ移動し、履歴から戻って1〜2秒以内にChrome／XFCE全体が再表示されること
-- 画面OFF、Activity再生成、RAM圧迫、X11 process死後の復旧
-- 複数環境の作成・切替・削除
-- Android共有フォルダと日本語／大容量ファイル
-- 外部display、DeX系
+エミュレーターで検証した署名済みAPKを最終成果物として保存した後、明示した実機serialへインストールします。既存アプリの署名とデータを確認し、上書き更新で保持します。物理端末への入力注入は行いません。
 
-自動テストとAPK検査だけではAndroid実機のSurface、GPU driver、入力、PRoot、端末固有の省電力制御を完全には再現できません。配布前には実機で最終確認します。
+インストール後はパッケージ名、versionCode、署名、インストール済みAPKのハッシュを照合し、安全な起動を確認します。音声を人が聴いたか、実機でLinuxを新規導入したかなど、実施していない項目は完了として報告しません。
 
-## 音声出力の実機回帰試験
+## 検証結果
 
-APKを既存環境へ上書きした場合は、実行中の旧sessionを一度停止してから起動します。
-これによりhost controller、session runtime v18、Pulse／ALSA drop-in、panel-mobile-v2が
-適用されます。対象環境IDを`ID`へ設定します。最初に、startupが残した状態を変更しない
-read-only snapshotを採取してください。
+2026-09-05の検証です。署名済みAPKはARM64 / x86_64、Play提出用AABはARM64です。
 
-```bash
-ID=対象のcontainer-id
-TERMUX_BASH=/data/data/com.termux/files/usr/bin/bash
+| 確認項目 | 結果 |
+| --- | --- |
+| 単体テスト | 193件成功（app 48件、terminal-emulator 145件）、失敗・スキップなし |
+| Lint | app / termux-runtime / embedded-x11成功 |
+| ホスト・X11コントローラー | 構文、契約、ホスト統合テスト成功 |
+| 初回導入 | Android 15 / API 35 / x86_64 / 4KBでDebian 12、XFCE、日本語環境、Chrome、Node.jsの構築完了 |
+| 中断と再開 | APK更新によるプロセス終了後も同じrootfs inodeと確認用ファイルのSHA-256を維持して再開 |
+| XFCE | 実際のSurface表示、縦横回転、Androidホームから管理画面・デスクトップへの復帰を確認 |
+| 日本語 | MousepadでMozcを選択し、`nihongonyuuryoku`から「日本語入力」へ変換して保存 |
+| Chrome | 152.0.7977.82の画面表示とHTTPSでGitHubリポジトリを表示。ログイン・同期・使用統計送信は使用せず |
+| Node.js | Linux構築ログで22.23.2 / npm 10.9.8を確認 |
+| 起動・停止 | 3回連続でXFCEが1組だけ起動。停止後は同じアプリUIDにLinux/PRoot/入力サービスの残留なし |
+| X11異常終了からの復旧 | 検証用AVDのX11専用プロセスだけを終了させ、新しいX11とXFCEの1組への自動復旧・日本語の画面表示を確認 |
+| バックアップ | 停止した環境をMediaStoreのDownloads/LinuxDesktopへ保存。693,419,242 bytes |
+| 復元 | 同じバックアップを別IDへ復元し、確認用ファイルと日本語入りテキストのSHA-256が一致。日本語のXFCE表示とMousepadで保存済み日本語テキストの再表示を確認。全1,861シンボリックリンクのうち20件を復元先へ付け替え、元のrootfsへのリンクは0件 |
+| 最終APK | 復元・X11復旧後も起動、通知、Androidホームからの復帰、停止を68秒の動画で記録。停止後はAndroidアプリ本体以外の同UIDプロセスが0件 |
+| 公開ページ | デスクトップ1440px・スマホ390pxのブラウザー表示で画像読み込み、横はみ出し、JavaScriptエラーを検査 |
+| ダークテーマ・文字拡大 | 初回画面の文字色を修正し、横画面・文字倍率1.3でスクロールして導入/復元の操作を確認 |
 
-adb exec-out run-as com.termux "$TERMUX_BASH" -lc '
-  export HOME=/data/data/com.termux/files/home
-  export PREFIX=/data/data/com.termux/files/usr
-  export PATH="$PREFIX/bin:/system/bin"
-  STATE="$HOME/.local/share/linux-desktop-for-android"
-  READY="$(cat "$STATE/containers/$1/audio_ready" 2>/dev/null || true)"
-  printf "recorded_audio_ready=%s\n" "${READY:-missing}"
-  if test -S "$PREFIX/var/run/ldfa-pulse-bridge/native"; then
-    printf "audio_socket=present\n"
-  else
-    printf "audio_socket=missing\n"
-  fi
-  env -u PULSE_SERVER pactl list short modules 2>&1
-  PULSE_SERVER="unix:$PREFIX/var/run/ldfa-pulse-bridge/native" pactl list short sinks 2>&1
-  proot-distro login "$1" --shared-tmp \
-    --bind "$PREFIX/var/run/ldfa-pulse-bridge:/tmp/ldfa-pulse" --user desktop -- \
-    /usr/bin/env PULSE_SERVER=unix:/tmp/ldfa-pulse/native \
-    /usr/bin/pactl info 2>&1
-  tail -n 80 "$STATE/logs/$1.log" 2>/dev/null || true
-' ldfa "$ID" > "audio-startup-$ID.txt"
-```
+エミュレーターはSELinux Enforcingで、アプリ自身は非rootのUIDです。診断用にAVDのadb rootを有効にしましたが、Linuxを起動するアプリへroot権限は付与していません。phantom processの監視を無効にする設定も行っていません。
 
-startup合格には、修復前から`recorded_audio_ready=1`、専用socket、専用
-`module-native-protocol-unix`が1個、非`auto_null` sink、guestの`pactl info`成功が必要です。
-そのsnapshotを保存した後で、次のrepair-capable probeを実行します。
+### 16KB環境の結果と未確認項目
 
-```bash
-adb exec-out run-as com.termux "$TERMUX_BASH" -lc '
-  export HOME=/data/data/com.termux/files/home
-  export PREFIX=/data/data/com.termux/files/usr
-  export PATH="$PREFIX/bin:/system/bin"
-  "$HOME/.local/share/linux-desktop-for-android/bin/ldfa-host" audio-probe "$1"
-' ldfa "$ID"
-```
+APKの18ライブラリ、ARM64 AABの9ライブラリの全LOAD segmentについて16KB alignmentを検証し、双方のARM64ライブラリ、ホストスクリプト、全DEXが一致します。専用bootstrapもARM64 669個、x86_64 668個の実行形式/共有ライブラリの配置を検証しています。
 
-合格時は`audio_server=1`、`audio_guest=1`、専用socket path、`auto_null`ではない
-`audio_sink`が出力されます。ただし`audio-probe`はdaemon／module／socketを修復し、
-`audio_ready` metadataも更新するため、startup成功の証拠には使用しません。再生中のstreamは
-Termux側で次のように確認します。
+Android 17のx86_64 16KBプレビューAVDでは、アプリ・bootstrap・Debianの展開は成功しましたが、ゲストの`/usr/bin/env`起動時にSIGBUS（signal 7）が発生しました。導入は失敗状態となり、ログと修復の入口を表示します。再試行でも再現しました。原因を特定したとはしておらず、Linuxデスクトップが16KBで動作したという結果には含めません。
 
-```bash
-adb exec-out run-as com.termux "$TERMUX_BASH" -lc '
-  export PREFIX=/data/data/com.termux/files/usr
-  export PATH="$PREFIX/bin:/system/bin"
-  PULSE_SERVER="unix:$PREFIX/var/run/ldfa-pulse-bridge/native" pactl list short sink-inputs
-'
-```
+ARM64 16KBでのLinux実行、音声の試聴、実機のタッチ・物理キーボード操作、長時間負荷やGoogleアカウントへのログインは、この検証では未確認です。Google Playの審査・配信の承認もパッケージ検証とは別です。
 
-次のシナリオをnative X11とVNC fallbackの両方で確認します。
-
-- Chromeで音声付き動画を再生し、再生中だけsink-inputが現れる
-- XFCE panelに音量項目があり、mute／unmuteと音量変更が反映される
-- 本体speaker、Bluetoothまたは有線出力へAndroid側routeを切り替えられる
-- stop→startを3回繰り返して専用`module-native-protocol-unix`が重複しない
-- PulseAudioを停止した後の次回startでdaemon、socket、実sinkが自動復旧する
-- 既存のユーザー`~/.config/pulse/client.conf`と`~/.asoundrc`が変更されない
-
-再現可能な証跡には次も保存します。これらは内蔵ターミナルで実行できます。
-
-```bash
-# stop→start各回で、専用moduleが常に1個であることを記録
-env -u PULSE_SERVER pactl list short modules | awk \
-  -v wanted="socket=$PREFIX/var/run/ldfa-pulse-bridge/native" '
-    $2 == "module-native-protocol-unix" && index($0, wanted) { count++ }
-    END { printf "ldfa_pulse_modules=%d\n", count }
-  '
-
-# 約444 Hzのsquare waveを3秒再生。pulseaudio-utilsのpacatだけを使用。
-# bridge socketは$PREFIX/tmp外にあるため、guestの/tmp/ldfa-pulseへ明示bindする。
-proot-distro login "$ID" --shared-tmp \
-  --bind "$PREFIX/var/run/ldfa-pulse-bridge:/tmp/ldfa-pulse" --user desktop -- /bin/bash -c '
-  export LC_ALL=C
-  export PULSE_SERVER=unix:/tmp/ldfa-pulse/native
-  for ((i=0; i<24000; i++)); do
-    if (( (i / 9) % 2 )); then printf "\340"; else printf "\040"; fi
-  done | pacat --raw --format=u8 --rate=8000 --channels=1
-'
-
-# user設定の更新前後を別ファイルへ保存し、diffが空であることを確認
-proot-distro login "$ID" -- /bin/bash -c '
-  for file in /home/desktop/.config/pulse/client.conf /home/desktop/.asoundrc; do
-    if [[ -f "$file" ]]; then sha256sum "$file"; else printf "MISSING  %s\n" "$file"; fi
-  done
-' > audio-user-config-before.txt
-# APK更新、stop→start、音声試験の後に同じcommandを
-# audio-user-config-after.txtへ保存し、diff -uで比較する。
-```
-
-stale daemon復旧は、テスト対象の環境をUIで停止した後に次を実行し、その後UIから再度
-起動して、修復前snapshotを採取します。
-
-```bash
-env -u PULSE_SERVER pulseaudio --kill
-```
-
-Android側のroute証跡は、再生前にlogcatをclearし、再生中／直後に保存します。
-
-```bash
-adb logcat -c
-adb shell dumpsys audio > audio-route.txt
-adb shell dumpsys media.audio_flinger > audio-flinger.txt
-adb logcat -d -v threadtime > audio-logcat.txt
-grep -Ei 'AudioTrack|AudioFlinger|AudioPolicy|AAudio|OpenSL|pulse|com\.termux' \
-  audio-logcat.txt > audio-logcat-filtered.txt
-```
-
-clean installと既存環境upgradeを分け、本体speaker／Bluetooth／有線の各routeについて、
-`recorded_audio_ready`、module個数、sink名、再生中sink-input、実際に聞こえたかを記録します。
-
-`pactl info`やsink-inputの成功はtransportの証明であり、端末固有のAndroid audio route
-から実際に可聴出力されたことの代用にはなりません。最後は本体speakerと利用予定の
-Bluetooth／イヤホンで人が音を確認します。
-
-## Chrome／Gboard回帰試験
-
-v1.1.0は、API 35 x86_64・4 GB RAM AVDの既存Debian環境へ更新インストールして次を確認しています。
-
-- Chrome launcher v8とXFCE session runtime v17への自動移行
-- Googleログイン画面のメール入力欄でGboardを表示
-- Gboard表示中にX11画面が可視領域へ縮小し、閉じると元の解像度へ戻る
-- Gboard表示後にGmailへ移動し、履歴画面からLDFAへ戻る操作を10回連続で実行して、各回1秒後にChrome／XFCEが黒画面でないことを画像輝度と目視で確認
-- `test`をGboardからcomposition入力し、候補を確定
-- LDFA main process、`:x11` process、Chromeが入力後も生存
-- Chromeは`--renderer-process-limit=2`で起動し、コンテンツ用2個と`--top-chrome-webui`用1個の計3 renderer processで安定
-- `FATAL EXCEPTION`、low-memory終了なし
-- 通常の履歴復帰を8秒動画で記録し、LDFA card選択後約0.25秒でChrome／XFCE全体を再表示。要求する1〜2秒以内を満たす
-- 通常復帰中の同一UID process数を約15 ms間隔で180回sampleし、全sampleで28個（Android main／`:x11`を除くapp childは26個）に固定。RunCommand、PRoot、診断shellの一時増加なし。修正前に観測した最大34個（app child 32個）を回避
-- 履歴表示中にChrome launcher、本体、全helper／rendererと、`xfsettingsd`、`xfwm4`、Panel、Desktop、通知／tray helperの計16 processをSIGKILLし、80 ms後にLDFAへ復帰する最悪ケースを16秒動画で記録
-- runtime v17で同じ16 process同時終了を3回実行。XFCE 4要素は動画記録回で約0.28秒、Chrome主processを含む必要要素は1.24／1.42／2.03秒で再生成し、約3〜4秒でChrome内容を自動復元。マウスポインタだけの永久黒画面にならないことを確認。Chromeの実process再作成が必要な場合は内容描画が1〜2秒を超えるため、通常復帰の基準と区別する
-- 復旧した`xfsettingsd`、`xfwm4`、Panel、Desktopの全PIDが新しくなり、Chromeは`--restore-last-session`で再起動
-- 3回とも再欠落sampleは0、復旧中の同一UID process最大値は30〜31（Android main／`:x11`を除くapp childは28〜29）で既定32未満。`ldfa-session` PIDは全回不変、`desktop health failed`件数は増えず、二度目のsession再構築、Foreground Service再起動、heartbeat repair、関連SELinux拒否ログは0件
-- Chrome launcherと全Chrome processだけを同時終了する試験では、`xfsettingsd`だけを監視wake用に交換してChromeを復元し、`xfwm4`、Panel、DesktopのPIDを維持
-- Gmailを前面にしてLDFA main processだけを強制終了する試験でも、`:x11`とChromeを維持したまま再生成viewerが既存セッションへ再接続
-
-Pixel 10aではnative起動・表示倍率の拡大・上書き更新インストール・Googleログインのパスワード入力までは確認済みです。このAVD結果は、Gmail本人確認から戻る物理端末での受け入れを置き換えません。ARM64 16 KB page端末のE2Eは継続検証中です。
+[以前の検証履歴](history/testing-before-1.2.md)は、旧バージョンの参考資料です。

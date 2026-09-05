@@ -87,7 +87,24 @@ class BackupPipelineTest {
             metaOut = metaOut,
             total = 0,
             progress = null,
+            sourceContainer = manifest(0, 0).container,
         )
+    }
+
+    @Test
+    fun `restored PRoot hard links refer only to the new rootfs`() {
+        val src = tmp.newFolder("linked-source")
+        val locale = File(src, "usr/lib/locale").apply { mkdirs() }
+        val oldRoot = BackupRootfsLinks.sourceRoots(manifest(0, 0).container).first()
+        File(locale, ".l2s.locale.0000").writeText("日本語ロケールのデータ")
+        Files.createSymbolicLink(File(locale, ".l2s.locale.0001").toPath(), File("$oldRoot/usr/lib/locale/.l2s.locale.0000").toPath())
+        Files.createSymbolicLink(File(locale, "locale-archive").toPath(), File("$oldRoot/usr/lib/locale/.l2s.locale.0001").toPath())
+        val archive = writeLdfa(src, null)
+        val out = tmp.newFolder("linked-destination")
+        extract(archive, out, tmp.newFolder("linked-meta"))
+        src.deleteRecursively()
+        assertEquals("日本語ロケールのデータ", File(out, "usr/lib/locale/locale-archive").readText())
+        assertTrue(Files.readSymbolicLink(File(out, "usr/lib/locale/locale-archive").toPath()).toString().startsWith(out.canonicalPath + "/"))
     }
 
     @Test
@@ -207,4 +224,26 @@ class BackupPipelineTest {
         // throwing despite the unreadable dir. Restore read permission for cleanup.
         if (madeUnreadable) locked.setReadable(true, false)
     }
+    @Test
+    fun `corrupted checksum is rejected`() {
+        val src = tmp.newFolder("corruption-source")
+        File(src, "important.txt").writeText("preserve this data")
+        val archive = writeLdfa(src, null)
+        archive[archive.size - 40] = (archive[archive.size - 40].toInt() xor 1).toByte()
+        org.junit.Assert.assertThrows(BackupFormatException::class.java) {
+            extract(archive, tmp.newFolder("corrupt-out"), tmp.newFolder("corrupt-meta"))
+        }
+    }
+
+    @Test
+    fun `truncated archive cannot report a successful restore`() {
+        val src = tmp.newFolder("truncation-source")
+        File(src, "important.txt").writeText("preserve this data")
+        val archive = writeLdfa(src, null)
+        val truncated = archive.copyOf(archive.size - 24)
+        org.junit.Assert.assertThrows(Exception::class.java) {
+            extract(truncated, tmp.newFolder("truncated-out"), tmp.newFolder("truncated-meta"))
+        }
+    }
+
 }

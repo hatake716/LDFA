@@ -44,6 +44,7 @@ class BackupReader {
         metaOut: File,
         total: Long,
         progress: Progress?,
+        sourceContainer: BackupManifest.ContainerInfo? = null,
     ): ExtractResult {
         val digest = MessageDigest.getInstance("SHA-256")
         // Only the payload bytes (payloadLength) participate in the digest; the
@@ -57,6 +58,7 @@ class BackupReader {
         metaOut.mkdirs()
         val rootfsCanon = rootfsOut.canonicalFile
         val metaCanon = metaOut.canonicalFile
+        val sourceRoots = sourceContainer?.let(BackupRootfsLinks::sourceRoots).orEmpty()
 
         var processed = 0L
         var lastTick = 0L
@@ -85,7 +87,10 @@ class BackupReader {
                 Tar.Type.SYMLINK -> {
                     dest.parentFile?.mkdirs()
                     if (dest.exists() || Files.isSymbolicLink(dest.toPath())) dest.delete()
-                    runCatching { Files.createSymbolicLink(dest.toPath(), File(e.linkTarget).toPath()) }
+                    val target = if (e.path.startsWith("rootfs/")) {
+                        BackupRootfsLinks.rebase(e.linkTarget, sourceRoots, rootfsCanon)
+                    } else e.linkTarget
+                    Files.createSymbolicLink(dest.toPath(), File(target).toPath())
                 }
                 Tar.Type.FILE -> {
                     dest.parentFile?.mkdirs()

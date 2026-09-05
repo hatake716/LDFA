@@ -8,14 +8,11 @@ import java.io.File
  * data dir is the fixed Termux prefix root ($PREFIX = filesDir/usr, $HOME =
  * filesDir/home), so these paths are direct File handles — no PRoot, no root.
  */
-class BackupPaths(context: Context) {
-    private val files: File = context.filesDir
+class BackupPaths(private val files: File) {
+    constructor(context: Context) : this(context.filesDir)
 
     /** $HOME/.local/share/linux-desktop-for-android */
     private val base = File(files, "home/.local/share/linux-desktop-for-android")
-
-    val defaultBackupDir: File
-        get() = File("/storage/emulated/0/LinuxDesktop/backups")
 
     fun metaDir(id: String): File = File(base, "containers/$id")
 
@@ -23,6 +20,7 @@ class BackupPaths(context: Context) {
     fun rootfsDir(id: String): File? {
         val prootBase = File(files, "usr/var/lib/proot-distro")
         val candidates = listOf(
+            File(files, "home/.local/share/proot-distro/containers/$id/rootfs"),
             File(prootBase, "containers/$id/rootfs"),
             File(prootBase, "installed-rootfs/$id"),
         )
@@ -52,6 +50,10 @@ class BackupPaths(context: Context) {
     /** True when the container is safely stopped (no writer touching the rootfs). */
     fun isStopped(id: String): Boolean {
         val s = state(id)?.lowercase()
-        return s == null || s == "ready" || s == "failed" || s == "queued"
+        if ((s != "ready" && s != "failed") || readMeta(id, "installed") != "1") return false
+        return listOf("ldfa-install-$id", "ldfa-run-$id").none { session ->
+            val pid = File(base, "run/$session.pid").takeIf { it.isFile }?.readText()?.trim()?.toLongOrNull()
+            pid != null && pid > 0 && File("/proc/$pid").exists()
+        }
     }
 }

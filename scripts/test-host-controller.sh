@@ -248,7 +248,7 @@ grep -q '^host_ready=1$' <<<"$report"
 grep -q '^storage=1$' <<<"$report"
 grep -q '^embedded_x11=1$' <<<"$report"
 grep -q '^audio_tools=1$' <<<"$report"
-grep -q '^version=1.1.0$' <<<"$report"
+grep -q '^version=1.2.0$' <<<"$report"
 
 audio_report="$(bash "$controller" audio-probe)"
 grep -q '^audio_server=1$' <<<"$audio_report"
@@ -399,6 +399,30 @@ bash "$controller" worker-install pin-test
 [[ "$(cat "$XDG_DATA_HOME/linux-desktop-for-android/containers/pin-test/installed")" == 1 ]]
 bash "$controller" delete pin-test 1
 
+# Creation works without shared-storage access and never publishes partial metadata.
+controller_functions="$sandbox/controller-functions.sh"
+sed '/^main "\$@"$/d' "$controller" > "$controller_functions"
+(
+  source "$controller_functions"
+  SHARED_ROOT="$sandbox/shared-storage-blocked"
+  : > "$SHARED_ROOT"
+  cmd_create private-storage-test 'アプリ内だけの環境' >/dev/null
+  [[ "$(read_meta private-storage-test name)" == 'アプリ内だけの環境' ]]
+  [[ "$(read_meta private-storage-test state)" == queued ]]
+  [[ -f "$SHARED_ROOT" ]]
+)
+if bash -c '
+  source "$1"
+  write_meta() { return 42; }
+  cmd_create failed-metadata-test "書き込み失敗"
+' _ "$controller_functions"; then
+  echo 'metadata write failure was ignored'; exit 1
+fi
+[[ ! -e "$XDG_DATA_HOME/linux-desktop-for-android/containers/failed-metadata-test" ]]
+if compgen -G "$XDG_DATA_HOME/linux-desktop-for-android/containers/.create-failed-metadata-test-*" >/dev/null; then
+  echo 'incomplete metadata staging was retained'; exit 1
+fi
+
 # --- Timezone sync (HANDOVER-timezone) ---------------------------------------
 # getprop is the source of truth for the Android timezone.
 cat > "$sandbox/bin/getprop" <<'GETPROP'
@@ -471,5 +495,101 @@ grep -q '^android_timezone=Asia/Tokyo$' <<<"$tz_report"
 grep -q '^guest_localtime=/usr/share/zoneinfo/Asia/Tokyo$' <<<"$tz_report"
 grep -q '^guest_timezone=Asia/Tokyo$' <<<"$tz_report"
 grep -q '^timezone_ready=1$' <<<"$tz_report"
+
+# A stale native worker PID must never target an unrelated process.
+(
+  source "$tz_lib"
+  export LDFA_NATIVE_PROOT=1
+  sleep 30 & unrelated_pid=$!
+  python3 -c 'import time; time.sleep(30)' "$SELF" worker-run identity-test 1 & owned_pid=$!
+  trap 'kill "$unrelated_pid" "$owned_pid" 2>/dev/null || true; wait "$unrelated_pid" "$owned_pid" 2>/dev/null || true' EXIT
+  mkdir -p "$RUN_ROOT"
+  printf '%s\n' "$unrelated_pid" > "$(session_pid_file ldfa-run-identity-test)"
+  ! session_alive ldfa-run-identity-test
+  session_kill ldfa-run-identity-test
+  kill -0 "$unrelated_pid"
+  printf '%s\n' "$owned_pid" > "$(session_pid_file ldfa-run-identity-test)"
+  for attempt in {1..20}; do
+    session_alive ldfa-run-identity-test && break
+    sleep 0.05
+  done
+  session_alive ldfa-run-identity-test
+  # A RUN_COMMAND prefix alias must recognize a worker using Java's real path.
+  original_self="$SELF"
+  mkdir -p "$(dirname "$SELF")"
+  touch "$SELF"
+  ln -s "$(dirname "$SELF")" "$sandbox/controller-alias"
+  SELF="$sandbox/controller-alias/$(basename "$SELF")"
+  session_alive ldfa-run-identity-test
+  ln "$original_self" "$sandbox/controller-hardlink"
+  SELF="$sandbox/controller-hardlink"
+  session_alive ldfa-run-identity-test
+  SELF="$original_self"
+  session_kill ldfa-run-identity-test
+  wait "$owned_pid" 2>/dev/null || true
+  ! kill -0 "$owned_pid" 2>/dev/null
+)
+
+# Image publication is atomic and refuses an existing user's rootfs.
+(
+  source "$tz_lib"
+  staging_id=ldfa-image-atomic-test
+  staged="$PREFIX/var/lib/proot-distro/containers/$staging_id/rootfs"
+  final="$PREFIX/var/lib/proot-distro/containers/atomic-test/rootfs"
+  mkdir -p "$staged/etc" "$staged/bin"
+  printf 'complete image' > "$staged/bin/bash"
+  printf 'retained data' > "$staged/etc/sentinel"
+  [[ ! -e "$final" ]]
+  publish_staged_rootfs atomic-test "$staging_id"
+  [[ ! -e "$staged" ]]
+  [[ "$(cat "$final/etc/sentinel")" == 'retained data' ]]
+  mkdir -p "$staged/etc" "$staged/bin"
+  printf 'replacement' > "$staged/bin/bash"
+  if (publish_staged_rootfs atomic-test "$staging_id") 2>/dev/null; then
+    echo 'existing rootfs was replaced'; exit 1
+  fi
+  [[ "$(cat "$final/etc/sentinel")" == 'retained data' ]]
+)
+
+# Explicit exit (rather than a failing simple command) must end the busy state.
+if bash -c '
+  source "$1"
+  native_proot_mode() { return 1; }
+  container_exists() { return 1; }
+  install_container() { return 1; }
+  mkdir -p "$(meta_dir exit-test)"
+  worker_install exit-test
+' _ "$tz_lib"; then
+  echo 'failed installation unexpectedly succeeded'; exit 1
+fi
+[[ "$(cat "$XDG_DATA_HOME/linux-desktop-for-android/containers/exit-test/state")" == failed ]]
+grep -q 'worker failed: exit=1' "$XDG_DATA_HOME/linux-desktop-for-android/logs/exit-test.log"
+
+# The emitted setup is valid guest shell, preserves stdin and command failures,
+# and does not attempt a second proot login for package operations.
+(
+  source "$tz_lib"
+  guest_apps_script > "$sandbox/guest-apps.sh"
+  bash -n "$sandbox/guest-apps.sh"
+  sed '/^step "Debianの音声/,$d' "$sandbox/guest-apps.sh" > "$sandbox/guest-apps-library.sh"
+  source "$sandbox/guest-apps-library.sh"
+  result="$(printf 'guest stdin' | pd_login guest --timeout 2 -- env LDFA_GUEST_TEST=ready bash -c 'printf "%s:" "$LDFA_GUEST_TEST"; cat')"
+  [[ "$result" == 'ready:guest stdin' ]]
+  ! pd_login guest -- bash -c 'exit 23'
+  desktop_session_script > "$sandbox/guest-session.sh"
+  grep -Fxq "$DESKTOP_RUNTIME_MARKER" "$sandbox/guest-session.sh"
+)
+
+# A killed worker's request must not supply old scale/display settings on restart.
+(
+  source "$tz_lib"
+  native_proot_mode() { return 0; }
+  session_alive() { return 1; }
+  request="$(session_request_file "$(run_session "$id")")"
+  mkdir -p "$RUN_ROOT"
+  printf 'LDFA_SCALE=100\n' > "$request"
+  start_run_worker "$id" 1
+  [[ ! -e "$request" ]]
+)
 
 echo "Debian XFCE host controller integration test passed"

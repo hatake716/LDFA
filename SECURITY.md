@@ -14,12 +14,12 @@
 - `WAKE_LOCK`: インストール中・実行中の意図しない停止を減らす
 - `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`: ユーザーが安定動作設定を開くために使用
 
-平文通信（cleartext）は一切使用しません（Androidプラットフォームの既定どおりブロックされます。かつて唯一の利用箇所だったローカルnoVNCフォールバック表示は廃止済み）。root権限は要求しません。
+Android側のネットワークAPIは既定の平文通信制限を使います。Linuxのパッケージ管理やユーザーが実行するネイティブプログラムの通信は、AndroidのNetwork Security Configの制限を受けるとは限りません。DebianのAPT取得はリポジトリ署名で検証します。Androidのroot権限は要求しません。
 
 ## 内蔵コマンド実行
 
 - `RunCommandService`と`TermuxService`は`android:exported="false"`です。
-- `com.termux.permission.RUN_COMMAND`はsignature権限です。
+- `com.hatake716.linuxdesktop.permission.RUN_COMMAND`はsignature権限です。
 - Termux upstreamの内部ポリシー確認を満たすため、アプリ自身が`allow-external-apps=true`を内部プロパティへ設定しますが、サービスは外部公開しません。
 - コマンド送信先は同一APK内の明示的コンポーネントに固定します。
 - 結果受信用PendingIntentは同一APK内の非公開サービスを宛先とします。
@@ -30,7 +30,7 @@
 
 ## X11
 
-Xorgは非公開Foreground Service `EmbeddedX11ServerService` の専用 `com.termux:x11` プロセスで起動します。旧 `/system/bin/app_process`、loader APK、shell所有のAndroidライフサイクルは使用しません。
+Xorgは非公開Foreground Service `EmbeddedX11ServerService` の専用 `com.hatake716.linuxdesktop:x11` プロセスで起動します。旧 `/system/bin/app_process`、loader APK、shell所有のAndroidライフサイクルは使用しません。
 
 表示Activityは同一アプリ内でServiceへ直接bindし、非公開BinderからX接続FDを受け取ります。X11 TCPは無効で、Unix socketはTermuxプレフィックス内の`$PREFIX/tmp/.X11-unix`へ作成します。Debianは`proot-distro --shared-tmp`で同じtmpを共有します。
 
@@ -44,7 +44,7 @@ Google ChromeはGoogle公式のstableパッケージをDebian環境へ実行時�
 
 ## 実行コードの出所
 
-LDFAは「ユーザーが自分で構築するLinux環境」を提供するアプリです。APKには起点となるTermux bootstrap（bash・apt・dpkg・tar等）とPRootエンジン（`libpdrt.so`）を同梱します。それ以外の実行コードは、ユーザーの操作を起点に実行時取得され、**すべてPRootサンドボックス内で非特権のアプリUIDとして動作します**。取得したコードが署名済みAPK・そのdex／ネイティブコード・Google Playが配信したバイナリを書き換えることはできません。
+LDFAは「ユーザーが自分で構築するLinux環境」を提供するアプリです。APKには起点となるTermux bootstrap（bash・apt・dpkg・tar等）とPRootエンジン（`libpdrt.so`）を同梱します。それ以外の実行コードは、ユーザーの操作を起点に実行時取得され、**非特権のAndroidアプリUIDで、PRootを使ったLinuxユーザー環境として動作します**。取得したコードが署名済みAPK・そのdex／ネイティブコード・Google Playが配信したバイナリを書き換えることはできません。
 
 実行時に取得される実行コードと、その完全性検証は以下の通りです。
 
@@ -59,7 +59,7 @@ LDFAは「ユーザーが自分で構築するLinux環境」を提供するア�
 
 ※ Chromeはユーザーが選んで導入するゲストソフトウェアであり、Googleの署名付きaptリポジトリと鍵を追加してインストールします。
 
-すべての実行時取得はHTTPS経由です。取得したコードはPRoot内のゲスト環境でのみ実行され、Androidアプリの挙動やAPKを変更しません。これはGoogle Playの「Device and Network Abuse」ポリシーにおける、インタプリタ／仮想マシン／サンドボックス環境の例外に該当します。
+Linuxのrootfsや追加アプリは公開元の配布元から取得し、APTでは署名を検証します。Linuxコードは署名済みAPKのdexやネイティブライブラリを置き換えませんが、PRootは同一アプリUID内の強い隔離境界ではありません。Google Play提出時は、実行コードの取得方法、Android APIとの境界、前景サービスの用途を具体的に申告します。ポリシーの例外適用や審査通過を、この構成だけで保証するものではありません。
 
 ## 既知のリスク
 

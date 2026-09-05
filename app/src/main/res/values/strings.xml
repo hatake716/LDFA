@@ -2,7 +2,7 @@
     <string name="app_name">LDFA</string>
     <string name="keep_alive_channel_name">LDFA Linuxデスクトップ</string>
     <string name="keep_alive_notification_title">LDFAでLinuxデスクトップを実行中</string>
-    <string name="keep_alive_notification_text">Androidによる終了を検知した場合は自動復旧します</string>
+    <string name="keep_alive_notification_text">実行中のLinuxを監視しています。ホーム画面から停止できます</string>
     <string name="stop">停止</string>
 
     <!-- バックアップ / 復元 -->
@@ -14,11 +14,11 @@
     <string name="backup_notif_creating">バックアップを作成中…</string>
     <string name="backup_notif_done">%1$s を作成しました（%2$s）</string>
     <string name="backup_path_label">保存先</string>
-    <string name="backup_done_location">保存先: スマホ本体（内部ストレージ）▸ LinuxDesktop ▸ backups\n「ファイル」アプリから取り出せます。</string>
+    <string name="backup_done_location">保存先: スマホ本体 ▸ ダウンロード ▸ LinuxDesktop\n「ファイル」アプリから取り出せます。</string>
     <string name="backup_skipped_note">特殊ファイル %1$d 件をスキップ、%2$d 件は読み取れませんでした</string>
     <string name="restore_notif_running">バックアップから復元中…</string>
     <string name="restore_notif_done">「%1$s」を復元しました</string>
-    <string name="restore_done_detail">ホーム画面の一覧に追加されました。初回起動時に環境を初期化します。</string>
+    <string name="restore_done_detail">ホーム画面の一覧に追加されました。初回起動時に、この端末で使う表示・実行設定を確認します。</string>
 
     <!-- バックアップ画面 -->
     <string name="backup_menu_create">バックアップを作成</string>
@@ -30,7 +30,10 @@
     <string name="backup_dest">保存先フォルダ</string>
     <string name="backup_dest_default">スマホ本体 ▸ ダウンロード ▸ LinuxDesktop</string>
     <string name="backup_dest_hint">「ファイル」アプリのダウンロードにある LinuxDesktop フォルダから取り出せます。</string>
-    <string name="backup_notif_exporting">バックアップをダウンロードへ書き出しています…</string>
+    <string name="backup_notif_exporting">バックアップを保存先へ書き出しています…</string>
+    <string name="backup_dest_legacy">LDFAのアプリ専用保存先 ▸ backups</string>
+    <string name="backup_hint_legacy">完了画面の保存先から取り出せます。アンインストール前に端末外へコピーしてください。</string>
+    <string name="backup_done_location_legacy">アプリ専用の保存先に保存しました。アンインストールすると消えるため、必要なバックアップは端末外へコピーしてください。</string>
     <string name="backup_dest_fullpath">フルパス: %1$s</string>
     <string name="backup_start">バックアップを開始</string>
     <string name="backup_running">バックアップ中…</string>

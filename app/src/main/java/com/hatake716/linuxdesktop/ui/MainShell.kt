@@ -82,7 +82,7 @@ internal fun MainShell(
             }
         },
         floatingActionButton = {
-            if (selectedTab == ShellTab.DESKTOPS) {
+            if (selectedTab == ShellTab.DESKTOPS && !state.installation.busy && !state.containers.any { it.state.isBusy }) {
                 ExtendedFloatingActionButton(
                     onClick = onAdd,
                     icon = { Icon(Icons.Rounded.Add, contentDescription = null) },

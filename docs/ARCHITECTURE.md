@@ -1,228 +1,99 @@
-# アーキテクチャ
+# LDFAの内部構成
 
-## 全体構成
+対象は1.2.0です。アプリIDは`com.hatake716.linuxdesktop`、実行環境のprefixは`/data/data/com.hatake716.linuxdesktop/files/usr`です。
 
-LDFA は外部 Termux、外部 Termux:X11、外部 VNC クライアントを前提にしない単一 APK です。公式 Termux bootstrap が固定パスを前提とするため、`applicationId` は `com.termux` のままです。
+## モジュール
 
-```text
-Android main process (com.termux)
-  ├─ Jetpack Compose 管理 UI
-  ├─ embedded Termux terminal / RunCommandService
-  ├─ Termux:X11 MainActivity / LorieView / EGL renderer
-  └─ DesktopKeepAliveService
-                    │
-                    │ direct Binder + socketpair FD
-                    ▼
-Android X11 process (com.termux:x11)
-  └─ EmbeddedX11ServerService / libXlorie / Xorg :1
-                    │
-                    │ $PREFIX/tmp/.X11-unix/X1
-                    ▼
-Debian PRoot
-  ├─ XFCE / xfwm4
-  ├─ ja_JP.UTF-8 / Noto fonts
-  ├─ Fcitx5 + Mozc
-  ├─ sudo / desktop user
-  └─ /mnt/android
+| モジュール | 責務 |
+| --- | --- |
+| `app` | Compose UI、導入とセッションの状態、PRootの所有、バックアップ |
+| `termux-runtime` | TermuxのActivity / Service、内蔵コマンド実行、bootstrap展開 |
+| `embedded-x11` | X11ビューアー、Binderによる接続、JNIと描画の補強 |
+| `vendor/termux-app` | 固定prefixとAndroid向けのローカルパッチを含むTermuxソース |
+| `vendor/termux-x11` | 固定コミットのX11ソースと再帰submodule |
 
-native が成立しない場合:
-  Debian PRoot / XFCE ── DISPLAY=:2 ── Xtigervnc + noVNC
-```
+管理UIとビューアーはメインプロセス、Xorgは非公開サービスの`:x11`プロセスで動作します。
+`:x11`ではTermuxのコマンドソケットを初期化せず、メインプロセスの接続を奪わないようにします。
 
-Xorg サーバーは専用 `:x11` process に隔離されています。表示 Activity と EGL renderer は現在 main process にあるため、renderer の native 不具合は管理 UI も巻き込み得ます。このため、既知の mutex、EGL 初期化、JNI ABI、再接続、teardown の不具合を build-time overlay で修正しています。将来さらに隔離する場合は、viewer 専用 process と AIDL health interface が必要です。
-
-## 内蔵モジュール
-
-- `termux-runtime`: 固定した `termux/termux-app` ソース、公式 bootstrap、terminal、RunCommandService を Android Library として内蔵します。
-- `embedded-x11`: 固定した `termux/termux-x11` の AIDL、resources、Java viewer、`libXlorie.so` を内蔵します。
-- `app`: Compose UI、Debian controller、display backend 選択、foreground watchdog を所有します。
-
-`:x11` process では `TermuxApplication` の main-process 初期化を実行しません。同じ `termux-am` Unix socket を remote process が unlink / bind して main process から奪うことを防ぎます。
-
-## X11 プロセスと接続
-
-旧版の `/system/bin/app_process`、loader APK、localhost TCP 7892、通常接続用 broadcast は使用しません。
+## Linuxの導入
 
 ```text
-LinuxDesktopRepository
-  │
-  ├─ startForegroundService
-  ▼
-EmbeddedX11ServerService (:x11)
-  │  EmbeddedX11ServerBridge.start()
-  │  Xorg :1
-  │
-  └─ ICmdEntryInterface Binder
-          │ getXConnection() -> socketpair FD
-          ▼
-Termux:X11 MainActivity -> LorieView -> EGL -> Android Surface
+ユーザーの導入操作
+  → Foreground Serviceを開始
+  → Application所有の導入ジョブ
+  → APK内bootstrapをusr-stagingに展開・検査
+  → 空のprefixに原子的に配置（既存の非空prefixを破壊しない）
+  → 非公開RunCommandの設定とホストツールを確認
+  → 環境のメタデータを一時領域で作成して確定（共有ストレージへの書き込みは任意）
+  → native PRootのインストールworkerを開始
+  → 非公開の一時環境名でDebianのrootfsを取得・展開
+  → 展開完了後に本来のrootfsへ原子的に移動
+  → 原子的にprovision requestを公開
+  → 別の単層PRootでapt・XFCE・日本語環境・Chrome・Node.js・セッション設定を構築
+  → ready
 ```
 
-Activity は launch Intent の Binder を最初の接続試行より先に取り込みます。古い Binder の death callback と古い socket FD の HUP は、現在の世代と一致する場合だけ接続状態を解除します。Service 起動ごとに UUID generation と PID marker を発行し、実 socket、X lock owner、service process が同じ世代に揃ってから ready とします。停止時は viewer を先に切断し、marker の PID が終了するまで待ってから次の世代を開始します。停止開始前の遅延 `bindService` callback は世代番号で破棄します。
+`LinuxDesktopApplication`のジョブとStateFlowはActivityの再作成では失われません。メインプロセスが終了した場合は、ディスク上のメタデータとworkerの生存状態を照合し、次回の管理画面表示時に一度だけ自動再開を試みます。明示的な修復は再試行の制限を解除します。
 
-上流 Java にあった `@CriticalNative` / `@FastNative` は生成時に除去し、登録する C/C++ 関数を通常 JNI ABI に統一します。Android 8〜13 での ABI 不一致と、blocking connection call を CriticalNative として実行する問題を避けます。
+展開済みrootfsは削除しません。`dpkg --configure -a`、検証付きAPT更新、依存関係の修復を経て構築を続けます。失敗したゲストプロセスが終了マーカーを残せない場合も、Android側の所有Processが終了を監督プロセスへ通知します。要求ファイル待ちには上限があり、期限切れでプロセスを残し続けません。
 
-## Renderer の安全境界
+パッケージを書き換える処理は、ChromeやNode.jsの追加導入も含めて単層PRootで実行します。二重のPRootでAPTのrename処理がENOSYSになる実行経路を避けます。`guest_apps_script`は既存の設定関数からゲスト用スクリプトを生成し、初回導入と既存環境の更新で共有します。起動時の更新は`prepare-apps`で要求を確定し、アプリがゲストを実行してから`finish-apps`で結果を照合します。失敗・キャンセル・期限切れ時は所有Processを回収します。
 
-`embedded-x11/scripts/prepare_embedded_native.py` は pinned submodule を直接変更せず、guard 付きで次を生成します。
+workerの明示的なexitも失敗状態へ反映し、ローダーのエラーはゲストのシェルが起動する前からログへ保存します。PIDの照合ではAndroidの`/data/data`と`/data/user/0`の別名も解決します。
 
-- renderer loop は最初の `pthread_cond_wait` / unlock より前に必ず `stateLock` を取得する
-- `STOPPED / STARTING / READY / FAILED / STOPPING` を明示する
-- EGL display、config、context、surface、`eglMakeCurrent`、shader の全段階を検査する
-- 初期化失敗時は全 waiter を起こし、部分的な EGL / Surface 資源を renderer thread 上で解放する
-- shared cond allocation failureで `abort()` せず `FAILED` にする
-- state / window acknowledgement と GPU fence に上限時間を設ける
-- 作成済み thread は EGL context の成否にかかわらず join する
-- reconnect 時の古い FD callback が新しい接続を閉じないよう世代を照合する
-- `SurfaceView` の detach 後に再 attach された場合は native context、Surface、Binder FD を再構築する
+進捗はゲストが原子的に書くphaseファイルから取得し、ホストの状態ファイルへ反映します。パーセンテージは構築段階の目安であり、ダウンロード済みバイト数や残り時間ではありません。
 
-CMake は同じ生成 overlay 内で upstream の `/usr/bin/gcc` 固定指定も置き換え、Android cross compiler ではなく build host の `cc` / `gcc` を検出して `makekeys` を作ります。
+## AndroidとPRootの境界
 
-## 起動トランザクション
+Android向けPRootとloaderをAPK内のネイティブライブラリとして収録し、`nativeLibraryDir`から実行します。`extractNativeLibs=true`が必要です。実行環境は専用prefix向けにソースから作ったbootstrapを使い、公式Termuxの既成バイナリを流用しません。
 
-管理 Activity ではなく `LinuxDesktopApplication` 所有の coroutine が起動トランザクションを継続します。画面回転、low-memory recreation、開発者オプションの「アクティビティを保持しない」で管理 Activity が破棄されても、X11 viewer を開いた直後に処理がキャンセルされません。同じ環境への重複要求は同じ処理を待ち、別環境の同時起動は拒否します。
+通常の短い管理コマンドは非公開`RunCommandService`経由です。結果はリクエスト固有のPendingIntentで照合します。長時間の導入workerとLinuxセッションはApplication側がProcessを所有し、画面側のCoroutineだけに寿命を依存させません。
 
-起動順は次のとおりです。
+## 起動と停止
+
+起動要求はApplication内でまとめます。同じ環境への重複要求は同じ結果を待ち、別環境の同時起動は拒否します。表示の切り替えはプロセス共通のMutexで直列化します。
 
 ```text
-stop old host worker and display backends
-  -> start native Xorg :1
-  -> verify real Unix socket and Debian `xset q`
-  -> attach Binder viewer
-  -> wait for Activity + Surface + EGL READY
-  -> capture successful-present serial baseline
-  -> issue an `xrefresh` repaint probe after Surface attachment
-  -> require successful EGL swap serial > baseline
-  -> start xfsettingsd + xfwm4 + Panel + Desktop with explicit DISPLAY=:1
-  -> require worker + xset + all 4 processes + visible EWMH Panel/Desktop windows
-  -> issue a fresh post-XFCE damage and require another successful-present delta
-  -> commit active session
+旧workerを停止・所有Processを回収
+  → viewerと旧display serverを閉じる
+  → 必要なセッション設定を確認
+  → 専用サービスでXorg :1を開始
+  → 実ソケットとDebianからのxset接続を検査
+  → Binder経由でviewerを接続
+  → Surface / EGL準備と実際の描画更新を確認
+  → XFCEの実プロセスとウィンドウを確認
+  → 新しい描画更新を確認
+  → active sessionを確定
 ```
 
-`renderedFrames` は FPS 用の5秒窓であり、失敗した `eglSwapBuffers` も数えていたため health 判定には使いません。viewer process 内の単調な `successfulPresentSerial` を、`eglSwapBuffers() == EGL_TRUE` の場合だけ増やします。
+起動失敗時はホスト停止に加え、所有するネイティブPRootを回収します。停止ではviewerの終了応答を待ってからdisplay serverを停止します。世代IDを使い、古い通知・接続・停止要求が新しいセッションを終了しないようにします。
 
-新規起動時は、Xorg process、Binder、real socket、`xset`、host worker、XFCEの実ウィンドウまで完全検査します。viewerが開いている場合は`xrefresh`を発行し、同じviewerのsuccessful-present serialが進むことも確認します。静止画面の自然なframe発生には依存しません。Activityの通常resumeは、後述する子processを増やさない`/proc`高速経路を使い、欠落を検出した場合だけ同じ厳密検査へ昇格します。
+`OwnedProotProcess`はAndroidの`Process.destroyForcibly()`がSIGTERMに留まる問題を補います。保持したProcessのPID候補をアプリUID・親PID・起動時刻で照合し、PRootを停止させてから同じ`TracerPid`を持つゲストだけを終了します。最後にPRootを終了して待機します。孤立したD-Busや入力サービスも追跡対象に含みます。起動要求は前回のファイルを破棄し、一時ファイルへの書き込み後に確定します。Linuxへ渡す`TMPDIR`は共有マウントの`/tmp`です。
 
-viewerが前面にあり、同じ世代の`:x11` serviceがreadyである通常運転中は、定期heartbeatからPRoot／RunCommandの完全probeを起動しません。確認済みserviceのbusy状態を軽量に返し、Androidのphantom child process枠とForeground Service起動回数を消費しないためです。viewerを閉じたheadless状態では表示serverとworkerの生存を検査します。XorgまたはVNCを復旧した場合は、死んだdisplayに接続していたXFCE workerも停止・再作成します。
+通常表示でバッファ転送に失敗した場合はlegacy描画を試します。Surface / EGL自体を作れない場合は同じ経路の再試行を避け、診断付きの起動失敗とします。VNCフォールバックはありません。
 
-通常描画で viewer / Surface / EGL 自体を準備できない場合、legacy 描画は同じ EGL 経路なので再試行せず VNC へ移ります。viewer が READY で presentation だけ失敗した場合は、buffer transport を変える legacy 描画を試します。
+## 継続と復旧
 
-## VNC fallback
+`DesktopKeepAliveService`はspecialUseの前景サービス、通知、WakeLockとheartbeatを使用します。Linuxの準備中も待機状態と誤認して終了しません。
 
-native X11 と互換表示は endpoint を分離します。
+ビューアーの復帰時は、同じ世代のサービス・接続・実プロセスを確認します。正常な復帰は`/proc`の軽い検査を使い、欠落があるときだけホストの詳細検査へ進みます。XFCEセッション内ではウィンドウマネージャーなどの子プロセス終了を監視し、必要に応じて再構築します。
 
-```text
-native: DISPLAY=:1, Unix socket X1
-VNC:    DISPLAY=:2, Unix socket X2, RFB 127.0.0.1:5902,
-        noVNC 127.0.0.1:6080
-```
+ネイティブ描画側は、停止フラグ、EGL失敗時の待機解除、GPU fenceの待機上限、正しいcond clock、再接続の世代確認、成功したEGL swapの通し番号を使用します。生成パッチは`embedded-x11/scripts/`で管理し、vendorを直接書き換えません。
 
-fallback 時は host metadata、tmux worker、`ldfa-session` のすべてへ `DISPLAY=:2` を明示します。VNC runner の heredoc は Debian 内の `$HOME` と `$XDG_RUNTIME_DIR` を Termux 側で先に展開しません。X11 TCP は `-nolisten tcp`、RFB / noVNC は loopback 限定です。
+## 音声
 
-## Debian / XFCE
+DebianのPulse clientは`/tmp/ldfa-pulse/native`を使います。ホスト側の`$PREFIX/var/run/ldfa-pulse-bridge/native`を明示的にbindし、共有tmpの掃除からソケットを分離します。SHMとmemfdの転送を無効にし、Unixソケット経由でAndroidの音声sinkへ渡します。
 
-Debian は `proot-distro login --shared-tmp` で起動し、Termux 側の X11 Unix socket を共有します。XFCE session には次を明示します。
+音声準備は時間を制限し、失敗してもGUI起動を継続して診断情報を残します。ユーザーのPulse / ALSA設定を一律に上書きせず、アプリ所有のdrop-inを使います。
 
-```text
-DISPLAY=:1 または :2
-GTK_IM_MODULE=fcitx
-QT_IM_MODULE=fcitx
-XMODIFIERS=@im=fcitx
-PULSE_SERVER=unix:/tmp/ldfa-pulse/native
-```
+## データとバックアップ
 
-音声はX11／VNCとは独立し、Debian clientからTermux PulseAudioのAndroid
-sinkへ送ります。Termux側は`$PREFIX/var/run/ldfa-pulse-bridge/native`へ専用の
-`module-native-protocol-unix`を公開し、親directoryを`0700`にします。socketを
-`$PREFIX/tmp`の外へ置くのは、`--shared-tmp`が`$PREFIX/tmp`全体をguestの`/tmp`へ
-bindし、PRootのsession teardown（link2symlink／kill-on-exit）がこのtmpを掃除する際、
-daemonが生存したままでもsocket directoryを断続的に削除する競合を避けるためです。
-このbridge directoryは各guest loginへ明示的な`--bind`でguestの`/tmp/ldfa-pulse`へ
-mapされるため、guestからは従来どおり`/tmp/ldfa-pulse/native`として見え、`--shared-tmp`の
-churnから独立します。PulseAudio自身のruntime dirも`$PREFIX/var/run/ldfa-pulse-rt`へ
-`PULSE_RUNTIME_PATH`で固定し、`$PREFIX/tmp`を触らせません。匿名TCP 4713を
-Android端末全体のloopbackへ公開しません。
+管理情報は`files/home/.local/share/linux-desktop-for-android`以下です。rootfsの解決はPRoot-DistroのXDG配置、新しいprefix内配置、従来のinstalled-rootfs配置に対応します。
 
-PRootのsyscall emulationはSHM／memfdのfile descriptorをguest境界越しに渡せません。
-daemonがshared memory transportを提示すると、Debian clientはUnix socket上で認証まで
-成功しても再生streamがSHM／srbchannel handshakeで切断され、Android sinkがIDLEのまま
-無音になります。これを防ぐため、client drop-inに`enable-shm = no`／`enable-memfd = no`を、
-daemonには`daemon.conf.d`のdrop-inで同じ設定を書き、plain socket transportへ確実に
-fallbackさせます。
+`ContainerOperationLocks`は環境単位で起動・停止・削除とバックアップを直列化します。切り替え時は、終了する旧環境と起動する新環境の両方を一定の順序でロックし、旧環境のバックアップとも競合させません。バックアップは導入済みかつ停止状態で、workerのPIDが生存していない環境だけを対象とします。出力を`.part`に書き、flush・sync・close後に確定します。既存アーカイブを失敗時に削除しません。
 
-workerは12秒のhost bridge deadlineを目安にPulseAudio daemon、専用module、socket、
-非`auto_null` sinkを確認し、その後Debian側接続を別枠の最大4秒で確認します。deadline
-直前に開始した1〜2秒の個別command timeout分だけ、実wall-clockは超過し得ます。
-Termuxの一時領域だけが消えて古いdaemonが残った
-場合は、二重起動を避けるためlocal controlを先に検査し、TERM／必要時KILLと終了待ちの
-後に一度だけ再起動します。Android 8以降で既定のOpenSL ES sinkが作れない場合だけ
-AAudio sinkを試します。音声bridgeが利用不能でも状態を`audio_ready=0`とhost logへ
-残し、検証済みのGUI起動は継続します。
+Android 10以降はMediaStoreのpending状態でダウンロードへ書き出します。Android 8〜9は掃除対象のstagingから永続保存先へ移動します。dataSyncサービスの時間制限通知では処理をキャンセルして前景状態を解除します。
 
-Debian側の既定値はapp-ownedな`/etc/pulse/client.conf.d/99-ldfa.conf`と
-`/etc/alsa/conf.d/99-ldfa-pulse.conf`へ置き、ユーザーの`client.conf`と`.asoundrc`は
-上書きしません。既存containerに`pulseaudio-utils`と`libasound2-plugins`がなければ、
-起動前の`ensure-apps`でnetwork update／downloadだけを15秒に制限して移行します。
-取得失敗時もsystem drop-inと明示`PULSE_SERVER`によりnative Pulse clientのGUI起動を
-継続し、補助packageは次回起動で再試行します。
+`.ldfa`はJSON manifest、gzip圧縮tar、SHA-256 trailerからなります。復元はアーキテクチャ、ハッシュ、展開先パスを確認し、新しいIDへ展開します。既存環境には上書きしません。共有ファイル、仮想ファイルシステム、キャッシュ等は保存範囲外です。暗号化は実装していません。
 
-起動を速くするため、`ensure-apps`は音声client・desktop runtime・Chrome launcherの各
-契約versionを連結したfingerprintを`apps_provisioned` metadataへ記録します。次回以降の
-起動では、fingerprintが一致する間はこの3項目を1回のguest loginでまとめて検証するだけで
-済ませ、通常必要な3〜4回のPRoot loginを省きます。PRoot loginが数秒かかる実機ほど効果が
-大きくなります。fingerprintが一致しない（version bump、package削除、ユーザーによるrootfs
-変更）場合だけ、従来どおり各componentを個別に再migrationします。
-
-Debian Bookworm既定panelのplugin 8はPulseAudioの音量／mute UIです。旧
-`panel-mobile-v1`がこのIDを誤って除去した既存環境には`panel-mobile-v2` migrationを
-適用し、plugin 8の定義が実際に`pulseaudio`で、panel-1にIDがない場合だけ再挿入します。
-パネル設定全体や既存backupは置換しません。
-
-`xfce4-session`はICE authorizationのhard-link lockを使い、PRootでは起動が長時間停滞するため常駐経路に使用しません。`ldfa-session`は`xfsettingsd`、`xfwm4 --compositor=off`、`xfce4-panel`、`xfdesktop`を直接・並列に起動し、Panel／Desktopの実ウィンドウまでready条件に含めます。
-
-4要素は同じBash supervisorの直接の子です。supervisorはPIDを限定しない`wait -n -p`で全子processの終了イベントを待ちます。イベント発生時だけ50 msの同時終了集約を行い、各PIDの`/proc/<pid>/stat`をBash builtinで読み、PPIDとzombie状態を確認して不足した要素をまとめて再起動します。PIDを`wait`へ列挙しないのは、複数SIGKILLの最初の通知でBashが複数jobを回収した場合に、次の`wait`が失効済みPIDを無視して唯一の生存要素だけを待ち続ける競合を避けるためです。定常時に`ps`、`cat`、`xset`、`sleep`を繰り返さないため、監視自体がAndroidのapp child process上限を圧迫しません。Chrome復元helperの正常終了はXFCE crash-loop回数に含めません。Chrome launcherは正常終了と異常終了をmarkerで区別し、launcher shellが残れば1回だけ自己再起動します。launcherも終了した場合はActivity復帰時にsupervisorを安全に起こし、window manager復旧後に前回sessionを再起動します。
-
-viewerのActivity復帰時は、main process内から同一UIDの`/proc`を直接読みます。現在のcontainer rootを祖先command lineに持つ`ldfa-session`、そのPIDを親に持つXFCE 4要素、Chrome markerとbrowser本体がそろっていれば、RunCommand／PRootを生成しない高速経路で終了します。supervisorが一部要素を交換中なら`/proc`だけで最大3秒追跡し、正常化した時点で終了します。supervisor、Chrome本体、X11 serviceのいずれかが欠ける場合だけinstalled controllerの厳密なEWMH／socket検査へ進みます。これにより復旧途中のwindow mappingを故障と誤認して、戻ったdesktopを二度目の全session再構築で消す競合を避けます。
-
-controller は lifecycle 操作を host lock で直列化し、metadata を一時ファイルから atomic rename で更新します。古い DISPLAY の tmux worker を再利用せず、起動前に対象 worker を停止して現在の backend から作り直します。
-
-## 内蔵コマンド結果
-
-```text
-Repository -> TermuxCommandClient -> RunCommandService -> controller
-                                      │
-                                      └─ PendingIntent -> TermuxResultService
-```
-
-controller の配置は一時ファイル、`chmod`、atomic rename の順です。同時実行による「実行中 script の truncate」を防ぎます。結果は process-local 連番ではなく UUID action / nonce で照合するため、古い process の遅延 PendingIntent が新しい command を完了させません。coroutine cancellation は通常エラーへ変換せず上位へ伝播します。
-
-## 停止と復旧
-
-- 起動失敗は active 状態を commit せず、対象 host worker、viewer、X11 / VNC endpoint を bounded cleanup します。
-- native X11 は viewer を閉じてから `stopService()` を使い、service PID marker の process death まで待ちます。残留時は marker または `.X1-lock` の PID と `/proc/<pid>/cmdline` が `com.termux:x11` に一致する場合だけ SIGTERM / SIGKILL を使います。
-- `queued` / `installing` の install worker と `starting` / `running` の session worker は heartbeat が再作成します。
-- XFCE supervisor はsession全体の終了だけでなく、4要素のいずれかが個別終了した場合もX11が生存する範囲で不足分を再起動します。
-- viewer を閉じただけなら Xorg / XFCE session は維持し、再表示時に Binder で接続し直します。
-
-## 状態、ログ、共有フォルダ
-
-```text
-~/.local/share/linux-desktop-for-android/containers/<id>/
-~/.local/share/linux-desktop-for-android/logs/<id>.log
-~/.local/share/linux-desktop-for-android/logs/x11-server.log
-~/.local/share/linux-desktop-for-android/logs/vnc-server.log
-~/.local/share/linux-desktop-for-android/run/
-
-Android: /storage/emulated/0/LinuxDesktop/<id>
-Termux:  ~/storage/shared/LinuxDesktop/<id>
-Debian:  /mnt/android
-XFCE:    ~/Desktop/Android共有
-```
-
-## 制約
-
-- 公式 Termux と同じ `applicationId` のため同時インストールできません。
-- 旧外部 Termux の container は自動移行しません。
-- PRoot には systemd、完全な Linux kernel 機能、通常の native GPU 権限がありません。
-- Xorg server は remote process ですが viewer renderer は現在 main process です。
-- Android の process death 自体は完全には禁止できません。Chrome本体まで終了された場合は新processと前回sessionの再生成が必要なため、正常な履歴復帰より表示に時間がかかります。端末メーカー固有のbackground制御を含む実機確認は引き続き必要です。
+復元時はマニフェストに記録されたアプリ領域・コンテナIDを基準に、PRootのハードリンク代替として作成された絶対シンボリックリンクを復元先rootfsへ付け替えます。通常のLinuxの相対リンクや別コンテナへのリンクは変えず、復元先から外れるパスは拒否します。これにより日本語ロケールなどが元のコンテナに依存せず使えます。

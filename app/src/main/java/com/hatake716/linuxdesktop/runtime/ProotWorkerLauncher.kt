@@ -88,7 +88,7 @@ class ProotWorkerLauncher(
         // proot), so session_alive/session_kill can track it without the app needing
         // Process.pid(). The app just holds the Process to keep the persistent proot —
         // and therefore the worker — alive.
-        val process = runCatching { pb.start() }.getOrNull() ?: return null
+        val process = runCatching { OwnedProotProcess.start(pb) }.getOrNull() ?: return null
         // Drain the (small) pre-`exec` output so the OS pipe never fills. The worker
         // does `exec >>debian.log 2>&1` almost immediately, moving all real logging off
         // this pipe; only proot's startup banner reaches us. We must still read it — an
@@ -154,7 +154,10 @@ class ProotWorkerLauncher(
         // the desktop (proot --kill-on-exit reaps the guest tree).
         argv += listOf(
             "/usr/bin/env", "-u", "LD_LIBRARY_PATH", "-u", "LD_PRELOAD",
-            "PATH=$GUEST_PATH",
+            // The Android prefix path is outside the guest rootfs. Chrome and
+            // other desktop clients create sockets through TMPDIR, so translate
+            // it to the shared guest mount rather than inheriting the host path.
+            "PATH=$GUEST_PATH", "TMPDIR=/tmp",
             "DISPLAY=:$display", "XAUTHORITY=/dev/null",
             "XDG_RUNTIME_DIR=/tmp/runtime-desktop",
             "HOME=/home/desktop", "LANG=ja_JP.UTF-8",
@@ -175,7 +178,7 @@ class ProotWorkerLauncher(
         env["HOME"] = homeDir.absolutePath
         env["TMPDIR"] = File(prefixDir, "tmp").absolutePath
         env["PATH"] = "${File(prefixDir, "bin").absolutePath}:/system/bin:/system/xbin"
-        val process = runCatching { pb.start() }.getOrNull() ?: return null
+        val process = runCatching { OwnedProotProcess.start(pb) }.getOrNull() ?: return null
         drainToNull(process)
         return process
     }
@@ -188,6 +191,10 @@ class ProotWorkerLauncher(
     fun installRequestFile(id: String): File =
         File(homeDir, "$RUN_REL/${INSTALL_PREFIX}$id.session-request")
 
+    fun appsRequestFile(id: String): File = File(homeDir, "$RUN_REL/ldfa-apps-$id.session-request")
+
+    fun startAppsProvision(id: String): Process? = startGuestProvision(id, apps = true)
+
     /**
      * Run the Debian guest provision (apt update + xfce install + locale/user setup)
      * as ITS OWN single native-proot layer — the dpkg-heavy phase that ran ~6x slower
@@ -198,9 +205,11 @@ class ProotWorkerLauncher(
      * /root/.ldfa-provision.done that the outer worker watches). Returns the Process
      * (held by the caller) or null if the request is missing/invalid.
      */
-    fun startInstallProvision(id: String): Process? {
+    fun startInstallProvision(id: String): Process? = startGuestProvision(id, apps = false)
+
+    private fun startGuestProvision(id: String, apps: Boolean): Process? {
         if (!runtime.available) return null
-        val req = parseRequest(installRequestFile(id)) ?: return null
+        val req = parseRequest(if (apps) appsRequestFile(id) else installRequestFile(id)) ?: return null
         val rootfs = req["ROOTFS"]?.let(::File) ?: return null
         if (!rootfs.isDirectory) return null
         val changeId = req["CHANGE_ID"] ?: "0:0"
@@ -239,9 +248,13 @@ class ProotWorkerLauncher(
             "LDFA_KEYBOARD_LAYOUT=$keymap",
         )
         if (tz != null) argv += "LDFA_TZ=$tz"
-        argv += listOf("/bin/bash", "/root/.ldfa-provision.sh")
+        val scriptName = if (apps) ".ldfa-apps" else ".ldfa-provision"
+        argv += listOf("/bin/bash", "/root/$scriptName.sh")
 
+        // Loader failures happen before the guest script redirects its log. Keep
+        // that output so the supervising worker can explain a failed installation.
         val pb = ProcessBuilder(argv).redirectErrorStream(true)
+            .redirectOutput(File(rootfs, "root/$scriptName-launch.log"))
         val env = pb.environment()
         env.putAll(runtime.environment())
         env["LD_LIBRARY_PATH"] = nativeLibDir().absolutePath
@@ -249,8 +262,7 @@ class ProotWorkerLauncher(
         env["HOME"] = homeDir.absolutePath
         env["TMPDIR"] = File(prefixDir, "tmp").absolutePath
         env["PATH"] = "${File(prefixDir, "bin").absolutePath}:/system/bin:/system/xbin"
-        val process = runCatching { pb.start() }.getOrNull() ?: return null
-        drainToNull(process)
+        val process = runCatching { OwnedProotProcess.start(pb) }.getOrNull() ?: return null
         return process
     }
 
