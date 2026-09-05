@@ -9,9 +9,9 @@ Androidに、DebianとXFCEの作業環境を。
 LDFAは、Linuxの導入・起動・日本語入力・バックアップをひとつのAndroidアプリにまとめています。
 root化や、別のTermux・X11アプリのインストールは不要です。
 
-**検証版：1.2.3 / versionCode 24**
+**最新リリース：1.2.3 / versionCode 24**
 
-1.2.3の起動ログ表示はAndroid 16 / x86_64 / 4KBで検証しています。Pixel 10a（Android 17 / ARM64 / 4KB）では、1.2.3への上書き更新、アプリ起動、端末内APKのハッシュ一致を確認しています。ARM64実機でのLinuxの導入・実行は未確認のため、GitHubではプレリリースとして提供します。
+1.2.3の起動ログ表示はAndroid 16 / x86_64 / 4KBで検証しています。Pixel 10a（Android 17 / ARM64 / 4KB）では、1.2.3への上書き更新、アプリ起動、端末内APKのハッシュ一致を確認しています。同じ最終APKについて、利用者から実機でのLinuxデスクトップ起動成功の報告も得ています。1.2.3を正式リリースとして提供します。
 
 [リリースとAPK](https://github.com/hatake716/LDFA/releases) · [導入手順](docs/INSTALLATION.md) · [プライバシーポリシー](https://hatake716.github.io/LDFA/privacy.html)
 
