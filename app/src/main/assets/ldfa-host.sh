@@ -2662,7 +2662,9 @@ worker_install() {
     trap 'worker_failed "$id" "$?" "$LINENO"' ERR
     # die/exit do not trigger ERR. Record those failures too, otherwise the UI
     # keeps an exited installation in "installing" indefinitely.
-    trap 'exit_code=$?; (( exit_code == 0 )) || worker_failed "$id" "$exit_code" "$LINENO"' EXIT
+    # Bash 5.1 unwinds function-local variables before EXIT handlers. Bind the
+    # validated container ID now so explicit exit still records a failed state.
+    trap "exit_code=\$?; (( exit_code == 0 )) || worker_failed '$id' \"\$exit_code\" \"\$LINENO\"" EXIT
     trap 'worker_failed "$id" 130 "$LINENO"' INT
     trap 'worker_failed "$id" 143 "$LINENO"' TERM
 

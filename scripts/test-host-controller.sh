@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+trap 'printf "Host controller test failed at line %s: %s\n" "$LINENO" "$BASH_COMMAND" >&2' ERR
 
 controller="${1:-app/src/main/assets/ldfa-host.sh}"
 sandbox="$(mktemp -d)"
