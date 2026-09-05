@@ -17,6 +17,14 @@ val vendoredAndroidLibraries = setOf(
 )
 
 subprojects {
+    // Reject reintroduction through either a direct or a transitive dependency.
+    configurations.configureEach {
+        resolutionStrategy.eachDependency {
+            if (requested.group == "org.lsposed.hiddenapibypass") {
+                throw GradleException("LDFA must not package an Android hidden-API bypass SDK")
+            }
+        }
+    }
     if (path in vendoredAndroidLibraries) {
         plugins.withId("com.android.library") {
             extensions.configure<com.android.build.api.dsl.LibraryExtension> {

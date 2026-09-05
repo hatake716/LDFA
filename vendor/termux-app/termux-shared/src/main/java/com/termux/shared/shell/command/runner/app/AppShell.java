@@ -1,9 +1,6 @@
 package com.termux.shared.shell.command.runner.app;
 
 import android.content.Context;
-import android.system.ErrnoException;
-import android.system.Os;
-import android.system.OsConstants;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -174,7 +171,8 @@ public final class AppShell {
      * @param context The {@link Context} for operations.
      */
     private void executeInner(@NonNull final Context context) throws IllegalThreadStateException, InterruptedException {
-        mExecutionCommand.mPid = ShellUtils.getPid(mProcess);
+        // Process has no public PID accessor on the supported Android versions.
+        mExecutionCommand.mPid = -1;
 
         Logger.logDebug(LOG_TAG, "Running \"" + mExecutionCommand.getCommandIdAndLabelLogString() + "\" AppShell with pid " + mExecutionCommand.mPid);
 
@@ -252,7 +250,7 @@ public final class AppShell {
     }
 
     /**
-     * Kill this {@link AppShell} by sending a {@link OsConstants#SIGILL} to its {@link #mProcess}
+     * Kill this AppShell through its owned Process object
      * if its still executing.
      *
      * @param context The {@link Context} for operations.
@@ -281,15 +279,13 @@ public final class AppShell {
     }
 
     /**
-     * Kill this {@link AppShell} by sending a {@link OsConstants#SIGILL} to its {@link #mProcess}.
+     * Kill only this AppShell through the public Process API; never signal an unknown PID.
      */
     public void kill() {
-        int pid = ShellUtils.getPid(mProcess);
         try {
-            // Send SIGKILL to process
-            Os.kill(pid, OsConstants.SIGKILL);
-        } catch (ErrnoException e) {
-            Logger.logWarn(LOG_TAG, "Failed to send SIGKILL to \"" + mExecutionCommand.getCommandIdAndLabelLogString() + "\" AppShell with pid " + pid + ": " + e.getMessage());
+            mProcess.destroyForcibly();
+        } catch (RuntimeException failure) {
+            Logger.logWarn(LOG_TAG, "Failed to stop AppShell: " + failure.getMessage());
         }
     }
 

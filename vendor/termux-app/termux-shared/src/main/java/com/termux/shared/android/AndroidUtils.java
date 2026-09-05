@@ -93,9 +93,8 @@ public class AndroidUtils {
         AndroidUtils.appendPropertyToMarkdown(markdownString,"SE_PROCESS_CONTEXT", SELinuxUtils.getContext());
         AndroidUtils.appendPropertyToMarkdown(markdownString,"SE_FILE_CONTEXT", SELinuxUtils.getFileContext(context.getFilesDir().getAbsolutePath()));
 
-        String seInfoUser = PackageUtils.getApplicationInfoSeInfoUserForPackage(applicationInfo);
-        AndroidUtils.appendPropertyToMarkdown(markdownString,"SE_INFO", PackageUtils.getApplicationInfoSeInfoForPackage(applicationInfo) +
-            (DataUtils.isNullOrEmpty(seInfoUser) ? "" : seInfoUser));
+        // This framework-private diagnostic is unavailable in the Play build.
+        AndroidUtils.appendPropertyToMarkdown(markdownString,"SE_INFO", (String) null);
 
         return markdownString.toString();
     }

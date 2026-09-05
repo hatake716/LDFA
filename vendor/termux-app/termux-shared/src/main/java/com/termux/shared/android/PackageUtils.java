@@ -20,7 +20,6 @@ import com.termux.shared.R;
 import com.termux.shared.data.DataUtils;
 import com.termux.shared.interact.MessageDialogUtils;
 import com.termux.shared.logger.Logger;
-import com.termux.shared.reflection.ReflectionUtils;
 
 import java.lang.reflect.Field;
 import java.security.MessageDigest;
@@ -186,14 +185,8 @@ public class PackageUtils {
      */
     @Nullable
     public static Integer getApplicationInfoPrivateFlagsForPackage(@NonNull final ApplicationInfo applicationInfo) {
-        ReflectionUtils.bypassHiddenAPIReflectionRestrictions();
-        try {
-            return (Integer) ReflectionUtils.invokeField(ApplicationInfo.class, "privateFlags", applicationInfo).value;
-        } catch (Exception e) {
-            // ClassCastException may be thrown
-            Logger.logStackTraceWithMessage(LOG_TAG, "Failed to get privateFlags field value for ApplicationInfo class", e);
-            return null;
-        }
+        // Android exposes no public SDK API for this diagnostic value.
+        return null;
     }
 
     /**
@@ -214,14 +207,8 @@ public class PackageUtils {
      */
     @Nullable
     public static String getApplicationInfoSeInfoForPackage(@NonNull final ApplicationInfo applicationInfo) {
-        ReflectionUtils.bypassHiddenAPIReflectionRestrictions();
-        try {
-            return (String) ReflectionUtils.invokeField(ApplicationInfo.class, Build.VERSION.SDK_INT < Build.VERSION_CODES.O ? "seinfo" : "seInfo", applicationInfo).value;
-        } catch (Exception e) {
-            // ClassCastException may be thrown
-            Logger.logStackTraceWithMessage(LOG_TAG, "Failed to get seInfo field value for ApplicationInfo class", e);
-            return null;
-        }
+        // Android exposes no public SDK API for this diagnostic value.
+        return null;
     }
 
     /**
@@ -234,15 +221,8 @@ public class PackageUtils {
      */
     @Nullable
     public static String getApplicationInfoSeInfoUserForPackage(@NonNull final ApplicationInfo applicationInfo) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return null;
-        ReflectionUtils.bypassHiddenAPIReflectionRestrictions();
-        try {
-            return (String) ReflectionUtils.invokeField(ApplicationInfo.class, "seInfoUser", applicationInfo).value;
-        } catch (Exception e) {
-            // ClassCastException may be thrown
-            Logger.logStackTraceWithMessage(LOG_TAG, "Failed to get seInfoUser field value for ApplicationInfo class", e);
-            return null;
-        }
+        // Android exposes no public SDK API for this diagnostic value.
+        return null;
     }
 
     /**
@@ -253,14 +233,8 @@ public class PackageUtils {
      */
     @Nullable
     public static Integer getApplicationInfoStaticIntFieldValue(@NonNull String fieldName) {
-        ReflectionUtils.bypassHiddenAPIReflectionRestrictions();
-        try {
-            return (Integer) ReflectionUtils.invokeField(ApplicationInfo.class, fieldName, null).value;
-        } catch (Exception e) {
-            // ClassCastException may be thrown
-            Logger.logStackTraceWithMessage(LOG_TAG, "Failed to get \"" + fieldName + "\" field value for ApplicationInfo class", e);
-            return null;
-        }
+        // Android exposes no public SDK API for this diagnostic value.
+        return null;
     }
 
     /**

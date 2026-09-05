@@ -9,9 +9,9 @@ Androidに、DebianとXFCEの作業環境を。
 LDFAは、Linuxの導入・起動・日本語入力・バックアップをひとつのAndroidアプリにまとめています。
 root化や、別のTermux・X11アプリのインストールは不要です。
 
-**検証版：1.2.1 / versionCode 22**
+**検証版：1.2.2 / versionCode 23**
 
-Android 15 / x86_64 / 4KBで検証しています。Pixel 10a（Android 17 / ARM64 / 4KB）では、保存済み環境を保持した1.2.1への上書き更新と管理画面の表示を確認しています。ARM64実機でのLinuxの導入・実行は未確認のため、GitHubではプレリリースとして提供します。
+Android 15・16 / x86_64 / 4KBでLinuxの表示・入力・停止を検証しています。Pixel 10a（Android 17 / ARM64 / 4KB）では、1.2.2への上書き更新、アプリ起動、端末内APKのハッシュ一致を確認しています。ARM64実機でのLinuxの導入・実行は未確認のため、GitHubではプレリリースとして提供します。
 
 [リリースとAPK](https://github.com/hatake716/LDFA/releases) · [導入手順](docs/INSTALLATION.md) · [プライバシーポリシー](https://hatake716.github.io/LDFA/privacy.html)
 
@@ -44,6 +44,13 @@ Android 15 / x86_64 / 4KBで検証しています。Pixel 10a（Android 17 / ARM
 - PulseAudio経由のAndroid音声出力
 - 停止したLinux環境を`.ldfa`ファイルへバックアップし、新しい環境へ復元
 - ターミナル、ログ、導入・起動の修復
+
+## 1.2.2の変更
+
+- Google Playで指摘された`org.lsposed.hiddenapibypass:hiddenapibypass`を削除しました。非公開APIの制限解除処理も除外しています。
+- 内蔵Termuxのプロセス停止を公開APIの`Process.destroyForcibly()`へ移行しました。プロセスIDを取得できない場合も、対象のプロセスだけを停止します。
+- SELinuxの診断情報は、通常のアクセス権で読めるファイルと公開APIから取得します。非公開の内部属性・機能フラグ・UID名が取得できない場合は不明として扱い、診断のために制限を解除しません。
+- 依存関係の再混入をビルド時に拒否し、完成したAPK・AABのDEXと依存情報も検査します。
 
 ## 1.2.1の変更
 

@@ -1,4 +1,36 @@
-# LDFA 1.2.1 権限修正の検証
+# LDFA 1.2.2 APIバイパスSDK削除の検証
+
+対象：`com.hatake716.linuxdesktop` / versionName `1.2.2` / versionCode `23`。
+成果物と記録はローカルの`release-assets/v1.2.2/`に保存しています。
+
+- 組み込みTermuxのHiddenApiBypass依存と制限解除の呼び出しを削除。取得できない非公開の診断値を不明として扱い、バックグラウンドコマンドの停止を公開`Process.destroyForcibly()`へ移行。
+- 組み込みライブラリのminSdkをアプリ本体と同じ26へ統一。LDFAの対応Androidバージョンは従来どおり8.0以降。
+- 単体テスト194件成功（app 49件、terminal-emulator 145件）、失敗・スキップなし。新しい回帰テストではPIDを取得せず対象の子プロセスを停止し、別の子プロセスが生存することを実測。
+- app / termux-runtime / embedded-x11のLint、ホスト・X11コントローラー検査が成功。termux-sharedの追加Lintでは新たなNewApi指摘を解消。上流由来のMissingSuperCall 2件とCoreLibDesugaringV1 1件は既存の非阻止対象として残るため、全モジュールのLintがゼロとはしていない。
+- APK/AABの全DEXと依存メタデータを検査し、対象SDK・制限解除メソッドの不在を確認。Gradleの依存解決でも対象SDKなし。依存報告は無効化していない。検査スクリプトが旧1.2.1 AABを拒否することも確認。
+- 既存アップロード鍵による署名、bundletool validation、16KB ELF配置、APKとAABの全DEX・ARM64ライブラリ・ホストスクリプト一致、不要権限とAccessibilityServiceの不在を確認。
+- API 35 / x86_64 / 4KB AVDで1.2.1から更新し、既存4環境を保持。XFCEの表示、通常キーとソフトウェアキーボードからMousepadへの入力、Linuxファイルへの保存とハッシュ、Androidホームからの復帰、停止後のLinuxプロセス終了を確認。
+- API 35で準備処理を明示的に再開・停止。rootfs inodeは106824で一致し、停止後にLinuxのworkerは残らず、APK上書き・アプリ再起動後も準備停止の状態を維持。
+- 最終APKで停止中の環境を736,702,530 bytesの.ldfaへバックアップ。進捗とdataSync通知、成功後のBackupService終了を確認。そのファイルをAPI 36へ転送して別IDへ復元し、入力確認用ファイルのSHA-256が一致。既存の復元済み環境も保持。
+- API 36 / x86_64 / 4KBの新規AVDで最終APKを導入し、1.2.1の736,702,007 bytesのバックアップから別IDへ復元。保存済みテキストのSHA-256が一致。アプリ自身が実行環境を準備し、復元済みXFCEを表示。通常キーとソフトウェアキーボードによる保存、ホームからの復帰、停止を確認。
+- 両AVDとPixel 10aの取得可能な対象アプリUIDのlogcatに、FATAL EXCEPTION、Fatal signal、NoClassDefFoundError、NoSuchMethodErrorの記録なし。
+- Pixel 10a / Android 17 / ARM64 / 4KBへ最終APKを`install -r`で更新。versionCode 23、MainActivityの起動成功、端末内APKと最終成果物のSHA-256一致を確認。データ消去と実機への入力注入は実施していない。実機でのLinux起動・入力は未確認。
+
+最終APKのSHA-256は`b7730edea3532aeefde47d9f0825be667e86e179691fbcc1c665f667cefdb4b0`、ARM64 AABは`4ba7f7e42d276854fca874bc6ca3e61d851cb80de5b74a854aae6626b92f0b71`です。最低API設定の整合後に再ビルドし、両AVDへ最終APKを入れ直しています。前段の検証APKと最終APKの全DEXは同一です。
+
+## ARTと実機検証の範囲
+
+API 35のARTモジュールは350820300、API 36は360527520です。API 36は公式Google APIs x86_64イメージrevision 7、セキュリティパッチ2025-07-05を使用しました。2026年時点のすべてのART Mainline更新を実行検証した結果ではありません。SDKの除去は実際の提出用AABの検査で確認しています。
+
+両AVDはSELinux Enforcing、アプリは通常の非root UIDです。診断用のadb rootを使用しましたが、アプリにroot権限を付与せず、hidden_api_policyも変更していません。Android 16の検証は新しいAndroidアプリ領域へのバックアップ復元であり、Linux全パッケージの新規ダウンロードを再検証したものではありません。
+
+ARM64実機でのLinux実行、ARM64 16KB環境、音声の試聴、長時間負荷は未確認です。16KBプレビューでの過去のゲスト起動問題は下記1.2.0の記録を参照してください。
+
+Google Play Consoleへのアップロード・申告送信・審査完了は未実施です。バージョン23への差し替え後、Console側の解析結果を確認する必要があります。
+
+---
+
+# LDFA 1.2.1 権限修正の検証（過去の記録）
 
 対象：`com.hatake716.linuxdesktop` / versionName `1.2.1` / versionCode `22`。
 成果物と記録はローカルの`release-assets/v1.2.1/`に保存します。

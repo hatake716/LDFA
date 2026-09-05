@@ -1,7 +1,7 @@
-# Google Play 提出資料 — LDFA 1.2.1
+# Google Play 提出資料 — LDFA 1.2.2
 
-対象：`com.hatake716.linuxdesktop` / versionCode `22` / targetSdk `36`。
-新しい成果物・画像・提出文面は、ローカルの`release-assets/v1.2.1/`にまとめます。
+対象：`com.hatake716.linuxdesktop` / versionCode `23` / targetSdk `36`。
+新しい成果物・画像・提出文面は、ローカルの`release-assets/v1.2.2/`にまとめます。
 旧`release-assets/LDFA-v1.1.0-release.aab`とは区別してください。
 
 ## ストア掲載情報（日本語）
@@ -102,10 +102,10 @@ LDFA is an independent open-source project, not an official app from Termux, Deb
 
 ```text
 <ja-JP>
-不要なAPKインストール権限とユーザー補助サービスを削除しました。Linux準備中の停止操作と中断後の再開を改善し、前景サービスの用途を整理しました。通常のキーボード入力、Linuxデスクトップ、バックアップ・復元は引き続き利用できます。
+Androidの非公開APIを利用するSDKを削除し、ART更新への互換性を改善しました。内蔵ターミナルのプロセス停止を公開APIへ移行しました。Linux環境と保存済みデータは引き続き利用できます。
 </ja-JP>
 <en-US>
-Removed the unused APK installation permission and accessibility service. Added a notification action to stop Linux setup while preserving saved data, and corrected foreground service types. Standard keyboard input, the Linux desktop, and backup/restore remain available.
+Removed the hidden-API bypass SDK to improve compatibility with Android Runtime updates. Embedded terminal commands now stop through the public Process API. Existing Linux environments and saved data remain available.
 </en-US>
 ```
 
@@ -120,6 +120,12 @@ Source and security documentation:
 https://github.com/hatake716/LDFA
 https://github.com/hatake716/LDFA/blob/main/SECURITY.md
 ```
+
+## サポートされていないAPIバイパスSDKへの対応
+
+1.2.2（versionCode 23）では、`org.lsposed.hiddenapibypass:hiddenapibypass:6.1`と非公開APIの制限解除処理を削除しました。診断情報の取得と内蔵Termuxのプロセス停止を修正しています。DEX・依存関係・依存情報を検査した新しいAABへ差し替え、Consoleが警告対象としているversionCodeを確認してください。旧1.2.1（22）にはこのSDKが残っています。
+
+今回の変更で新しい権限は追加していません。dataSyncとspecialUseの機能・申告内容は1.2.1と同じです。リンク先の実演動画は1.2.1で撮影したもので、バージョン表示を改変していません。
 
 ## 権限の未申告エラーへの対応
 
@@ -175,7 +181,7 @@ LDFA本体には広告・解析SDK、開発者向けのデータ送信・アカ�
 
 ## 素材と提出順
 
-1. `release-assets/v1.2.1/`のAAB、SHA256SUMS、検証結果を確認します。
+1. `release-assets/v1.2.2/`のAAB、SHA256SUMS、検証結果を確認します。
 2. ストアアイコン512×512、フィーチャー画像1024×500、新しい画面のスクリーンショットを登録します。
 3. 上記のGitHubリリースに添付したMP4のURLをサービス申告に登録します。Consoleが別の共有形式を求める場合は、同じ動画を限定公開YouTubeなどへアップロードしてURLを使用します。
 4. 上記の掲載文面、アクセス説明、サービス型、データセーフティ、プライバシーポリシーを入力します。

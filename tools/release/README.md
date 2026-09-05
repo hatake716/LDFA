@@ -9,19 +9,19 @@ cd LDFA-google-play
 
 SDKの場所は`local.properties`、署名設定は`keystore.properties`に置きます。いずれもGit管理外です。秘密鍵本体はリポジトリ外で保管してください。
 
-## 1.2.1の成果物
+## 1.2.2の成果物
 
 ```text
-release-assets/v1.2.1/
-  LDFA-v1.2.1-release.apk       インストール用APK
-  LDFA-v1.2.1-play.aab          Google Play提出用（ARM64）
+release-assets/v1.2.2/
+  LDFA-v1.2.2-release.apk       インストール用APK
+  LDFA-v1.2.2-play.aab          Google Play提出用（ARM64）
   SHA256SUMS
   materials/                  日本語・英語の提出資料
-  screenshots/                新しい画面のスクリーンショット
-  verification/               検証結果・署名とパッケージの記録
+  verification/               検証結果・スクリーンショット・署名の記録
   icon-512.png
   feature-graphic-1024x500.png
-  ldfa-fgs-demo.mp4
+  ldfa-data-sync-demo.mp4     1.2.1で撮影した同一機能の実演
+  ldfa-special-use-demo.mp4   1.2.1で撮影した同一機能の実演
 ```
 
 `release-assets/`全体はGit管理外です。旧1.1.0の成果物は上書きせず、バージョン別のフォルダで区別します。
@@ -105,3 +105,12 @@ APKとAABのアプリID、バージョン、targetSdk、ABIを確認します。
 検証済みAPK、SHA256SUMSとリリースノートをGitHub Releaseに添付します。Google Play提出用AABとストア素材はローカルのバージョン別フォルダへ保存します。
 
 Google Play掲載文面・前景サービスの説明・動画の用途は[play-console.md](play-console.md)を参照してください。AAB・資料作成、Google Playへのアップロード、審査通過、公開はそれぞれ別の状態として記録します。
+
+## ART互換性の検査
+
+```bash
+./gradlew :app:dependencyInsight --dependency hiddenapibypass --configuration releaseRuntimeClasspath
+python3 scripts/check-no-hidden-api-bypass.py release-assets/v1.2.2/LDFA-v1.2.2-release.apk release-assets/v1.2.2/LDFA-v1.2.2-play.aab
+```
+
+SDK依存情報の報告は無効化せず、SDK本体と使用コードを除外します。旧1.2.1には対象SDKが残っているため、今回の指摘への再提出には1.2.2のAABを使用してください。

@@ -400,7 +400,7 @@ app_build="$repository/app/build.gradle.kts"
 ! grep -Fq -- 'include(":embedded-x11-loader")' "$settings"
 ! grep -Fq -- 'embedded-x11-loader' "$app_build"
 ! grep -Fq -- 'x11-loader-assets' "$app_build"
-grep -Fq -- 'versionName = "1.2.1"' "$app_build"
+grep -Fq -- 'versionName = "1.2.2"' "$app_build"
 grep -Fq -- 'HOST_SCRIPT_VERSION", "\"1.2.0\""' "$app_build"
 
 dialogs="$repository/app/src/main/java/com/hatake716/linuxdesktop/ui/Dialogs.kt"

@@ -1,6 +1,6 @@
 # LDFAの内部構成
 
-対象は1.2.1です。アプリIDは`com.hatake716.linuxdesktop`、実行環境のprefixは`/data/data/com.hatake716.linuxdesktop/files/usr`です。
+対象は1.2.2です。アプリIDは`com.hatake716.linuxdesktop`、実行環境のprefixは`/data/data/com.hatake716.linuxdesktop/files/usr`です。
 
 ## モジュール
 
@@ -105,3 +105,11 @@ AndroidのAPKインストール権限とX11のAccessibilityServiceは収録し�
 DesktopKeepAliveServiceは、Linux準備中のダウンロード・展開にdataSync、対話的なデスクトップ監視にspecialUseを指定します。並行する場合は両方を指定します。BackupServiceもdataSyncです。Androidの時間制限では準備処理を取り消し、サービスを終了します。
 
 導入の明示的な停止では、Application所有のJob、対応するRUN_COMMAND、インストールworkerとprovisionを停止します。停止した事実を保存し、画面のポーリングやアプリ再起動で再開しないようにします。ユーザーが再開操作を行うとこの抑止を解除します。展開済みのrootfsや既存環境は削除しません。
+
+## 公開APIとART互換性
+
+1.2.2はHiddenApiBypass SDKと非公開APIの制限解除処理を含みません。内蔵Termuxのバックグラウンドコマンドは`Process`オブジェクトを保持し、公開された`destroyForcibly()`で対象だけを停止します。`Process.pid`の非公開フィールドは参照しません。PTYターミナルとPRootは従来どおり自分で生成したプロセスを管理します。
+
+任意の診断情報は公開APIまたは通常のアクセス権で読み取れる情報に限定します。SELinuxのプロセスラベルは`/proc/.../attr/current`、ファイルラベルは`Os.getxattr`から取得します。取得できない内部属性、システム機能フラグ、UIDの表示名は不明のまま扱います。これらの診断情報の取得失敗でLinuxを起動不能にはしません。
+
+[Android公式のART互換性に関する説明](https://developer.android.com/about/versions/16/behavior-changes-all#art-internal-changes)を参照してください。
