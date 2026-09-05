@@ -1,6 +1,6 @@
 # LDFAの内部構成
 
-対象は1.2.0です。アプリIDは`com.hatake716.linuxdesktop`、実行環境のprefixは`/data/data/com.hatake716.linuxdesktop/files/usr`です。
+対象は1.2.1です。アプリIDは`com.hatake716.linuxdesktop`、実行環境のprefixは`/data/data/com.hatake716.linuxdesktop/files/usr`です。
 
 ## モジュール
 
@@ -97,3 +97,11 @@ Android 10以降はMediaStoreのpending状態でダウンロードへ書き出�
 `.ldfa`はJSON manifest、gzip圧縮tar、SHA-256 trailerからなります。復元はアーキテクチャ、ハッシュ、展開先パスを確認し、新しいIDへ展開します。既存環境には上書きしません。共有ファイル、仮想ファイルシステム、キャッシュ等は保存範囲外です。暗号化は実装していません。
 
 復元時はマニフェストに記録されたアプリ領域・コンテナIDを基準に、PRootのハードリンク代替として作成された絶対シンボリックリンクを復元先rootfsへ付け替えます。通常のLinuxの相対リンクや別コンテナへのリンクは変えず、復元先から外れるパスは拒否します。これにより日本語ロケールなどが元のコンテナに依存せず使えます。
+
+## Play版の権限と停止処理
+
+AndroidのAPKインストール権限とX11のAccessibilityServiceは収録しません。X11のActivityが受け取る通常の入力は維持し、上流のサービスクラス・設定画面・設定監視は再現可能な生成処理で除外します。
+
+DesktopKeepAliveServiceは、Linux準備中のダウンロード・展開にdataSync、対話的なデスクトップ監視にspecialUseを指定します。並行する場合は両方を指定します。BackupServiceもdataSyncです。Androidの時間制限では準備処理を取り消し、サービスを終了します。
+
+導入の明示的な停止では、Application所有のJob、対応するRUN_COMMAND、インストールworkerとprovisionを停止します。停止した事実を保存し、画面のポーリングやアプリ再起動で再開しないようにします。ユーザーが再開操作を行うとこの抑止を解除します。展開済みのrootfsや既存環境は削除しません。

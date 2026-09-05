@@ -1,4 +1,25 @@
-# LDFA 1.2.0 検証資料
+# LDFA 1.2.1 権限修正の検証
+
+対象：`com.hatake716.linuxdesktop` / versionName `1.2.1` / versionCode `22`。
+成果物と記録はローカルの`release-assets/v1.2.1/`に保存します。
+
+- APKとARM64 AABのデコード済みマニフェストで、APKインストール権限、ユーザー補助サービス、共有ストレージ権限がないことを検査。
+- X11のKeyInterceptorクラスとユーザー補助メタデータもAPKから除外。
+- 既存アップロード鍵による署名、bundletool validation、16KB ELF配置、APKとAABのDEX・ARM64ライブラリ・スクリプトの一致を検査。
+- 単体テスト193件（失敗・スキップなし）、app / termux-runtime / embedded-x11のLint、ホスト・X11コントローラーの検査が成功。
+- 独立したAPI 35 / x86_64 / 4KB AVDへ1.2.0から上書き更新し、既存2環境を保持。
+- 通常のキーイベントとソフトウェアキーボードのタップからMousepadへ入力し、Linuxファイルへ保存した内容を照合。
+- Linux準備のサービスがdataSync、デスクトップ実行のサービスがspecialUseで動くことをdumpsysで確認。
+- 通知からの準備停止、カードからの停止、明示的な再開、アプリ再起動後の停止維持を確認。停止前後・再開後のrootfs inodeは106824で一致。
+- 停止した環境を736,702,007 bytesの.ldfaへバックアップし、別IDへ復元。入力確認用ファイルのSHA-256が一致し、完了後にBackupServiceが停止。バックアップ・復元中のdataSync通知と進捗を確認。
+- 最終APKのLinux起動、通知、Androidホームからの復帰、停止を動画で記録。
+- Pixel 10aへ保存済み1環境を保持して上書き更新。管理画面の表示、versionCode 22、端末内APKと検証済みAPKのSHA-256一致を確認（`e57c44fcd6bc707389b0ceb5c432487d3a6c2eb78c2ca2dbee0b633d951b8e3f`）。実機ではLinuxを起動せず、入力注入も行っていません。
+
+Google Play Consoleへのアップロード・申告・審査完了は、ローカルのパッケージ検証とは別です。ARM64実機でのLinux実行、ARM64 16KBでの実行、音声の試聴はこの修正の検証対象に含めていません。
+
+---
+
+# LDFA 1.2.0 検証資料（過去の記録）
 
 対象：versionName `1.2.0`、versionCode `21`、`com.hatake716.linuxdesktop`。
 ローカルの検証ログ・スクリーンショットは`release-assets/v1.2.0/verification/`にまとめます。

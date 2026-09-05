@@ -81,6 +81,34 @@ class LinuxDesktopRepository(private val context: Context) {
     fun hasActiveInstallation(): Boolean = prootInstallWorkers.values.any { it.isAlive } ||
         prootInstallSessions.values.any { it.isAlive }
 
+    fun installationsPaused(): Boolean = preferences.getBoolean("installation_paused", false)
+
+    fun allowInstallationResume() {
+        preferences.edit().putBoolean("installation_paused", false).commit()
+    }
+
+    suspend fun pauseInstallations() = withContext(Dispatchers.IO) {
+        // Persist the user's choice before reaping workers; polling or process recreation
+        // must not interpret an explicit stop as an invitation to restart automatically.
+        preferences.edit().putBoolean("installation_paused", true).commit()
+        val ids = (prootInstallWorkers.keys + prootInstallSessions.keys).distinct().filter { id ->
+            prootInstallWorkers.containsKey(id) || File(context.filesDir,
+                "home/.local/share/linux-desktop-for-android/containers/$id/installed")
+                .takeIf { it.isFile }?.readText()?.trim() != "1"
+        }
+        for (id in ids) {
+            resumedInstalls.add(id)
+            val request = prootWorkerLauncher.installRequestFile(id)
+            File(request.parentFile, "$id.stop").writeText("user stopped installation")
+            teardownNativeProot(id)
+            val meta = File(context.filesDir, "home/.local/share/linux-desktop-for-android/containers/$id")
+            if (meta.isDirectory) {
+                File(meta, "message").writeText("Linuxの準備を停止しました。導入・起動の修復から再開できます。")
+                File(meta, "state").writeText("failed")
+            }
+        }
+    }
+
     fun runtimeStatus(): RuntimeStatus = RuntimeStatus(
         terminalReady = commandClient.isRuntimeInstalled(),
     )
@@ -173,6 +201,7 @@ class LinuxDesktopRepository(private val context: Context) {
         containers: List<ContainerInfo>,
         force: Boolean = false,
     ): Int = withContext(Dispatchers.IO) {
+        if (installationsPaused()) return@withContext 0
         var resumed = 0
         for (container in containers) {
             val id = container.id

@@ -12,10 +12,11 @@ capture its singleton while LorieView itself is still being inflated.
 from pathlib import Path
 import shutil
 import sys
+import xml.etree.ElementTree as ET
 
 
-if len(sys.argv) != 3:
-    raise SystemExit("usage: prepare_embedded_java.py <upstream-java> <output-dir>")
+if len(sys.argv) not in (3, 4):
+    raise SystemExit("usage: prepare_embedded_java.py <upstream-java> <output-dir> [output-res]")
 
 upstream = Path(sys.argv[1]).resolve()
 output = Path(sys.argv[2]).resolve()
@@ -599,5 +600,64 @@ activity = replace_once(
 if "requestConnection();" in activity:
     raise SystemExit("Legacy Termux:X11 TCP reconnect call remains in generated MainActivity")
 activity_path.write_text(activity, encoding="utf-8")
+
+# LDFA uses the focused Activity's normal input path. Do not ship an optional
+# device-wide AccessibilityService or settings that ask users to enable it.
+def replace_between(text: str, start: str, following: str, replacement: str) -> str:
+    if text.count(start) != 1:
+        raise SystemExit(f"Termux:X11 accessibility patch anchor changed: {start}")
+    begin = text.index(start)
+    end = text.index(following, begin)
+    return text[:begin] + replacement + text[end:]
+
+
+activity = replace_once(activity, "import com.termux.x11.utils.KeyInterceptor;\n", "", "key interceptor import")
+activity = replace_once(activity, """        if (prefs.enableAccessibilityServiceAutomatically.get())
+            KeyInterceptor.launch(this);
+        else if (checkSelfPermission(WRITE_SECURE_SETTINGS) == PERMISSION_GRANTED)
+            KeyInterceptor.shutdown(true);
+""", "", "key interceptor launch")
+activity = replace_once(activity, "        KeyInterceptor.recheck();\n", "", "key interceptor focus check")
+activity_path.write_text(activity, encoding="utf-8")
+(output / "com/termux/x11/utils/KeyInterceptor.java").unlink()
+
+preferences_path = output / "com/termux/x11/LoriePreferences.java"
+preferences = preferences_path.read_text(encoding="utf-8")
+preferences = replace_once(preferences, "import com.termux.x11.utils.KeyInterceptor;\n", "", "preferences interceptor import")
+preferences = replace_between(preferences, "    private final ContentObserver accessibilityObserver", "    @Override\n    public void onWindowFocusChanged", "")
+preferences = replace_between(preferences, "        Uri ENABLED_ACCESSIBILITY_SERVICES", "    }\n", "")
+preferences = replace_once(preferences, "        getContentResolver().unregisterContentObserver(accessibilityObserver);\n", "", "accessibility observer cleanup")
+preferences = replace_between(preferences, '            setEnabled("dexMetaKeyCapture",', "            boolean displayStretchEnabled", '''            setEnabled("dexMetaKeyCapture", true);
+            setEnabled("pauseKeyInterceptingWithEsc", prefs.dexMetaKeyCapture.get());
+            setEnabled("filterOutWinkey", prefs.dexMetaKeyCapture.get());
+
+''')
+preferences = replace_between(preferences, '            if ("enableAccessibilityServiceAutomatically".contentEquals(key)) {', "            requireContext().sendBroadcast", '''            if ("enableAccessibilityServiceAutomatically".contentEquals(key)) return false;
+
+''')
+preferences = replace_between(preferences, '                            case "enableAccessibilityServiceAutomatically": {', '                            case "extra_keys_config": {', '''                            case "enableAccessibilityServiceAutomatically": {
+                                sendResponse(remote, 1, 1, "This setting is not available in LDFA.");
+                                return;
+                            }
+''')
+preferences_path.write_text(preferences, encoding="utf-8")
+
+if len(sys.argv) == 4:
+    resources = Path(sys.argv[3])
+    if resources.exists():
+        shutil.rmtree(resources)
+    shutil.copytree(upstream.parent / "res", resources)
+    (resources / "xml/accessibility_service_config.xml").unlink()
+    tree = ET.parse(upstream.parent / "res/xml/preferences.xml")
+    removed = set()
+    for parent in tree.iter():
+        for node in list(parent):
+            key = node.get("{http://schemas.android.com/apk/res-auto}key")
+            if key in {"enableAccessibilityService", "enableAccessibilityServiceAutomatically"}:
+                parent.remove(node)
+                removed.add(key)
+    if len(removed) != 2:
+        raise SystemExit("Termux:X11 accessibility preferences changed")
+    tree.write(resources / "xml/preferences.xml", encoding="utf-8", xml_declaration=True)
 
 print(f"Generated embedded Java sources in {output}")

@@ -27,19 +27,6 @@
             android:theme="@style/Theme.AppCompat.DayNight"
             android:resizeableActivity="true" />
 
-        <service
-            android:name="com.termux.x11.utils.KeyInterceptor"
-            android:exported="true"
-            android:label="Linux Desktop Key Interceptor"
-            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
-            <intent-filter>
-                <action android:name="android.accessibilityservice.AccessibilityService" />
-            </intent-filter>
-            <meta-data
-                android:name="android.accessibilityservice"
-                android:resource="@xml/accessibility_service_config" />
-        </service>
-
         <receiver
             android:name="com.termux.x11.LoriePreferences$Receiver"
             android:enabled="true"

@@ -32,8 +32,8 @@ android {
         applicationId = "com.hatake716.linuxdesktop"
         minSdk = 26
         targetSdk = 36
-        versionCode = 21
-        versionName = "1.2.0"
+        versionCode = 22
+        versionName = "1.2.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true

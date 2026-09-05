@@ -9,12 +9,12 @@ cd LDFA-google-play
 
 SDKの場所は`local.properties`、署名設定は`keystore.properties`に置きます。いずれもGit管理外です。秘密鍵本体はリポジトリ外で保管してください。
 
-## 1.2.0の成果物
+## 1.2.1の成果物
 
 ```text
-release-assets/v1.2.0/
-  LDFA-v1.2.0-release.apk       インストール用APK
-  LDFA-v1.2.0-play.aab          Google Play提出用（ARM64）
+release-assets/v1.2.1/
+  LDFA-v1.2.1-release.apk       インストール用APK
+  LDFA-v1.2.1-play.aab          Google Play提出用（ARM64）
   SHA256SUMS
   materials/                  日本語・英語の提出資料
   screenshots/                新しい画面のスクリーンショット
@@ -70,6 +70,15 @@ bootstrapはアプリIDごとの絶対パスを含むため、公式Termuxの`co
 - Play App Signingの配信鍵がGitHub APKの鍵と異なる場合、相互の上書き更新はできません。データ移行はバックアップ・復元を使用します。
 
 ## パッケージ検証
+
+APKとAABのマニフェストをデコードし、両方で次の検査を行います。
+
+```bash
+python3 scripts/check-play-permissions.py /path/to/apk-manifest.xml /path/to/aab-manifest.xml
+```
+
+`REQUEST_INSTALL_PACKAGES`、ユーザー補助サービス、共有ストレージ権限がないことと、必要な前景サービス権限が残っていることを検査します。ソースXMLだけでなく完成した成果物を使用してください。
+
 
 ```bash
 jarsigner -verify app/build/outputs/bundle/release/app-release.aab

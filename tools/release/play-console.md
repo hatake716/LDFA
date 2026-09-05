@@ -1,7 +1,7 @@
-# Google Play 提出資料 — LDFA 1.2.0
+# Google Play 提出資料 — LDFA 1.2.1
 
-対象：`com.hatake716.linuxdesktop` / versionCode `21` / targetSdk `36`。
-新しい成果物・画像・提出文面は、ローカルの`release-assets/v1.2.0/`にまとめます。
+対象：`com.hatake716.linuxdesktop` / versionCode `22` / targetSdk `36`。
+新しい成果物・画像・提出文面は、ローカルの`release-assets/v1.2.1/`にまとめます。
 旧`release-assets/LDFA-v1.1.0-release.aab`とは区別してください。
 
 ## ストア掲載情報（日本語）
@@ -102,10 +102,10 @@ LDFA is an independent open-source project, not an official app from Termux, Deb
 
 ```text
 <ja-JP>
-Linuxの導入画面を刷新し、準備からデスクトップ起動までの流れを分かりやすくしました。画面の再作成や中断に強い導入処理、構築段階に応じた進捗、起動・停止の安定性、バックアップの保存・復元処理とChromeの起動を改善しました。アプリアイコンと配色を更新し、Android 16を対象とした設定に対応しました。
+不要なAPKインストール権限とユーザー補助サービスを削除しました。Linux準備中の停止操作と中断後の再開を改善し、前景サービスの用途を整理しました。通常のキーボード入力、Linuxデスクトップ、バックアップ・復元は引き続き利用できます。
 </ja-JP>
 <en-US>
-Redesigned Linux onboarding and the app icon. Setup now survives screen recreation, reports installation stages, and resumes using saved data. Improved desktop process cleanup, Chrome startup, backup storage and restoration of internal Linux links. Updated the Android target to Android 16.
+Removed the unused APK installation permission and accessibility service. Added a notification action to stop Linux setup while preserving saved data, and corrected foreground service types. Standard keyboard input, the Linux desktop, and backup/restore remain available.
 </en-US>
 ```
 
@@ -121,25 +121,49 @@ https://github.com/hatake716/LDFA
 https://github.com/hatake716/LDFA/blob/main/SECURITY.md
 ```
 
-## 前景サービスの説明
+## 権限の未申告エラーへの対応
 
-**specialUse**
+versionCode 21に残っていた`REQUEST_INSTALL_PACKAGES`と、`BIND_ACCESSIBILITY_SERVICE`で登録する`KeyInterceptor`は1.2.1で削除しました。X11の有効化設定・自動有効化処理・サービスクラス・メタデータも同梱しません。Linuxのパッケージ導入にAndroidのAPKインストール権限は使用しません。
 
-```text
-LDFA provides a local interactive Linux desktop. A user starts installation, opens the terminal, or opens the desktop from the visible app. The app keeps the local Linux processes, X11 display service and session monitor running while the user temporarily switches screens. Interrupting them during an active task can terminate Linux applications or interrupt installation.
+新しいAABに差し替え、Consoleが警告対象としているversionCodeを確認してください。旧トラック・旧リリースが対象の場合は、そちらの配信中バージョンも確認します。削除したAPIの使用理由を作って申告する対応は行いません。
 
-TermuxService owns terminal command sessions; RunCommandService dispatches management operations; EmbeddedX11ServerService owns Xorg in a dedicated process; DesktopKeepAliveService monitors the active desktop or installation. These are local execution and display tasks. The app shows ongoing notifications and provides a desktop stop action. The monitor stops after detecting inactivity. Interrupted installation is resumed when the user returns to the app, with bounded retries.
+## 前景サービスの申告
 
-The demonstration shows the user action, desktop display, ongoing notifications, a return from the Android home screen, and explicit stopping of the session.
-```
+### dataSync
 
-**dataSync（バックアップ・復元）**
+選択肢：**「ネットワーク処理 → その他」**と**「ローカル処理 → インポート、エクスポート」**。
 
-```text
-The user explicitly starts a backup or restore from LDFA. BackupService compresses a stopped Linux environment into a local .ldfa archive or verifies and extracts a selected archive into a new environment. It reports progress through a notification and the app, supports cancellation, and stops when the operation completes or fails. The service handles the Android dataSync timeout by cancelling work and stopping. No boot receiver starts this operation.
-```
+1.2.1では、Linux準備中のダウンロード・展開もdataSyncとして扱います。前の回答資料でバックアップのみを対象にした選択肢から追加しています。「ネットワーク処理 → バックアップ、復元」はクラウドバックアップを行わないため選びません。
 
-[前景サービスの申告要件](https://support.google.com/googleplay/android-developer/answer/13392821?hl=en)と[サービス型](https://developer.android.com/develop/background-work/services/fgs/service-types)に沿って、Consoleで用途とデモ動画URLを登録します。specialUseの適否はGoogle Playの審査対象です。
+用途名：ユーザーが開始するLinux環境のダウンロード・展開、および端末内バックアップの書き出し・取り込み。
+
+> ユーザーが画面から開始するLinux環境の準備に使用します。Linuxのファイルをダウンロードし、アプリ専用領域へ展開・構築します。準備中は進捗を画面と通知で示し、通知の「準備を停止」で中断できます。保存済みデータは保持し、ユーザー操作で再開します。また、ユーザーが選ぶ停止済みLinux環境を端末内の.ldfaファイルへ書き出し、選択したファイルを検証・展開して新しい環境へ復元します。バックアップ・復元も進捗表示とキャンセルに対応し、終了時にサービスを停止します。クラウドへの自動バックアップは行いません。
+
+延期・中断の影響：
+
+> 初回準備が延期されると、ユーザーが開始したLinux環境を利用できません。バックアップや復元が延期されると、予定している保存・移行を進められません。途中で処理が終了すると、導入は再開、バックアップ・復元は再実行が必要になります。ユーザーが開始した処理を画面移動中も継続するために使用します。ユーザー自身による停止やAndroidの時間制限には従います。
+
+動画：[dataSyncの実演](https://github.com/hatake716/LDFA/releases/download/v1.2.1/ldfa-data-sync-demo.mp4)。準備の再開・進捗・カードからの停止、バックアップの開始・通知・完了、復元の開始・進捗・完了を示します。キャンセルの入口も画面に表示されます。バックアップの待ち時間の一部を省略し、動画内に明記しています。
+
+### specialUse
+
+選択肢：**「特殊用途 → その他」**。
+
+用途名：ユーザーが開始した端末内Linuxデスクトップ・ターミナルの継続実行。
+
+> ユーザーが画面から起動するLinuxデスクトップとターミナルを実行するために使用します。端末内のLinuxプロセス、X11表示サーバー、セッション監視を維持し、別のAndroidアプリへ一時的に切り替えた後も、開始した作業へ戻れるようにします。実行状態を通知に表示し、デスクトップはアプリ内または通知から停止できます。ターミナルは終了操作を備えています。初回準備のダウンロード・展開とバックアップ・復元にはdataSyncを使用します。
+
+延期・中断の影響：
+
+> ユーザーが操作する対話的なLinux環境のため、実行を延期すると要求された作業画面を利用できません。途中でプロセスや表示サーバーが終了すると、実行中のコマンド・アプリが終了し、未保存の作業が失われる可能性があります。操作中のセッションを継続する必要があり、後で時刻を決めて実行する処理では代替できません。
+
+他のサービス型に該当しない理由：
+
+> 対話的なLinuxプロセスの実行と端末内X11描画が目的です。Android画面の録画・投影や、外部機器との通信を目的とする機能ではありません。既存の型に該当するデータ転送・展開・バックアップ処理はdataSyncとして扱います。
+
+動画：[specialUseの実演](https://github.com/hatake716/LDFA/releases/download/v1.2.1/ldfa-special-use-demo.mp4)。デスクトップ起動、Linux画面表示、実行中通知、Androidホームへ移動、同じセッションへ復帰、明示的な停止を示します。
+
+[前景サービスの申告要件](https://support.google.com/googleplay/android-developer/answer/13392821?hl=ja)と[サービス型](https://developer.android.com/develop/background-work/services/fgs/service-types)に沿って、Consoleで説明と閲覧可能な動画URLを登録します。specialUseの適否はGoogle Playの審査対象です。
 
 ## データセーフティの入力根拠
 
@@ -151,16 +175,16 @@ LDFA本体には広告・解析SDK、開発者向けのデータ送信・アカ�
 
 ## 素材と提出順
 
-1. `release-assets/v1.2.0/`のAAB、SHA256SUMS、検証結果を確認します。
+1. `release-assets/v1.2.1/`のAAB、SHA256SUMS、検証結果を確認します。
 2. ストアアイコン512×512、フィーチャー画像1024×500、新しい画面のスクリーンショットを登録します。
-3. デモ動画を限定公開でアップロードし、閲覧可能なURLをサービス申告に登録します。ローカルの動画作成と、外部サービスへの動画公開は別の作業です。
+3. 上記のGitHubリリースに添付したMP4のURLをサービス申告に登録します。Consoleが別の共有形式を求める場合は、同じ動画を限定公開YouTubeなどへアップロードしてURLを使用します。
 4. 上記の掲載文面、アクセス説明、サービス型、データセーフティ、プライバシーポリシーを入力します。
 5. AABをテストトラックへアップロードし、Console側の検査と審査結果を確認して公開を進めます。
 
 Google Playへのアップロード・審査申請は、この資料やAABを生成しただけでは完了しません。
 
-## 提出前の実測状況
+## 1.2.0での実測状況（1.2.1の結果は検証資料を参照）
 
 2026-09-05時点で、API 35 / x86_64 / 4KBの署名済みAPKによる新規導入、日本語入力、Chrome表示、起動・停止、バックアップ復元を確認しています。Pixel 10a（Android 17 / API 37 / ARM64 / 4KB）へ同一APKをインストールし、バージョン・署名・端末内APKのハッシュ一致と初回画面の表示を確認しました。ARM64実機でのLinuxの導入・実行は未確認です。APKとAABのARM64コードの一致・署名・16KB ELF配置は検査済みですが、ARM64 16KBでのLinux実行を実測した結果ではありません。x86_64のAndroid 17 / 16KBプレビューではゲスト起動時にSIGBUSが再現します。テストトラックで対象端末の導入・復帰・停止を確認してから本番配信を判断してください。
 
-資料に記載したデモ動画はローカルファイルです。URLの登録とPlay Consoleでの審査申請は未実施です。
+デモ動画はGitHubリリースのMP4として提供します。Play ConsoleへのURL登録と審査申請は未実施です。

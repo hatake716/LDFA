@@ -71,7 +71,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         refreshEnvironment(showLoading = true)
         viewModelScope.launch {
             linuxDesktopApplication.installation.collect { progress ->
-                _state.update { it.copy(installation = progress, errorMessage = progress.error) }
+                _state.update { it.copy(
+                    installation = progress,
+                    errorMessage = progress.error,
+                    noticeMessage = progress.message.takeIf { !progress.busy && it.isNotBlank() } ?: it.noticeMessage,
+                ) }
                 if (progress.phase >= 2 || !progress.busy) refreshEnvironment()
             }
         }
@@ -182,6 +186,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun stopContainer(container: ContainerInfo) {
+        if (container.isInstalling()) {
+            com.hatake716.linuxdesktop.service.DesktopKeepAliveService.requestInstallationStop(linuxDesktopApplication)
+            return
+        }
         viewModelScope.launch {
             _state.update {
                 it.copy(

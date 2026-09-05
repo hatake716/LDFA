@@ -42,6 +42,7 @@ class DesktopKeepAliveService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
+            ACTION_STOP_INSTALLATION -> stopInstallation(startId)
             ACTION_STOP_SESSION -> stopActiveSession(
                 intent.getStringExtra(EXTRA_CONTAINER_ID),
                 startId,
@@ -51,6 +52,20 @@ class DesktopKeepAliveService : Service() {
         return START_STICKY
     }
 
+    private fun stopInstallation(stopStartId: Int) {
+        scope.launch {
+            (application as LinuxDesktopApplication).stopLinuxInstallation().join()
+            withContext(Dispatchers.Main.immediate) {
+                val remainingId = repository.activeContainerId()
+                if (remainingId != null || installationRunning()) {
+                    startMonitoring(remainingId)
+                } else if (stopSelfResult(stopStartId)) {
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                }
+            }
+        }
+    }
+
     override fun onDestroy() {
         heartbeatJob?.cancel()
         wakeLock?.let { if (it.isHeld) it.release() }
@@ -58,15 +73,30 @@ class DesktopKeepAliveService : Service() {
         super.onDestroy()
     }
 
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        // The application owns cancellation so cleanup survives this service's deadline.
+        (application as LinuxDesktopApplication).stopLinuxInstallation()
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
+    }
+
+    private fun publishNotification(containerId: String?) {
+        val notification = buildNotification(containerId)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            val type = if (installationRunning()) {
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC or
+                    if (repository.activeContainerId() != null) ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE else 0
+            } else ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+            startForeground(NOTIFICATION_ID, notification, type)
+        } else {
+            startForeground(NOTIFICATION_ID, notification)
+        }
+    }
+
     private fun startMonitoring(requestedId: String?) {
         val containerId = requestedId ?: repository.activeContainerId()
-        val notification = buildNotification(containerId)
         try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
-            } else {
-                startForeground(NOTIFICATION_ID, notification)
-            }
+            publishNotification(containerId)
         } catch (e: IllegalStateException) {
             // ForegroundServiceStartNotAllowedException (S+): promoted from the
             // background. Stop before the did-not-call-startForeground watchdog
@@ -93,7 +123,7 @@ class DesktopKeepAliveService : Service() {
                 } else {
                     idleCycles = 0
                 }
-                getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, buildNotification(activeId))
+                publishNotification(activeId)
                 delay(HEARTBEAT_INTERVAL_MILLIS)
             }
         }
@@ -149,14 +179,14 @@ class DesktopKeepAliveService : Service() {
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             ),
         )
-        .apply { if (containerId != null) addAction(
+        .apply { if (installationRunning() || containerId != null) addAction(
             0,
-            getString(R.string.stop),
+            if (installationRunning()) "準備を停止" else getString(R.string.stop),
             PendingIntent.getService(
                 this@DesktopKeepAliveService,
                 11,
                 Intent(this@DesktopKeepAliveService, DesktopKeepAliveService::class.java).apply {
-                    action = ACTION_STOP_SESSION
+                    action = if (installationRunning()) ACTION_STOP_INSTALLATION else ACTION_STOP_SESSION
                     putExtra(EXTRA_CONTAINER_ID, containerId)
                 },
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
@@ -196,8 +226,15 @@ class DesktopKeepAliveService : Service() {
         private const val EXTRA_CONTAINER_ID = "container_id"
         private const val ACTION_START = "com.hatake716.linuxdesktop.START_KEEP_ALIVE"
         private const val ACTION_STOP_SESSION = "com.hatake716.linuxdesktop.STOP_SESSION"
+        private const val ACTION_STOP_INSTALLATION = "com.hatake716.linuxdesktop.STOP_INSTALLATION"
         private const val HEARTBEAT_INTERVAL_MILLIS = 30_000L
         private const val IDLE_CYCLES_BEFORE_STOP = 2
+
+        fun requestInstallationStop(context: Context) {
+            context.startService(Intent(context, DesktopKeepAliveService::class.java).apply {
+                action = ACTION_STOP_INSTALLATION
+            })
+        }
 
         fun start(context: Context, containerId: String? = null) {
             val intent = Intent(context, DesktopKeepAliveService::class.java).apply {

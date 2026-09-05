@@ -9,9 +9,9 @@ Androidに、DebianとXFCEの作業環境を。
 LDFAは、Linuxの導入・起動・日本語入力・バックアップをひとつのAndroidアプリにまとめています。
 root化や、別のTermux・X11アプリのインストールは不要です。
 
-**検証版：1.2.0 / versionCode 21**
+**検証版：1.2.1 / versionCode 22**
 
-Android 15 / x86_64 / 4KBでLinuxの導入・表示・日本語入力・バックアップ復元を確認しています。Pixel 10a（Android 17 / ARM64 / 4KB）へのインストールと初回画面の表示も確認済みです。ARM64実機でのLinuxの導入・実行は未確認のため、GitHubではプレリリースとして提供します。
+Android 15 / x86_64 / 4KBで検証しています。Pixel 10a（Android 17 / ARM64 / 4KB）では、保存済み環境を保持した1.2.1への上書き更新と管理画面の表示を確認しています。ARM64実機でのLinuxの導入・実行は未確認のため、GitHubではプレリリースとして提供します。
 
 [リリースとAPK](https://github.com/hatake716/LDFA/releases) · [導入手順](docs/INSTALLATION.md) · [プライバシーポリシー](https://hatake716.github.io/LDFA/privacy.html)
 
@@ -44,6 +44,13 @@ Android 15 / x86_64 / 4KBでLinuxの導入・表示・日本語入力・バッ�
 - PulseAudio経由のAndroid音声出力
 - 停止したLinux環境を`.ldfa`ファイルへバックアップし、新しい環境へ復元
 - ターミナル、ログ、導入・起動の修復
+
+## 1.2.1の変更
+
+- 不要なAndroid APKインストール権限と、X11由来のユーザー補助サービス・有効化設定を削除しました。通常のソフトウェア・物理キーボード入力は引き続き使用できます。Androidが予約するシステムキーをユーザー補助サービス経由で取り込む機能は提供しません。
+- Linuxの準備中も通知の「準備を停止」から中断できます。保存済みデータを残し、ユーザーが再開するまで自動再開を抑止します。
+- 準備時のダウンロード・展開はdataSync、対話的なLinux実行はspecialUseとして扱い、Google Playの申告資料を更新しました。
+- 完成したパッケージから不要な権限が消えていることを継続的に検査します。
 
 ## 1.2.0の変更
 

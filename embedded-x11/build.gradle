@@ -30,7 +30,7 @@ android {
                 'build/generated/java'
             ]
             res.srcDirs = [
-                '../vendor/termux-x11/lorie/src/main/res',
+                'build/generated/embedded-res',
                 'src/main/res'
             ]
             aidl.srcDirs = [
@@ -143,8 +143,10 @@ def prepareEmbeddedJava = tasks.register('prepareEmbeddedJava', Exec) {
     def generatedJava = file('build/generated/upstream-java')
     inputs.dir(upstreamJava)
     inputs.file('scripts/prepare_embedded_java.py')
+    inputs.dir('../vendor/termux-x11/lorie/src/main/res')
     outputs.dir(generatedJava)
-    commandLine 'python3', file('scripts/prepare_embedded_java.py'), upstreamJava, generatedJava
+    outputs.dir('build/generated/embedded-res')
+    commandLine 'python3', file('scripts/prepare_embedded_java.py'), upstreamJava, generatedJava, file('build/generated/embedded-res')
 }
 
 preBuild.dependsOn tasks.named('generatePrefs'), prepareEmbeddedJava

@@ -24,6 +24,10 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.runInterruptible
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import java.io.File
 
 data class InstallationProgress(
@@ -39,6 +43,7 @@ class LinuxDesktopApplication : TermuxApplication() {
     private var pendingSessionStart: Pair<String, Deferred<DesktopDisplayBackend>>? = null
     private var viewerResumeRecovery: Job? = null
     private var installationJob: Job? = null
+    private var installationStopJob: Job? = null
     private val _installation = MutableStateFlow(InstallationProgress())
     val installation = _installation.asStateFlow()
     val preparingInstallation: Boolean get() = _installation.value.busy
@@ -46,7 +51,8 @@ class LinuxDesktopApplication : TermuxApplication() {
     /** User-initiated work belongs to the application, including the rootfs request wait. */
     @Synchronized
     fun installLinux(name: String, prepareOnly: Boolean = false) {
-        if (installationJob?.isActive == true || (!prepareOnly && name.isBlank())) return
+        if (installationStopJob?.isActive == true || installationJob?.isActive == true || (!prepareOnly && name.isBlank())) return
+        repository.allowInstallationResume()
         _installation.value = InstallationProgress(true, 1, "アプリ内の実行環境を準備しています")
         DesktopKeepAliveService.start(this)
         installationJob = sessionScope.launch {
@@ -54,7 +60,7 @@ class LinuxDesktopApplication : TermuxApplication() {
                 check(prepareOnly || filesDir.usableSpace >= 5L * 1024 * 1024 * 1024) {
                     "Linuxの導入には空き容量が5GB以上必要です。空き容量を増やして再試行してください。"
                 }
-                EmbeddedBootstrapInstaller.install(this@LinuxDesktopApplication)
+                runInterruptible { EmbeddedBootstrapInstaller.install(this@LinuxDesktopApplication) }
                 _installation.value = InstallationProgress(true, 2, "Linuxの導入準備を確認しています")
                 repository.bootstrapHost()
                 if (prepareOnly) {
@@ -65,6 +71,7 @@ class LinuxDesktopApplication : TermuxApplication() {
                 repository.createContainer(name)
                 _installation.value = InstallationProgress(message = "Linuxの構築を開始しました")
             } catch (cancelled: CancellationException) {
+                withContext(NonCancellable) { repository.pauseInstallations() }
                 throw cancelled
             } catch (failure: Exception) {
                 _installation.value = InstallationProgress(error = failure.message ?: "Linuxの導入に失敗しました")
@@ -74,7 +81,9 @@ class LinuxDesktopApplication : TermuxApplication() {
 
     @Synchronized
     fun resumeInstallations(force: Boolean = false) {
-        if (installationJob?.isActive == true) return
+        if (installationStopJob?.isActive == true || installationJob?.isActive == true) return
+        if (force) repository.allowInstallationResume()
+        if (repository.installationsPaused()) return
         _installation.value = InstallationProgress(true, 3, "中断したLinuxの導入を再開しています")
         DesktopKeepAliveService.start(this)
         installationJob = sessionScope.launch {
@@ -83,11 +92,31 @@ class LinuxDesktopApplication : TermuxApplication() {
                 repository.resumeInterruptedInstalls(repository.listContainers(), force)
                 _installation.value = InstallationProgress()
             } catch (cancelled: CancellationException) {
+                withContext(NonCancellable) { repository.pauseInstallations() }
                 throw cancelled
             } catch (failure: Exception) {
                 _installation.value = InstallationProgress(error = failure.message ?: "導入を再開できませんでした")
             }
         }
+    }
+
+    /** Stop only installation work; preserve downloaded data and require an explicit resume. */
+    @Synchronized
+    fun stopLinuxInstallation(): Job {
+        installationStopJob?.takeIf { it.isActive }?.let { return it }
+        val pending = installationJob
+        val operation = sessionScope.launch {
+            _installation.value = InstallationProgress(true, 3, "Linuxの準備を停止しています")
+            try {
+                pending?.cancelAndJoin()
+                repository.pauseInstallations()
+                _installation.value = InstallationProgress(message = "Linuxの準備を停止しました。導入操作または修復から再開できます。")
+            } catch (failure: Exception) {
+                _installation.value = InstallationProgress(error = failure.message ?: "準備を停止できませんでした")
+            }
+        }
+        installationStopJob = operation
+        return operation
     }
 
     /**

@@ -37,6 +37,7 @@ public final class EmbeddedBootstrapInstaller {
         try (ZipInputStream zip = new ZipInputStream(new ByteArrayInputStream(TermuxInstaller.loadZipBytes()))) {
             ZipEntry entry;
             while ((entry = zip.getNextEntry()) != null) {
+                checkInterrupted();
                 if (entry.getName().equals("SYMLINKS.txt")) {
                     BufferedReader reader = new BufferedReader(new InputStreamReader(zip, StandardCharsets.UTF_8));
                     String line;
@@ -53,7 +54,10 @@ public final class EmbeddedBootstrapInstaller {
                     if (!entry.isDirectory()) {
                         try (FileOutputStream output = new FileOutputStream(target)) {
                             int count;
-                            while ((count = zip.read(buffer)) != -1) output.write(buffer, 0, count);
+                            while ((count = zip.read(buffer)) != -1) {
+                                checkInterrupted();
+                                output.write(buffer, 0, count);
+                            }
                         }
                         String name = entry.getName();
                         if (name.startsWith("bin/") || name.startsWith("libexec/") ||
@@ -65,7 +69,10 @@ public final class EmbeddedBootstrapInstaller {
         }
         if (links.isEmpty() || !new File(staging, "bin/bash").isFile())
             throw new IOException("APKの実行環境を確認できませんでした。");
-        for (String[] link : links) Os.symlink(link[0], link[1]);
+        for (String[] link : links) {
+            checkInterrupted();
+            Os.symlink(link[0], link[1]);
+        }
         // Only the known empty prefix is removed, after successful extraction. home is preserved.
         if (prefix.exists() && (!TermuxFileUtils.isTermuxPrefixDirectoryEmpty() ||
             FileUtils.deleteFile("empty prefix", prefix.getPath(), true) != null))
@@ -74,6 +81,10 @@ public final class EmbeddedBootstrapInstaller {
         TermuxShellEnvironment.writeEnvironmentToFile(context);
         if (!EmbeddedTermuxRuntime.ensureInternalCommandPolicy(context))
             throw new IOException("内蔵環境の実行設定を保存できませんでした。");
+    }
+
+    private static void checkInterrupted() throws InterruptedException {
+        if (Thread.currentThread().isInterrupted()) throw new InterruptedException("Bootstrap cancelled");
     }
 
     private static File child(File root, String name) throws IOException {

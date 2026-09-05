@@ -16,6 +16,11 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.delay
+import com.termux.shared.termux.shell.TermuxShellManager
 import java.io.File
 import java.security.MessageDigest
 import java.util.UUID
@@ -278,12 +283,14 @@ class TermuxCommandClient(private val context: Context) {
             withTimeout(timeout) { deferred.await() }
         } catch (exception: TimeoutCancellationException) {
             TermuxResultRegistry.remove(executionId)
+            cancelExecution(resultPendingIntent)
             throw TermuxCommandException(
                 "内蔵ターミナルから応答がありません。処理ログを確認してください。",
                 exception,
             )
         } catch (exception: CancellationException) {
             TermuxResultRegistry.remove(executionId)
+            cancelExecution(resultPendingIntent)
             throw exception
         } catch (exception: Exception) {
             TermuxResultRegistry.remove(executionId)
@@ -292,6 +299,19 @@ class TermuxCommandClient(private val context: Context) {
                 exception,
             )
         }
+    }
+
+    /** Cancelling a coroutine must also stop its own RUN_COMMAND, not just discard the result. */
+    private suspend fun cancelExecution(result: PendingIntent) = withContext(NonCancellable + Dispatchers.Main) {
+        // RunCommandService forwards asynchronously to TermuxService. Allow its queued
+        // start to arrive, matching the unique result token rather than other terminal work.
+        repeat(4) {
+            TermuxShellManager.getShellManager()?.mTermuxTasks?.toList()?.forEach { task ->
+                if (task.executionCommand.resultConfig.resultPendingIntent == result) task.kill()
+            }
+            delay(50)
+        }
+        result.cancel()
     }
 
     private fun TermuxCommandResult.checkedStdout(): String {
