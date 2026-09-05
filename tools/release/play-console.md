@@ -1,7 +1,7 @@
-# Google Play 提出資料 — LDFA 1.2.2
+# Google Play 提出資料 — LDFA 1.2.3
 
-対象：`com.hatake716.linuxdesktop` / versionCode `23` / targetSdk `36`。
-新しい成果物・画像・提出文面は、ローカルの`release-assets/v1.2.2/`にまとめます。
+対象：`com.hatake716.linuxdesktop` / versionCode `24` / targetSdk `36`。
+新しい成果物・画像・提出文面は、ローカルの`release-assets/v1.2.3/`にまとめます。
 旧`release-assets/LDFA-v1.1.0-release.aab`とは区別してください。
 
 ## ストア掲載情報（日本語）
@@ -38,7 +38,7 @@ LDFA（Linux Desktop for Android）は、Debian 12とXFCEデスクトップをAn
 ・Androidスピーカーへの音声出力
 
 ■ データを持ち運ぶ
-複数のLinux環境を作成できます。停止した環境は.ldfaファイルへバックアップし、新しい環境として復元できます。初回画面からバックアップの取り込みを始めることもできます。
+複数のLinux環境を作成できます。停止した環境は.ldfaファイルへバックアップし、新しい環境として復元できます。初回画面からバックアップの取り込みを始めることもできます。保存済み環境の起動中は、進行状況と起動ログを画面で確認できます。
 
 ■ 必要な環境
 Android 8.0以降のARM64端末。新規導入には空き容量5GB以上とインターネット接続が必要です。Wi-Fiと充電をおすすめします。所要時間は端末と回線によって異なります。
@@ -85,7 +85,7 @@ WORK IN LINUX
 • Audio output through Android speakers
 
 KEEP YOUR ENVIRONMENT
-Create multiple Linux environments. Back up a stopped environment to an .ldfa file and restore it as a new environment. You can also start from a backup on the welcome screen.
+Create multiple Linux environments. Back up a stopped environment to an .ldfa file and restore it as a new environment. You can also start from a backup on the welcome screen. Startup progress and logs are displayed when opening a saved desktop.
 
 REQUIREMENTS
 Android 8.0 or later on an ARM64 device, at least 5 GB of free space for a new installation, and an internet connection. Wi-Fi and charging are recommended. Installation time depends on your device and connection.
@@ -102,10 +102,10 @@ LDFA is an independent open-source project, not an official app from Termux, Deb
 
 ```text
 <ja-JP>
-Androidの非公開APIを利用するSDKを削除し、ART更新への互換性を改善しました。内蔵ターミナルのプロセス停止を公開APIへ移行しました。Linux環境と保存済みデータは引き続き利用できます。
+保存済みLinux環境の起動中に、処理の進行状況とログを表示するようにしました。画面が切り替わってもログを確認でき、起動完了後は自動でデスクトップへ移ります。失敗時はログを読み返せます。
 </ja-JP>
 <en-US>
-Removed the hidden-API bypass SDK to improve compatibility with Android Runtime updates. Embedded terminal commands now stop through the public Process API. Existing Linux environments and saved data remain available.
+Startup progress and logs are now shown when opening a saved Linux desktop. Logs remain visible as the display opens and close automatically when the desktop is ready. Failed starts keep their logs available for review.
 </en-US>
 ```
 
@@ -181,7 +181,7 @@ LDFA本体には広告・解析SDK、開発者向けのデータ送信・アカ�
 
 ## 素材と提出順
 
-1. `release-assets/v1.2.2/`のAAB、SHA256SUMS、検証結果を確認します。
+1. `release-assets/v1.2.3/`のAAB、SHA256SUMS、検証結果を確認します。
 2. ストアアイコン512×512、フィーチャー画像1024×500、新しい画面のスクリーンショットを登録します。
 3. 上記のGitHubリリースに添付したMP4のURLをサービス申告に登録します。Consoleが別の共有形式を求める場合は、同じ動画を限定公開YouTubeなどへアップロードしてURLを使用します。
 4. 上記の掲載文面、アクセス説明、サービス型、データセーフティ、プライバシーポリシーを入力します。
@@ -194,3 +194,7 @@ Google Playへのアップロード・審査申請は、この資料やAABを生
 2026-09-05時点で、API 35 / x86_64 / 4KBの署名済みAPKによる新規導入、日本語入力、Chrome表示、起動・停止、バックアップ復元を確認しています。Pixel 10a（Android 17 / API 37 / ARM64 / 4KB）へ同一APKをインストールし、バージョン・署名・端末内APKのハッシュ一致と初回画面の表示を確認しました。ARM64実機でのLinuxの導入・実行は未確認です。APKとAABのARM64コードの一致・署名・16KB ELF配置は検査済みですが、ARM64 16KBでのLinux実行を実測した結果ではありません。x86_64のAndroid 17 / 16KBプレビューではゲスト起動時にSIGBUSが再現します。テストトラックで対象端末の導入・復帰・停止を確認してから本番配信を判断してください。
 
 デモ動画はGitHubリリースのMP4として提供します。Play ConsoleへのURL登録と審査申請は未実施です。
+
+## 1.2.3の起動ログ表示
+
+起動時のログは端末内だけで表示します。開発者への送信や解析SDKは追加していません。ユーザー操作でテキストを選択・コピーできます。新しい権限は追加しておらず、dataSyncとspecialUseの用途は従来どおりです。1.2.1で撮影したFGS動画は過去版の機能実演資料です。現行版の起動ログUIは[1.2.3の実演動画](https://github.com/hatake716/LDFA/releases/download/v1.2.3/ldfa-startup-logs-demo.mp4)を参照してください。

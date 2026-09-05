@@ -46,6 +46,7 @@ data class MainUiState(
     val installation: com.hatake716.linuxdesktop.InstallationProgress = com.hatake716.linuxdesktop.InstallationProgress(),
     val operationInProgress: Boolean = false,
     val desktopStartInProgress: Boolean = false,
+    val desktopStartup: com.hatake716.linuxdesktop.data.DesktopStartupProgress = com.hatake716.linuxdesktop.data.DesktopStartupProgress(),
     val setup: SetupSnapshot = SetupSnapshot(),
     val containers: List<ContainerInfo> = emptyList(),
     val liveInstallationLogs: Map<String, String> = emptyMap(),
@@ -69,6 +70,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         refreshEnvironment(showLoading = true)
+        viewModelScope.launch {
+            linuxDesktopApplication.desktopStartup.progress.collect { progress ->
+                _state.update {
+                    it.copy(
+                        desktopStartup = progress,
+                        desktopStartInProgress = progress.busy,
+                        operationInProgress = progress.busy || (!it.desktopStartInProgress && it.operationInProgress),
+                    )
+                }
+            }
+        }
         viewModelScope.launch {
             linuxDesktopApplication.installation.collect { progress ->
                 _state.update { it.copy(
@@ -160,30 +172,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         viewModelScope.launch {
-            _state.update {
-                it.copy(
-                    operationInProgress = true,
-                    desktopStartInProgress = true,
-                    errorMessage = null,
-                )
-            }
             try {
-                linuxDesktopApplication.startDesktopSession(container.id).await()
-                _state.update {
-                    it.copy(
-                        operationInProgress = false,
-                        desktopStartInProgress = false,
-                        noticeMessage = "${container.name}を起動しました。",
-                    )
-                }
+                linuxDesktopApplication.startDesktopSession(container.id, container.name).await()
+                _state.update { it.copy(noticeMessage = "${container.name}を起動しました。") }
                 refreshContainers()
             } catch (exception: CancellationException) {
                 throw exception
             } catch (exception: Throwable) {
-                showError(exception)
+                // The Application keeps the failed launch and its logs visible after recreation.
+                if (!linuxDesktopApplication.desktopStartup.progress.value.visible) showError(exception)
             }
         }
     }
+
+    fun dismissStartupFailure() = linuxDesktopApplication.desktopStartup.dismissFailure()
 
     fun stopContainer(container: ContainerInfo) {
         if (container.isInstalling()) {

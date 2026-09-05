@@ -71,8 +71,10 @@ fun LinuxDesktopRoot(
             )
         }
 
-        if (state.operationInProgress) {
-            OperationOverlay(desktopStarting = state.desktopStartInProgress)
+        if (state.desktopStartup.visible) {
+            DesktopStartupOverlay(state.desktopStartup, viewModel::dismissStartupFailure)
+        } else if (state.operationInProgress) {
+            OperationOverlay()
         }
 
         SnackbarHost(

@@ -1,6 +1,6 @@
 # LDFAの内部構成
 
-対象は1.2.2です。アプリIDは`com.hatake716.linuxdesktop`、実行環境のprefixは`/data/data/com.hatake716.linuxdesktop/files/usr`です。
+対象は1.2.3です。アプリIDは`com.hatake716.linuxdesktop`、実行環境のprefixは`/data/data/com.hatake716.linuxdesktop/files/usr`です。
 
 ## モジュール
 
@@ -113,3 +113,11 @@ DesktopKeepAliveServiceは、Linux準備中のダウンロード・展開にdata
 任意の診断情報は公開APIまたは通常のアクセス権で読み取れる情報に限定します。SELinuxのプロセスラベルは`/proc/.../attr/current`、ファイルラベルは`Os.getxattr`から取得します。取得できない内部属性、システム機能フラグ、UIDの表示名は不明のまま扱います。これらの診断情報の取得失敗でLinuxを起動不能にはしません。
 
 [Android公式のART互換性に関する説明](https://developer.android.com/about/versions/16/behavior-changes-all#art-internal-changes)を参照してください。
+
+## 起動時のログ表示
+
+`DesktopStartupMonitor`はApplicationに起動状態を保持します。管理画面のComposeとX11 Activityの同じウィンドウに重ねるComposeViewが共通のStateFlowを参照します。Activityの回転・再作成で起動処理やログ監視を再実行せず、X11 Surfaceを維持したまま描画確認を行います。起動完了で表示を終了し、失敗時はログを確認できる状態を保持します。
+
+起動段階はRepositoryが通知します。ログはApplicationのIOスコープで1秒ごとにアプリ内の既存ファイルから読み、ログ取得のためのTermuxコマンドやPRootプロセスは生成しません。`StartupLogReader`は起動前のファイル位置を記録し、追記、切り詰め、ファイルの置き換えに対応します。UTF-8の途中で分割された行は次の書き込みまで保持します。読み込みは各ファイル32KB、画面は最新160行・24,000文字に制限します。起動処理が終了すると監視コルーチンも終了します。
+
+この表示はアプリ内の同じウィンドウに追加するため、他アプリへの重ね合わせ権限や新しい前景サービス権限は必要ありません。プロセス終了をまたぐ起動ログ状態の永続化は行っていません。

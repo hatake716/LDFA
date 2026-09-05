@@ -166,7 +166,7 @@ internal fun LogsDialog(title: String, logs: String, onDismiss: () -> Unit) {
 }
 
 @Composable
-internal fun OperationOverlay(desktopStarting: Boolean) {
+internal fun OperationOverlay() {
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -184,17 +184,9 @@ internal fun OperationOverlay(desktopStarting: Boolean) {
                 Spacer(Modifier.width(14.dp))
                 Column {
                     Text(
-                        if (desktopStarting) "デスクトップを起動しています" else "処理しています",
+                        "処理しています",
                         fontWeight = FontWeight.Medium,
                     )
-                    if (desktopStarting) {
-                        Spacer(Modifier.height(5.dp))
-                        Text(
-                            "デスクトップが表示されるまで少し時間がかかります。初回や更新直後は数分かかる場合があります。そのままお待ちください。",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
                 }
             }
         }

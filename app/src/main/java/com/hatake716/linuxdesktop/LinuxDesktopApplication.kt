@@ -39,6 +39,7 @@ data class InstallationProgress(
 
 class LinuxDesktopApplication : TermuxApplication() {
     val repository: LinuxDesktopRepository by lazy { LinuxDesktopRepository(this) }
+    val desktopStartup by lazy { com.hatake716.linuxdesktop.data.DesktopStartupMonitor(filesDir) }
     private val sessionScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var pendingSessionStart: Pair<String, Deferred<DesktopDisplayBackend>>? = null
     private var viewerResumeRecovery: Job? = null
@@ -125,17 +126,20 @@ class LinuxDesktopApplication : TermuxApplication() {
      * not cancel it halfway between server startup and XFCE startup.
      */
     @Synchronized
-    fun startDesktopSession(id: String): Deferred<DesktopDisplayBackend> {
+    fun startDesktopSession(id: String, name: String = id): Deferred<DesktopDisplayBackend> {
         pendingSessionStart?.takeIf { it.second.isActive }?.let { pending ->
             check(pending.first == id) { "別のLinuxデスクトップを起動処理中です。" }
             return pending.second
         }
 
-        DesktopKeepAliveService.start(this, id)
+        desktopStartup.begin(id, name)
         val operation = sessionScope.async {
-            val backend = repository.startContainer(id)
-            DesktopKeepAliveService.start(this@LinuxDesktopApplication, id)
-            backend
+            desktopStartup.track { reportPhase ->
+                DesktopKeepAliveService.start(this@LinuxDesktopApplication, id)
+                val backend = repository.startContainer(id, reportPhase)
+                DesktopKeepAliveService.start(this@LinuxDesktopApplication, id)
+                backend
+            }
         }
         pendingSessionStart = id to operation
         operation.invokeOnCompletion {
@@ -197,7 +201,11 @@ class LinuxDesktopApplication : TermuxApplication() {
             }
 
             override fun onActivityCreated(activity: Activity, state: Bundle?) = Unit
-            override fun onActivityStarted(activity: Activity) = Unit
+            override fun onActivityStarted(activity: Activity) {
+                if (activity is X11MainActivity) {
+                    com.hatake716.linuxdesktop.ui.attachDesktopStartupOverlay(activity, desktopStartup)
+                }
+            }
             override fun onActivityPaused(activity: Activity) = Unit
             override fun onActivityStopped(activity: Activity) = Unit
             override fun onActivitySaveInstanceState(activity: Activity, state: Bundle) = Unit

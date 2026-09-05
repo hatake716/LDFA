@@ -229,7 +229,8 @@ class LinuxDesktopRepository(private val context: Context) {
         resumed
     }
 
-    suspend fun startContainer(id: String): DesktopDisplayBackend {
+    suspend fun startContainer(id: String, onProgress: (String) -> Unit = {}): DesktopDisplayBackend {
+        onProgress("既存のセッションを確認しています")
         val affectedIds = listOfNotNull(id, activeContainerId()).distinct()
         return ContainerOperationLocks.withLocks(affectedIds) {
             withContext(Dispatchers.IO) {
@@ -263,15 +264,19 @@ class LinuxDesktopRepository(private val context: Context) {
                         teardownNativeProot(id)
                         closeAllDisplaysAndWait()
                         stopAllDisplayServers()
+                        onProgress("Linuxアプリの設定を確認しています")
                         ensureBundledDesktopApps(id)
 
+                        onProgress("X11表示サーバーを起動しています")
                         val backend = selectAndStartDisplayBackend(id)
+                        onProgress("DebianとXFCEを起動しています")
                         startAndProbeHost(id)
 
                         // The VNC fallback was removed (its first-time provisioning took
                         // ~30 minutes through a nested proot — worse than failing): a
                         // desktop that cannot be PRESENTED on native X11 is a start
                         // failure with diagnostics, never a silent degraded mode.
+                        onProgress("デスクトップの描画を確認しています")
                         val desktopPresentationFailure = verifyNativeDesktopPresentation(id)
                         if (desktopPresentationFailure != null) {
                             throw desktopPresentationFailure
@@ -280,6 +285,7 @@ class LinuxDesktopRepository(private val context: Context) {
                         setActiveSession(id, backend)
                         backend
                     } catch (throwable: Throwable) {
+                        onProgress("起動を停止し、後処理を行っています")
                         Log.e(LIFECYCLE_LOG_TAG, "startContainer failed id=$id", throwable)
                         withContext(NonCancellable) {
                             clearActiveSession()

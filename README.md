@@ -9,9 +9,9 @@ Androidに、DebianとXFCEの作業環境を。
 LDFAは、Linuxの導入・起動・日本語入力・バックアップをひとつのAndroidアプリにまとめています。
 root化や、別のTermux・X11アプリのインストールは不要です。
 
-**検証版：1.2.2 / versionCode 23**
+**検証版：1.2.3 / versionCode 24**
 
-Android 15・16 / x86_64 / 4KBでLinuxの表示・入力・停止を検証しています。Pixel 10a（Android 17 / ARM64 / 4KB）では、1.2.2への上書き更新、アプリ起動、端末内APKのハッシュ一致を確認しています。ARM64実機でのLinuxの導入・実行は未確認のため、GitHubではプレリリースとして提供します。
+1.2.3の起動ログ表示はAndroid 16 / x86_64 / 4KBで検証しています。Pixel 10a（Android 17 / ARM64 / 4KB）では、1.2.3への上書き更新、アプリ起動、端末内APKのハッシュ一致を確認しています。ARM64実機でのLinuxの導入・実行は未確認のため、GitHubではプレリリースとして提供します。
 
 [リリースとAPK](https://github.com/hatake716/LDFA/releases) · [導入手順](docs/INSTALLATION.md) · [プライバシーポリシー](https://hatake716.github.io/LDFA/privacy.html)
 
@@ -32,6 +32,16 @@ Android 15・16 / x86_64 / 4KBでLinuxの表示・入力・停止を検証して
 <p><img src="docs/screenshots/onboarding.png" width="240" alt="初回の導入画面"> <img src="docs/screenshots/home.png" width="240" alt="デスクトップの管理画面"> <img src="docs/screenshots/desktop.png" width="240" alt="日本語テキストを表示するXFCE"></p>
 
 画面は署名済み1.2.0を検証用エミュレーターで動かして撮影しています。
+
+## 1.2.3の変更
+
+<p><img src="docs/screenshots/startup-logs.png" width="280" alt="LDFA 1.2.3の起動ログ表示"></p>
+
+1.2.3の最終APKで撮影した画面です。[起動ログの実演動画](https://github.com/hatake716/LDFA/releases/download/v1.2.3/ldfa-startup-logs-demo.mp4)で、保存済み環境を開いてからデスクトップが表示されるまで確認できます。
+
+保存済み環境の「デスクトップを開く」を押すと、起動処理の段階とログを画面に表示します。管理画面からX11画面へ切り替わってもログは継続し、デスクトップの描画確認が終わると自動で閉じます。
+
+今回の起動で追加されたLinux・X11・XFCEのログを表示します。自動スクロールを止めて読み返したり、テキストを選択してコピーできます。起動に失敗した場合は、その起動のログを閉じるまで残します。画面回転によって起動処理をやり直すことはありません。
 
 ## できること
 

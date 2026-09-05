@@ -1,4 +1,33 @@
-# LDFA 1.2.2 APIバイパスSDK削除の検証
+# LDFA 1.2.3 保存済みデスクトップの起動ログの検証
+
+対象：`com.hatake716.linuxdesktop` / versionName `1.2.3` / versionCode `24`。2026-09-05〜06に検証しました。
+成果物と記録はローカルの`release-assets/v1.2.3/`に保存しています。
+
+- 保存済み環境を開くと、準備段階と今回の起動で追加されたLinux・X11・XFCE・アプリ設定のログを表示。管理画面とX11画面で同じ状態を参照し、描画確認の成功後に自動で閉じます。
+- 単体テスト201件成功（app 56件、terminal-emulator 145件）、失敗・エラー・スキップなし。今回追加した7件では、前回ログの除外、ファイル置換・切り詰め、日本語UTF-8の途中書き込み、大量出力、失敗・キャンセル・成功後の状態を検証しました。
+- app / termux-runtime / embedded-x11のLint、ホスト構文・統合テスト、X11コントローラー検査が成功。
+- 最終APKとARM64 AABの署名、bundletool validation、不要な権限・AccessibilityService・HiddenApiBypass SDKの不在を確認。APK内18本・AAB内9本のネイティブライブラリの16KB ELF配置と、両成果物の全DEX・ARM64ライブラリ・ホストスクリプト一致を検査しました。
+- 独立したAPI 36 / x86_64 / 4KB AVDに最終APKを上書きし、保存済み2環境を保持。保存済み環境の起動ログ、縦横回転後も同じ開始時刻のログが残ること、X11画面への移行中の表示、XFCE描画後の自動終了、停止後のXFCE終了を確認しました。
+- 停止中の検証専用rootfsを一時的に退避して起動失敗を再現。失敗後のログと「閉じる」、横画面・文字倍率1.3、Activityを破棄して開き直した後のログ保持を確認しました。検証後はrootfsを元へ戻し、inodeの一致を確認しています。
+- 最終APKで約32秒の起動実演動画を撮影。保存済み環境の起動、画面回転、実際のログ出力、XFCE表示までを収録しています。
+- Pixel 10a / Android 17 / API 37 / ARM64 / 4KBへ、同じ最終APKを`install -r`で1.2.2から更新。versionCode 24、MainActivityの起動成功、保存済み環境の管理画面と起動ログ画面、端末内APKのSHA-256一致を確認しました。データ消去と実機への入力注入は行っていません。
+- 取得可能なAPI 36 AVDとPixelの対象アプリUIDのlogcatに、FATAL EXCEPTION、Fatal signal、NoClassDefFoundError、NoSuchMethodErrorはありませんでした。
+
+最終APKのSHA-256は`8bdb651d1572cff6ed701cb7410f2fc3ed3748fd2b9aa570936cd1c1cdc07234`、ARM64 AABは`ddaa1fd0ed6a1ab852402b1135be90f0cb50f424d358a543c97fbe351d994ef2`です。エミュレーターと実機へ、この最終APKをインストールしています。
+
+## 今回の検証範囲
+
+API 36は公式Google APIs x86_64イメージrevision 7、セキュリティパッチ2025-07-05、ARTモジュール360527520、SELinux Enforcingです。診断時はadb rootを使用しますが、アプリは通常の非root UIDで動作します。2026年時点のすべてのART Mainline更新を検証したものではありません。
+
+起動ログの保持はアプリプロセスが生存する間の機能です。Activity再作成は検証しましたが、Androidがアプリプロセス自体を終了した後に同じ表示を復元する永続化は実装していません。
+
+実機では上書き更新・アプリ起動・管理画面・起動ログ画面・APK照合を確認しました。Linuxの起動操作は自動実行していません。実機でのLinux起動完了は未確認です。ARM64でのLinux実行、ARM64 16KB環境、音声試聴、長時間負荷は未確認です。Linuxの新規導入・バックアップ・復元の前回の結果は下記1.2.2の記録を参照してください。今回、同じ検証を再実施したとは扱いません。
+
+Google Play更新用AABと提出資料を作成しています。Consoleへのアップロード・申告送信・審査完了・公開は未実施です。
+
+---
+
+# LDFA 1.2.2 APIバイパスSDK削除の検証（過去の記録）
 
 対象：`com.hatake716.linuxdesktop` / versionName `1.2.2` / versionCode `23`。
 成果物と記録はローカルの`release-assets/v1.2.2/`に保存しています。

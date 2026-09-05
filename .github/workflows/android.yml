@@ -193,7 +193,7 @@ jobs:
 
           # LDFA branding and Material 3 tools are included.
           grep -Fxq 'com.hatake716.linuxdesktop' "$VERIFY_DIR/application-id.txt"
-          grep -Fq "versionCode='23' versionName='1.2.2'" "$VERIFY_DIR/badging.txt"
+          grep -Fq "versionCode='24' versionName='1.2.3'" "$VERIFY_DIR/badging.txt"
           grep -Fq "targetSdkVersion:'36'" "$VERIFY_DIR/badging.txt"
           grep -Fq "application-label:'LDFA'" "$VERIFY_DIR/badging.txt"
           grep -Fq 'ToolsScreen' "$VERIFY_DIR/dex-strings.txt"

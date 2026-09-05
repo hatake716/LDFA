@@ -9,17 +9,19 @@ cd LDFA-google-play
 
 SDKの場所は`local.properties`、署名設定は`keystore.properties`に置きます。いずれもGit管理外です。秘密鍵本体はリポジトリ外で保管してください。
 
-## 1.2.2の成果物
+## 1.2.3の成果物
 
 ```text
-release-assets/v1.2.2/
-  LDFA-v1.2.2-release.apk       インストール用APK
-  LDFA-v1.2.2-play.aab          Google Play提出用（ARM64）
+release-assets/v1.2.3/
+  LDFA-v1.2.3-release.apk       インストール用APK
+  LDFA-v1.2.3-play.aab          Google Play提出用（ARM64）
+  LDFA-v1.2.3-google-play-materials.zip  提出資料・画像・動画・検証記録
   SHA256SUMS
   materials/                  日本語・英語の提出資料
   verification/               検証結果・スクリーンショット・署名の記録
   icon-512.png
   feature-graphic-1024x500.png
+  ldfa-startup-logs-demo.mp4   1.2.3の起動ログ・画面回転・デスクトップ表示
   ldfa-data-sync-demo.mp4     1.2.1で撮影した同一機能の実演
   ldfa-special-use-demo.mp4   1.2.1で撮影した同一機能の実演
 ```
@@ -110,7 +112,7 @@ Google Play掲載文面・前景サービスの説明・動画の用途は[play-
 
 ```bash
 ./gradlew :app:dependencyInsight --dependency hiddenapibypass --configuration releaseRuntimeClasspath
-python3 scripts/check-no-hidden-api-bypass.py release-assets/v1.2.2/LDFA-v1.2.2-release.apk release-assets/v1.2.2/LDFA-v1.2.2-play.aab
+python3 scripts/check-no-hidden-api-bypass.py release-assets/v1.2.3/LDFA-v1.2.3-release.apk release-assets/v1.2.3/LDFA-v1.2.3-play.aab
 ```
 
-SDK依存情報の報告は無効化せず、SDK本体と使用コードを除外します。旧1.2.1には対象SDKが残っているため、今回の指摘への再提出には1.2.2のAABを使用してください。
+SDK依存情報の報告は無効化せず、SDK本体と使用コードを除外します。旧1.2.1には対象SDKが残っているため、今回の指摘への再提出には1.2.3のAABを使用してください。
