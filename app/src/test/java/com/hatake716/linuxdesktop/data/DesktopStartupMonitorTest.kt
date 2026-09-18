@@ -22,7 +22,7 @@ class DesktopStartupMonitorTest {
         monitor.begin("test", "My desktop")
         try {
             monitor.track { phase ->
-                phase("Starting XFCE")
+                phase(DesktopStartupStage.STARTING_XFCE)
                 log.appendText("current run output\n")
                 throw IllegalStateException("startup failed")
             }
@@ -31,6 +31,7 @@ class DesktopStartupMonitorTest {
         assertFalse(result.busy)
         assertTrue(result.visible)
         assertEquals("startup failed", result.error)
+        assertEquals(82, result.percent)
         assertTrue(result.logs.contains("current run output"))
         assertFalse(result.logs.contains("previous run"))
         monitor.dismissFailure()
@@ -56,10 +57,42 @@ class DesktopStartupMonitorTest {
     @Test fun successfulLaunchHidesOverlayAndNextLaunchClearsTheOldLog() = runBlocking {
         val monitor = DesktopStartupMonitor(temporary.root)
         monitor.begin("first", "First desktop")
-        assertEquals(42, monitor.track { phase -> phase("first-only detail"); 42 })
+        assertEquals(42, monitor.track { phase -> phase(DesktopStartupStage.STARTING_XFCE); 42 })
         assertFalse(monitor.progress.value.visible)
+        assertEquals(100, monitor.progress.value.percent)
         monitor.begin("second", "Second desktop")
         assertTrue(monitor.progress.value.busy)
-        assertFalse(monitor.progress.value.logs.contains("first-only detail"))
+        assertEquals(0, monitor.progress.value.percent)
+        assertFalse(monitor.progress.value.logs.contains(DesktopStartupStage.STARTING_XFCE.message))
+    }
+
+    @Test fun retryKeepsProgressAndOnlySuccessfulCompletionReaches100() = runBlocking {
+        val monitor = DesktopStartupMonitor(temporary.root)
+        monitor.begin("test", "My desktop")
+        monitor.track { phase ->
+            phase(DesktopStartupStage.CHECKING_X11_FRAME)
+            assertEquals(55, monitor.progress.value.percent)
+            phase(DesktopStartupStage.CONNECTING_VIEWER)
+            assertEquals(55, monitor.progress.value.percent)
+            phase(DesktopStartupStage.READY)
+            assertEquals(99, monitor.progress.value.percent)
+            assertTrue(monitor.progress.value.busy)
+        }
+        assertEquals(100, monitor.progress.value.percent)
+    }
+
+    @Test fun cleanupAndFailureNeverReportCompletion() = runBlocking {
+        val monitor = DesktopStartupMonitor(temporary.root)
+        monitor.begin("test", "My desktop")
+        runCatching {
+            monitor.track { phase ->
+                phase(DesktopStartupStage.VERIFYING_DESKTOP)
+                phase(DesktopStartupStage.CLEANING_UP)
+                throw IllegalStateException("no frame")
+            }
+        }
+        assertEquals(92, monitor.progress.value.percent)
+        assertTrue(monitor.progress.value.visible)
+        assertFalse(monitor.progress.value.busy)
     }
 }

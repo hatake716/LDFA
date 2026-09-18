@@ -423,7 +423,18 @@ pd_login() {
 # write from uid desktop, both get Permission denied). pd_login with no --user runs as
 # change-id 0:0 = root, which can write it. Idempotent: only (re)generates when empty.
 ensure_machine_id() {
-    local id="$1"
+    local id="$1" rootfs mid="" dbus_mid=""
+    # Most launches already have a valid, matching pair. Read it without a
+    # guest login; missing, unreadable or inconsistent files use the repair below.
+    rootfs="$(rootfs_dir "$id")" || return 1
+    if [[ -r "$rootfs/etc/machine-id" && -r "$rootfs/var/lib/dbus/machine-id" ]]; then
+        mid="$(< "$rootfs/etc/machine-id")" || mid=""
+        dbus_mid="$(< "$rootfs/var/lib/dbus/machine-id")" || dbus_mid=""
+        if [[ "$mid" =~ ^[0-9a-fA-F]{32}$ && "$mid" == "$dbus_mid" ]]; then
+            printf 'machine-id=%s\n' "$mid"
+            return 0
+        fi
+    fi
     # IMPORTANT: keep this function free of the exact legacy provisioning command that
     # HostScriptCompatibility.normalize() rewrites (the dbus ensure-form). normalize()
     # blindly .replace()s that substring — anywhere it appears, even in a comment — with
@@ -3220,6 +3231,34 @@ apps_combined_ready() {
         2>/dev/null
 }
 
+# Read the same mandatory package/configuration contracts from the app-owned
+# rootfs. This is a fresh check, not a timestamp cache: removed packages or edited
+# markers immediately invalidate it. Symlinks unreadable from the host fall back
+# to apps_combined_ready inside the guest. Optional Chrome/Node state is still
+# queried by finish-apps when provisioning actually runs.
+apps_required_files_ready() {
+    local id="$1" rootfs
+    rootfs="$(rootfs_dir "$id")" || return 1
+    [[ -r "$rootfs/var/lib/dpkg/status" ]] || return 1
+    awk 'BEGIN { RS=""; FS="\n" }
+        { package=""; installed=0
+          for (i=1; i<=NF; i++) {
+            if ($i ~ /^Package: /) package=substr($i,10)
+            if ($i == "Status: install ok installed") installed=1
+          }
+          if (installed && package == "pulseaudio-utils") pulse=1
+          if (installed && package == "libasound2-plugins") alsa=1
+        }
+        END { exit !(pulse && alsa) }' "$rootfs/var/lib/dpkg/status" || return 1
+    [[ -x "$rootfs/usr/local/bin/ldfa-session" ]] || return 1
+    grep -Fqx "$AUDIO_CLIENT_MARKER" "$rootfs/etc/pulse/client.conf.d/99-ldfa.conf" &&
+        grep -Fq 'default-server = unix:/tmp/ldfa-pulse/native' "$rootfs/etc/pulse/client.conf.d/99-ldfa.conf" &&
+        grep -Fq 'enable-shm = no' "$rootfs/etc/pulse/client.conf.d/99-ldfa.conf" &&
+        grep -Fqx "$AUDIO_CLIENT_MARKER" "$rootfs/etc/alsa/conf.d/99-ldfa-pulse.conf" &&
+        grep -Fqx "$DESKTOP_RUNTIME_MARKER" "$rootfs/usr/local/bin/ldfa-session" &&
+        grep -Fqx "$DESKTOP_RUNTIME_MARKER" "$rootfs/etc/fish/conf.d/00-ldfa.fish"
+}
+
 cmd_prepare_apps() {
     local id="${1:-}" rootfs request
     validate_id "$id"
@@ -3229,7 +3268,7 @@ cmd_prepare_apps() {
     rm -f "$request"
     ensure_timezone "$id" >> "$(log_file "$id")" 2>&1 || true
     if [[ "$(read_meta "$id" apps_provisioned '')" == "$(apps_provisioned_fingerprint)" ]] && \
-        apps_combined_ready "$id" >/dev/null; then
+        { apps_required_files_ready "$id" 2>/dev/null || apps_combined_ready "$id" >/dev/null; }; then
         say 'apps_ready=1'
         return
     fi

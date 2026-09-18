@@ -1,7 +1,7 @@
-# Google Play 提出資料 — LDFA 1.2.3
+# Google Play 提出資料 — LDFA 1.2.4
 
-対象：`com.hatake716.linuxdesktop` / versionCode `24` / targetSdk `36`。
-新しい成果物・画像・提出文面は、ローカルの`release-assets/v1.2.3/`にまとめます。
+対象：`com.hatake716.linuxdesktop` / versionCode `25` / targetSdk `36`。
+新しい成果物・画像・提出文面は、ローカルの`release-assets/v1.2.4/`にまとめます。
 旧`release-assets/LDFA-v1.1.0-release.aab`とは区別してください。
 
 ## ストア掲載情報（日本語）
@@ -38,7 +38,7 @@ LDFA（Linux Desktop for Android）は、Debian 12とXFCEデスクトップをAn
 ・Androidスピーカーへの音声出力
 
 ■ データを持ち運ぶ
-複数のLinux環境を作成できます。停止した環境は.ldfaファイルへバックアップし、新しい環境として復元できます。初回画面からバックアップの取り込みを始めることもできます。保存済み環境の起動中は、進行状況と起動ログを画面で確認できます。
+複数のLinux環境を作成できます。停止した環境は.ldfaファイルへバックアップし、新しい環境として復元できます。初回画面からバックアップの取り込みを始めることもできます。保存済み環境の起動中は、起動ログとパーセント付きの進捗バーを画面で確認できます。割合は完了した工程に基づく目安です。
 
 ■ 必要な環境
 Android 8.0以降のARM64端末。新規導入には空き容量5GB以上とインターネット接続が必要です。Wi-Fiと充電をおすすめします。所要時間は端末と回線によって異なります。
@@ -85,7 +85,7 @@ WORK IN LINUX
 • Audio output through Android speakers
 
 KEEP YOUR ENVIRONMENT
-Create multiple Linux environments. Back up a stopped environment to an .ldfa file and restore it as a new environment. You can also start from a backup on the welcome screen. Startup progress and logs are displayed when opening a saved desktop.
+Create multiple Linux environments. Back up a stopped environment to an .ldfa file and restore it as a new environment. You can also start from a backup on the welcome screen. A percentage progress bar and live logs are displayed when opening a saved desktop. The percentage reflects startup milestones rather than remaining time.
 
 REQUIREMENTS
 Android 8.0 or later on an ARM64 device, at least 5 GB of free space for a new installation, and an internet connection. Wi-Fi and charging are recommended. Installation time depends on your device and connection.
@@ -102,10 +102,10 @@ LDFA is an independent open-source project, not an official app from Termux, Deb
 
 ```text
 <ja-JP>
-保存済みLinux環境の起動中に、処理の進行状況とログを表示するようにしました。画面が切り替わってもログを確認でき、起動完了後は自動でデスクトップへ移ります。失敗時はログを読み返せます。
+保存済みデスクトップの起動処理を高速化しました。起動ログに進捗バーとパーセント表示を追加し、処理段階と経過時間を確認できるようにしました。割合は工程の進捗の目安です。失敗時は最後の進捗とログを読み返せます。
 </ja-JP>
 <en-US>
-Startup progress and logs are now shown when opening a saved Linux desktop. Logs remain visible as the display opens and close automatically when the desktop is ready. Failed starts keep their logs available for review.
+Saved desktops now start faster with fewer redundant checks. Startup logs now include a percentage progress bar, milestones and elapsed time. The percentage reflects completed startup stages, not remaining time. Failed starts retain the last progress and logs for review.
 </en-US>
 ```
 
@@ -181,7 +181,7 @@ LDFA本体には広告・解析SDK、開発者向けのデータ送信・アカ�
 
 ## 素材と提出順
 
-1. `release-assets/v1.2.3/`のAAB、SHA256SUMS、検証結果を確認します。
+1. `release-assets/v1.2.4/`のAAB、SHA256SUMS、検証結果を確認します。
 2. ストアアイコン512×512、フィーチャー画像1024×500、新しい画面のスクリーンショットを登録します。
 3. 上記のGitHubリリースに添付したMP4のURLをサービス申告に登録します。Consoleが別の共有形式を求める場合は、同じ動画を限定公開YouTubeなどへアップロードしてURLを使用します。
 4. 上記の掲載文面、アクセス説明、サービス型、データセーフティ、プライバシーポリシーを入力します。
@@ -200,3 +200,7 @@ Google Playへのアップロード・審査申請は、この資料やAABを生
 起動時のログは端末内だけで表示します。開発者への送信や解析SDKは追加していません。ユーザー操作でテキストを選択・コピーできます。新しい権限は追加しておらず、dataSyncとspecialUseの用途は従来どおりです。1.2.1で撮影したFGS動画は過去版の機能実演資料です。現行版の起動ログUIは[1.2.3の実演動画](https://github.com/hatake716/LDFA/releases/download/v1.2.3/ldfa-startup-logs-demo.mp4)を参照してください。
 
 1.2.3の最終APKはPixel 10aへ上書き更新し、端末内APKのハッシュ一致を確認しています。2026-09-06には利用者から実機でLinuxデスクトップが起動したとの確認報告を受けました。詳細な自動検証は[検証資料](../../docs/TESTING.md)を参照してください。
+
+## 1.2.4の更新
+
+保存済みデスクトップの起動を最適化し、工程に連動する進捗バー・パーセントと各工程の経過時間を追加しました。ログは端末内で表示し、新しい権限・SDK・収集データは追加していません。dataSyncとspecialUseの用途は従来どおりです。[1.2.4の実演動画](https://github.com/hatake716/LDFA/releases/download/v1.2.4/ldfa-startup-progress-demo.mp4)と[検証資料](../../docs/TESTING.md)を参照してください。過去のFGS申告動画は1.2.1で撮影した記録として区別します。

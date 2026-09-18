@@ -9,9 +9,9 @@ Androidに、DebianとXFCEの作業環境を。
 LDFAは、Linuxの導入・起動・日本語入力・バックアップをひとつのAndroidアプリにまとめています。
 root化や、別のTermux・X11アプリのインストールは不要です。
 
-**最新リリース：1.2.3 / versionCode 24**
+**最新リリース：1.2.4 / versionCode 25**
 
-1.2.3の起動ログ表示はAndroid 16 / x86_64 / 4KBで検証しています。Pixel 10a（Android 17 / ARM64 / 4KB）では、1.2.3への上書き更新、アプリ起動、端末内APKのハッシュ一致を確認しています。同じ最終APKについて、利用者から実機でのLinuxデスクトップ起動成功の報告も得ています。1.2.3を正式リリースとして提供します。
+1.2.4では保存済みデスクトップの起動処理を短縮し、起動ログに進捗バーとパーセント表示を追加しました。Android 16 / x86_64 / 4KBの同じ保存済み環境で比較しています。Pixel 10a（Android 17 / ARM64 / 4KB）への上書き更新・アプリ起動・APK照合と、エミュレーターでのLinux実行を分けて検証しています。
 
 [リリースとAPK](https://github.com/hatake716/LDFA/releases) · [導入手順](docs/INSTALLATION.md) · [プライバシーポリシー](https://hatake716.github.io/LDFA/privacy.html)
 
@@ -32,6 +32,17 @@ root化や、別のTermux・X11アプリのインストールは不要です。
 <p><img src="docs/screenshots/onboarding.png" width="240" alt="初回の導入画面"> <img src="docs/screenshots/home.png" width="240" alt="デスクトップの管理画面"> <img src="docs/screenshots/desktop.png" width="240" alt="日本語テキストを表示するXFCE"></p>
 
 画面は署名済み1.2.0を検証用エミュレーターで動かして撮影しています。
+
+## 1.2.4の変更
+
+<p><img src="docs/screenshots/startup-progress.png" width="280" alt="LDFA 1.2.4の起動ログとパーセント付き進捗バー"></p>
+
+- 保存済み環境の設定とD-Bus識別子を直接確認し、正常な場合はLinuxへ入り直す処理を省きます。設定不足・不整合がある場合は従来の検査・修復を行います。
+- X11への接続と描画確認をまとめ、描画成功後の固定待ち時間をなくしました。LinuxデスクトップがAndroidの画面に描画されたことは引き続き確認します。
+- 起動の処理段階に連動するバーと0〜100%の表示を追加しました。割合は工程の進捗の目安で、残り時間やダウンロード量を表すものではありません。描画確認の成功で100%になります。
+- 起動ログには各段階のパーセントと開始からの経過時間も表示します。失敗時は最後の進捗とログを残し、画面回転・再作成でも保持します。
+
+同じAPI 36エミュレーターで、停止済み環境を開いてから描画確認完了までの中央値は **15.7秒 → 7.9秒（約50%短縮）** でした。各版の最初の1回を除いた3回で比較しています。初回導入や実機での短縮率を示す値ではありません。[検証条件](docs/TESTING.md)と[起動の実演動画](https://github.com/hatake716/LDFA/releases/download/v1.2.4/ldfa-startup-progress-demo.mp4)を参照してください。
 
 ## 1.2.3の変更
 
@@ -130,6 +141,7 @@ JDK 17、Android SDK 36、NDK 29.0.14206865を使用します。
 ```bash
 bash scripts/check-host-script.sh
 bash scripts/test-host-controller.sh
+bash scripts/test-startup-controller.sh
 bash scripts/check-x11-controller.sh
 ./gradlew testDebugUnitTest :app:lintDebug :termux-runtime:lintDebug :embedded-x11:lintDebug
 ./gradlew :app:assembleRelease :app:bundleRelease

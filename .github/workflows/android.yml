@@ -74,6 +74,7 @@ jobs:
           set -euo pipefail
           bash ./scripts/check-host-script.sh
           bash ./scripts/test-host-controller.sh
+          bash ./scripts/test-startup-controller.sh
           bash ./scripts/check-x11-controller.sh
 
       - name: Test, lint and build LDFA APK
@@ -193,7 +194,7 @@ jobs:
 
           # LDFA branding and Material 3 tools are included.
           grep -Fxq 'com.hatake716.linuxdesktop' "$VERIFY_DIR/application-id.txt"
-          grep -Fq "versionCode='24' versionName='1.2.3'" "$VERIFY_DIR/badging.txt"
+          grep -Fq "versionCode='25' versionName='1.2.4'" "$VERIFY_DIR/badging.txt"
           grep -Fq "targetSdkVersion:'36'" "$VERIFY_DIR/badging.txt"
           grep -Fq "application-label:'LDFA'" "$VERIFY_DIR/badging.txt"
           grep -Fq 'ToolsScreen' "$VERIFY_DIR/dex-strings.txt"

@@ -229,8 +229,8 @@ class LinuxDesktopRepository(private val context: Context) {
         resumed
     }
 
-    suspend fun startContainer(id: String, onProgress: (String) -> Unit = {}): DesktopDisplayBackend {
-        onProgress("既存のセッションを確認しています")
+    suspend fun startContainer(id: String, onProgress: (DesktopStartupStage) -> Unit = {}): DesktopDisplayBackend {
+        onProgress(DesktopStartupStage.CHECKING_SESSION)
         val affectedIds = listOfNotNull(id, activeContainerId()).distinct()
         return ContainerOperationLocks.withLocks(affectedIds) {
             withContext(Dispatchers.IO) {
@@ -264,19 +264,19 @@ class LinuxDesktopRepository(private val context: Context) {
                         teardownNativeProot(id)
                         closeAllDisplaysAndWait()
                         stopAllDisplayServers()
-                        onProgress("Linuxアプリの設定を確認しています")
+                        onProgress(DesktopStartupStage.PREPARING_APPS)
                         ensureBundledDesktopApps(id)
 
-                        onProgress("X11表示サーバーを起動しています")
-                        val backend = selectAndStartDisplayBackend(id)
-                        onProgress("DebianとXFCEを起動しています")
-                        startAndProbeHost(id)
+                        onProgress(DesktopStartupStage.STARTING_X11)
+                        val backend = selectAndStartDisplayBackend(id, onProgress)
+                        onProgress(DesktopStartupStage.STARTING_LINUX)
+                        startAndProbeHost(id, onProgress)
 
                         // The VNC fallback was removed (its first-time provisioning took
                         // ~30 minutes through a nested proot — worse than failing): a
                         // desktop that cannot be PRESENTED on native X11 is a start
                         // failure with diagnostics, never a silent degraded mode.
-                        onProgress("デスクトップの描画を確認しています")
+                        onProgress(DesktopStartupStage.VERIFYING_DESKTOP)
                         val desktopPresentationFailure = verifyNativeDesktopPresentation(id)
                         if (desktopPresentationFailure != null) {
                             throw desktopPresentationFailure
@@ -285,7 +285,7 @@ class LinuxDesktopRepository(private val context: Context) {
                         setActiveSession(id, backend)
                         backend
                     } catch (throwable: Throwable) {
-                        onProgress("起動を停止し、後処理を行っています")
+                        onProgress(DesktopStartupStage.CLEANING_UP)
                         Log.e(LIFECYCLE_LOG_TAG, "startContainer failed id=$id", throwable)
                         withContext(NonCancellable) {
                             clearActiveSession()
@@ -772,16 +772,16 @@ class LinuxDesktopRepository(private val context: Context) {
         context.startActivity(intent)
     }
 
-    private suspend fun selectAndStartDisplayBackend(id: String): DesktopDisplayBackend {
+    private suspend fun selectAndStartDisplayBackend(id: String, onProgress: (DesktopStartupStage) -> Unit): DesktopDisplayBackend {
         // Native X11 is the only backend. The VNC fallback was removed: its
         // first-time guest provisioning took ~30 minutes through a nested proot
         // and even a warm start took minutes — failing fast with the native
         // diagnostics is the better experience.
-        startAndVerifyNativeX11(id)
+        startAndVerifyNativeX11(id, onProgress)
         return DesktopDisplayBackend.NATIVE_X11
     }
 
-    private suspend fun startAndVerifyNativeX11(id: String) {
+    private suspend fun startAndVerifyNativeX11(id: String, onProgress: (DesktopStartupStage) -> Unit = {}) {
         // XKB data and the X11 socket directory must exist BEFORE the :x11
         // process starts Xorg — Xorg cannot create its socket into a missing
         // $PREFIX/tmp/.X11-unix and the service never becomes ready. Bootstrap
@@ -802,13 +802,9 @@ class LinuxDesktopRepository(private val context: Context) {
                     legacyDrawing = mode == NATIVE_X11_MODE_LEGACY,
                 )
                 Log.i(LIFECYCLE_LOG_TAG, "native service ready mode=$mode")
-                commandClient.runBundledX11Script(
-                    script = x11Script,
-                    action = "probe",
-                    arguments = listOf(id),
-                    timeout = 35.seconds,
-                )
-                Log.i(LIFECYCLE_LOG_TAG, "native Debian probe ready mode=$mode")
+                // The draw probe below establishes guest connectivity and actual presentation
+                // in one login. Keep its bounded connectivity retry for a cold X server.
+                onProgress(DesktopStartupStage.CONNECTING_VIEWER)
 
                 val viewerBound = withContext(Dispatchers.Main.immediate) {
                     EmbeddedX11ServiceController.openDisplay(context)
@@ -841,7 +837,9 @@ class LinuxDesktopRepository(private val context: Context) {
                 val presentationBaseline = withContext(Dispatchers.Main.immediate) {
                     EmbeddedX11Display.successfulPresentSerial()
                 }
-                commandClient.runInstalledX11(
+                onProgress(DesktopStartupStage.CHECKING_X11_FRAME)
+                commandClient.runBundledX11Script(
+                    script = x11Script,
                     action = "draw-probe",
                     arguments = listOf(id),
                     timeout = 35.seconds,
@@ -851,7 +849,7 @@ class LinuxDesktopRepository(private val context: Context) {
                         "ネイティブX11は接続済みですが、描画プローブをAndroid Surfaceへpresentできませんでした。",
                     )
                 }
-                delay(NATIVE_X11_POST_ACTIVITY_STABILIZE_MILLIS)
+                // Successful presentation is the readiness barrier; no fixed extra delay.
                 return
             } catch (throwable: Throwable) {
                 if (throwable is CancellationException) throw throwable
@@ -1057,7 +1055,7 @@ class LinuxDesktopRepository(private val context: Context) {
         }
     }
 
-    private suspend fun startAndProbeHost(id: String) {
+    private suspend fun startAndProbeHost(id: String, onProgress: (DesktopStartupStage) -> Unit = {}) {
         Log.i(LIFECYCLE_LOG_TAG, "host worker start id=$id")
         commandClient.runBundledHostScript(
             script = hostScript,
@@ -1069,12 +1067,14 @@ class LinuxDesktopRepository(private val context: Context) {
         // Native-proot path: cmd_start prepared state but deliberately did NOT spawn
         // the worker (it can't outlive its short-lived proot). Launch it here under
         // its own persistent proot and hold the process so it stays alive.
+        onProgress(DesktopStartupStage.PREPARING_SESSION)
         launchNativeProotWorkerIfNeeded(id)
         // The worker does host prep (audio, X1 wait, xset preflight) then publishes a
         // session request. Launch the DESKTOP as its OWN single native-proot layer — one
         // layer deep, not nested in the worker's proot — so XFCE composes in ~1s instead
         // of stalling. The guest session then publishes the ready marker cmd_probe waits on.
         launchNativeProotSessionIfNeeded(id)
+        onProgress(DesktopStartupStage.STARTING_XFCE)
         // Native-proot startup is slower end-to-end (embedded Xorg cold-start ~33s on ARM
         // before XFCE can compose and publish the ready marker). 45s is not enough
         // headroom, so allow 120s on the native path. The legacy tmux path keeps 45s.
@@ -1508,7 +1508,6 @@ class LinuxDesktopRepository(private val context: Context) {
         private const val NATIVE_X11_HEARTBEAT_VIEWER_ATTEMPTS = 20
         private const val NATIVE_X11_ACTIVITY_CLOSE_POLL_MILLIS = 100L
         private const val NATIVE_X11_ACTIVITY_CLOSE_ATTEMPTS = 50
-        private const val NATIVE_X11_POST_ACTIVITY_STABILIZE_MILLIS = 1000L
         private const val NATIVE_X11_RETRY_DELAY_MILLIS = 1000L
 
         private const val DISPLAY_CLOSE_STABLE_POLLS = 10

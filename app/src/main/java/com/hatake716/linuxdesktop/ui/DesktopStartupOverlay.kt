@@ -63,10 +63,18 @@ internal fun DesktopStartupOverlay(progress: DesktopStartupProgress, onDismiss: 
                     if (!compact) Text(progress.containerName, maxLines = 1, overflow = TextOverflow.Ellipsis,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Spacer(Modifier.height(8.dp))
-                    if (progress.busy) {
-                        LinearProgressIndicator(Modifier.fillMaxWidth())
-                        Spacer(Modifier.height(8.dp))
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text("起動進捗（目安）", Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                        Text("${progress.percent}%", style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold)
                     }
+                    LinearProgressIndicator(
+                        progress = { progress.percent / 100f },
+                        modifier = Modifier.fillMaxWidth(),
+                        color = if (progress.error == null) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.error,
+                    )
+                    Spacer(Modifier.height(8.dp))
                     Text(progress.phase, maxLines = if (compact) 1 else 2, overflow = TextOverflow.Ellipsis,
                         style = MaterialTheme.typography.bodyMedium)
                     Spacer(Modifier.height(10.dp))

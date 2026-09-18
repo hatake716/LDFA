@@ -148,14 +148,9 @@ cmd_probe() {
 # temporary window and forces visible clients to repaint; unlike xsetroot it is
 # not hidden behind xfdesktop after XFCE starts.
 #
-# The caller (startAndVerifyNativeX11) always runs the standalone `probe` first,
-# which already established Debian->Xserver reachability with a full 40x xset
-# retry. Repeating cmd_probe here paid a SECOND guest PRoot login (seconds on
-# ARM) to re-confirm the same reachability. xrefresh itself opens a client
-# connection to the X server, so its success re-confirms reachability anyway;
-# we keep only the cheap host-side service/socket liveness checks and drop the
-# redundant xset login. If xrefresh fails we still run the probe once to produce
-# a precise diagnostic (reachability vs draw) before dying.
+# xrefresh proves guest connectivity and requests a frame in one guest login.
+# On a cold server, retain the bounded xset readiness retry and then try drawing
+# again. The caller separately checks that this frame reached the Android Surface.
 cmd_draw_probe() {
     local id="${1:-}"
     validate_id "$id"
@@ -164,10 +159,13 @@ cmd_draw_probe() {
     if ! proot-distro login "$id" --shared-tmp --user desktop -- \
         /usr/bin/env DISPLAY=":$DISPLAY_NUMBER" XAUTHORITY=/dev/null \
         /usr/bin/xrefresh -solid '#303030' >/dev/null 2>&1; then
-        # Distinguish "X unreachable" from "X reachable but draw failed" for logs.
-        cmd_probe "$id" >/dev/null 2>&1 || true
-        dump_failure "Debian draw probe failed"
-        die "DebianからX11描画プローブを実行できませんでした。"
+        if ! cmd_probe "$id" >/dev/null 2>&1 ||
+            ! proot-distro login "$id" --shared-tmp --user desktop -- \
+                /usr/bin/env DISPLAY=":$DISPLAY_NUMBER" XAUTHORITY=/dev/null \
+                /usr/bin/xrefresh -solid '#303030' >/dev/null 2>&1; then
+            dump_failure "Debian draw probe failed"
+            die "DebianからX11描画プローブを実行できませんでした。"
+        fi
     fi
     say "x11_draw_probe=1"
     say "display=:$DISPLAY_NUMBER"

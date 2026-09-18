@@ -20,6 +20,7 @@ data class DesktopStartupProgress(
     val containerName: String = "",
     val busy: Boolean = false,
     val phase: String = "",
+    val percent: Int = 0,
     val logs: String = "",
     val error: String? = null,
 ) {
@@ -28,12 +29,14 @@ data class DesktopStartupProgress(
 
 /** Application-owned progress survives management/viewer Activity recreation. */
 class DesktopStartupMonitor(private val filesDir: File) {
+    private var startedAtNanos = 0L
     private val mutableProgress = MutableStateFlow(DesktopStartupProgress())
     val progress = mutableProgress.asStateFlow()
 
     fun begin(id: String, name: String) {
+        startedAtNanos = System.nanoTime()
         mutableProgress.value = DesktopStartupProgress(id, name, busy = true)
-        phase("起動準備を始めています")
+        phase(DesktopStartupStage.PREPARING)
     }
 
     fun dismissFailure() {
@@ -47,13 +50,18 @@ class DesktopStartupMonitor(private val filesDir: File) {
         }
     }
 
-    private fun phase(message: String) {
-        mutableProgress.update { it.copy(phase = message) }
-        append("[${LocalTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss"))}] $message")
+    private fun phase(stage: DesktopStartupStage, completed: Boolean = false) {
+        mutableProgress.update {
+            it.copy(phase = stage.message, percent = if (completed) 100 else
+                maxOf(it.percent, stage.percent.coerceAtMost(99)))
+        }
+        val elapsedTenths = (System.nanoTime() - startedAtNanos) / 100_000_000
+        append("[${LocalTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss"))}] " +
+            "${progress.value.percent}% (+${elapsedTenths / 10}.${elapsedTenths % 10}秒) ${stage.message}")
     }
 
     /** Called in the Application's IO scope; log reads never launch competing shell commands. */
-    suspend fun <T> track(start: suspend ((String) -> Unit) -> T): T = coroutineScope {
+    suspend fun <T> track(start: suspend ((DesktopStartupStage) -> Unit) -> T): T = coroutineScope {
         val id = progress.value.containerId
         val base = "home/.local/share/linux-desktop-for-android"
         val files = listOf(
@@ -86,8 +94,8 @@ class DesktopStartupMonitor(private val filesDir: File) {
             }
         }
         try {
-            val result = start(::phase)
-            phase("デスクトップを表示しました")
+            val result = start { phase(it) }
+            phase(DesktopStartupStage.READY, completed = true)
             result
         } catch (failure: Throwable) {
             val message = if (failure is CancellationException) "起動が中断されました" else

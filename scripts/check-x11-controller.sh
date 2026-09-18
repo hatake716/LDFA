@@ -350,7 +350,7 @@ import sys
 source = pathlib.Path(sys.argv[1]).read_text()
 start = source.index("suspend fun startContainer")
 ensure = source.index("ensureBundledDesktopApps(id)", start)
-display = source.index("selectAndStartDisplayBackend(id)", start)
+display = source.index("selectAndStartDisplayBackend(id, onProgress)", start)
 assert start < ensure < display
 PY
 controller="$repository/app/src/main/java/com/hatake716/linuxdesktop/x11/EmbeddedX11ServiceController.kt"
@@ -400,7 +400,7 @@ app_build="$repository/app/build.gradle.kts"
 ! grep -Fq -- 'include(":embedded-x11-loader")' "$settings"
 ! grep -Fq -- 'embedded-x11-loader' "$app_build"
 ! grep -Fq -- 'x11-loader-assets' "$app_build"
-grep -Fq -- 'versionName = "1.2.3"' "$app_build"
+grep -Fq -- 'versionName = "1.2.4"' "$app_build"
 grep -Fq -- 'HOST_SCRIPT_VERSION", "\"1.2.0\""' "$app_build"
 
 startup_overlay="$repository/app/src/main/java/com/hatake716/linuxdesktop/ui/DesktopStartupOverlay.kt"
