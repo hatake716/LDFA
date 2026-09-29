@@ -310,7 +310,7 @@ required=(
   'container_exists "$id" || die "復元されたDebian環境が見つかりません。"'
   'rm -f /home/desktop/.config/google-chrome/Singleton* 2>/dev/null'
   'rm -f /etc/machine-id /var/lib/dbus/machine-id 2>/dev/null'
-  'dbus-uuidgen --ensure=/etc/machine-id 2>/dev/null'
+  'mid="$(dbus-uuidgen 2>/dev/null)"'
   'write_meta "$id" apps_provisioned ""'
   'say "restore_cleanup=done"'
 )
@@ -319,6 +319,13 @@ for pattern in "${required[@]}"; do
 done
 
 ! grep -q 'gnome-session' "$script"
+
+# HostScriptCompatibility.normalize() rewrites this legacy command everywhere with a
+# bash block that calls `step` and contains single quotes; it breaks -c strings.
+if grep -Fq -- 'dbus-uuidgen --ensure=' "$script"; then
+  printf 'Legacy machine-id command found in %s\n' "$script" >&2
+  exit 1
+fi
 
 ! grep -q 'UBUNTU_IMAGE=' "$script"
 

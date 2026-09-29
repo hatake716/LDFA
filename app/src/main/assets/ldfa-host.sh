@@ -969,8 +969,13 @@ chmod 700 "$XDG_RUNTIME_DIR"
 # which under the single-layer session surfaced as `xfwm4-CRITICAL: Xfconf could not be
 # initialized` and a cascade of GTK-CRITICALs that killed settingsd/wm/panel. Seed it
 # here (idempotent) before the session bus starts. dbus-uuidgen writes 32 hex chars.
+# Plain dbus-uuidgen, never its ensure-form: HostScriptCompatibility.normalize()
+# rewrites that legacy command anywhere in this asset (see ensure_machine_id).
 if [[ ! -s /etc/machine-id ]]; then
-    dbus-uuidgen --ensure=/etc/machine-id 2>/dev/null || true
+    _ldfa_machine_id="$(dbus-uuidgen 2>/dev/null || true)"
+    if [[ "$_ldfa_machine_id" =~ ^[0-9a-fA-F]{32}$ ]]; then
+        { printf '%s\n' "$_ldfa_machine_id" > /etc/machine-id; } 2>/dev/null || true
+    fi
 fi
 if [[ -s /etc/machine-id && ! -s /var/lib/dbus/machine-id ]]; then
     mkdir -p /var/lib/dbus 2>/dev/null || true
@@ -2796,7 +2801,25 @@ if [ -f "/usr/share/zoneinfo/$LDFA_TZ" ]; then
     printf '%s\n' "$LDFA_TZ" > /etc/timezone
 fi
 
-dbus-uuidgen --ensure=/etc/machine-id
+# Written out rather than using dbus-uuidgen's ensure-form: that legacy command must
+# not appear anywhere in this asset, because HostScriptCompatibility.normalize()
+# rewrites every occurrence with this very block (see ensure_machine_id).
+step "DBus machine-idをPRoot互換方式で設定しています"
+machine_id="$(dbus-uuidgen 2>/dev/null || true)"
+if [[ ! "$machine_id" =~ ^[0-9a-fA-F]{32}$ ]] && [[ -r /proc/sys/kernel/random/uuid ]]; then
+    machine_id="$(tr -d '-' < /proc/sys/kernel/random/uuid 2>/dev/null || true)"
+fi
+if [[ ! "$machine_id" =~ ^[0-9a-fA-F]{32}$ ]]; then
+    machine_id="$(od -An -N16 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n' || true)"
+fi
+if [[ ! "$machine_id" =~ ^[0-9a-fA-F]{32}$ ]]; then
+    printf '[%s] DBus machine-idを生成できませんでした。\n' "$(date -Iseconds)" >&2
+    exit 32
+fi
+install -d -m 0755 /var/lib/dbus
+rm -f /etc/machine-id /var/lib/dbus/machine-id
+printf '%s\n' "$machine_id" > /etc/machine-id
+printf '%s\n' "$machine_id" > /var/lib/dbus/machine-id
 if ! id desktop >/dev/null 2>&1; then
     useradd --create-home --shell /bin/bash desktop
 fi
@@ -3697,9 +3720,15 @@ cmd_restore_cleanup() {
         rm -f /home/desktop/.config/google-chrome/Singleton* 2>/dev/null
         # A restored XFCE session snapshot points at dead windows; drop it.
         rm -f /home/desktop/.cache/sessions/* 2>/dev/null
-        # Never carry a machine-id across devices.
+        # Never carry a machine-id across devices. Plain dbus-uuidgen, as in
+        # ensure_machine_id: normalize() rewrites the legacy ensure-form into a
+        # block with single quotes, which would split this -c string.
         rm -f /etc/machine-id /var/lib/dbus/machine-id 2>/dev/null
-        dbus-uuidgen --ensure=/etc/machine-id 2>/dev/null
+        mid="$(dbus-uuidgen 2>/dev/null)"
+        case "$mid" in *[!0-9a-fA-F]* | "" )
+            mid="$(tr -dc 0-9a-f < /proc/sys/kernel/random/uuid 2>/dev/null)" ;;
+        esac
+        [ -n "$mid" ] && printf "%s\n" "$mid" > /etc/machine-id 2>/dev/null
         mkdir -p /var/lib/dbus 2>/dev/null
         [ -f /etc/machine-id ] && cp -f /etc/machine-id /var/lib/dbus/machine-id 2>/dev/null
         true

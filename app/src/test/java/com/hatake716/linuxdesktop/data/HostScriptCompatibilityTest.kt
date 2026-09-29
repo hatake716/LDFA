@@ -1,11 +1,77 @@
 package com.hatake716.linuxdesktop.data
 
+import java.io.File
+import java.io.IOException
+import java.nio.file.Files
+import java.util.concurrent.TimeUnit
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeTrue
 import org.junit.Test
 
 class HostScriptCompatibilityTest {
+    @Test
+    fun bundledHostScriptStaysValidBashAfterNormalization() {
+        val bundled = bundledHostScript()
+        val normalized = HostScriptCompatibility.normalize(bundled)
+
+        assertBashSyntax("normalized ldfa-host.sh", normalized)
+        assertBashSyntax("provision body", heredoc(normalized, "CONTAINER_SETUP"))
+        val session = heredoc(normalized, "SESSION")
+        assertBashSyntax("ldfa-session", session)
+        // The session script defines no `step`; a legacy rewrite injected there fails at runtime
+        // even though the syntax stays valid.
+        assertEquals(heredoc(bundled, "SESSION"), session)
+    }
+
+    @Test
+    fun restoreCleanupKeepsItsGuestCommandStringAfterNormalization() {
+        val bundled = bundledHostScript()
+        val normalized = HostScriptCompatibility.normalize(bundled)
+        val function = shellFunction(normalized, "cmd_restore_cleanup")
+        assertEquals(shellFunction(bundled, "cmd_restore_cleanup"), function)
+
+        // Run only the host-side function with stubs; pd_login records its argv instead of
+        // entering a guest, so the cleanup commands themselves are never executed here.
+        val sandbox = Files.createTempDirectory("ldfa-restore-cleanup").toFile()
+        try {
+            val argv = File(sandbox, "argv")
+            val stubs = """
+                set -Eeuo pipefail
+                validate_id() { :; }
+                die() { exit 70; }
+                meta_dir() { printf '%s' "${'$'}LDFA_TEST_SANDBOX"; }
+                container_exists() { :; }
+                log_file() { printf '%s/log' "${'$'}LDFA_TEST_SANDBOX"; }
+                write_meta() { :; }
+                say() { :; }
+                pd_login() { shift; [[ "${'$'}1" == -- ]] && shift; printf '%s\0' "${'$'}@" > "${'$'}LDFA_TEST_SANDBOX/argv"; }
+            """.trimIndent()
+            val result = runBash(
+                "$stubs\n$function\ncmd_restore_cleanup restored\n",
+                "-s",
+                env = mapOf("LDFA_TEST_SANDBOX" to sandbox.path),
+            )
+            assertEquals(result.output, 0, result.exitCode)
+
+            val arguments = argv.readText().removeSuffix("\u0000").split('\u0000')
+            assertEquals("pd_login must receive exactly one -c string: $arguments", 3, arguments.size)
+            assertEquals(listOf("/bin/bash", "-c"), arguments.take(2))
+            val guestCommand = arguments[2]
+            assertBashSyntax("restore-cleanup -c string", guestCommand)
+            assertTrue(guestCommand.contains("rm -rf /tmp/* /run/* /var/run/*"))
+            assertTrue(guestCommand.contains("rm -f /home/desktop/.config/google-chrome/Singleton*"))
+            assertTrue(guestCommand.contains("rm -f /etc/machine-id /var/lib/dbus/machine-id"))
+            assertTrue(guestCommand.contains("dbus-uuidgen"))
+            assertTrue(guestCommand.contains("/var/lib/dbus/machine-id"))
+            assertFalse(Regex("""(?m)^\s*step\s""").containsMatchIn(guestCommand))
+        } finally {
+            sandbox.deleteRecursively()
+        }
+    }
+
+
     @Test
     fun normalizesLocaleAndMachineIdWithoutInjectingX11ServerLifecycle() {
         val legacy = """
@@ -129,5 +195,60 @@ class HostScriptCompatibilityTest {
         assertTrue(normalized.contains("GTK_IM_MODULE=fcitx"))
         assertTrue(normalized.contains("PULSE_SERVER=unix:/tmp/ldfa-pulse/native"))
         assertEquals(normalized, HostScriptCompatibility.normalize(normalized))
+    }
+
+    private class BashResult(val exitCode: Int, val output: String)
+
+    private fun bundledHostScript(): String {
+        // Gradle runs module unit tests from app/; an IDE may use the repository root.
+        val asset = listOf("src/main/assets/ldfa-host.sh", "app/src/main/assets/ldfa-host.sh")
+            .map(::File)
+            .firstOrNull(File::isFile)
+            ?: error("ldfa-host.sh not found from ${File("").absolutePath}")
+        return asset.readText()
+    }
+
+    /** Body of a quoted heredoc `<<'tag'`, up to the line that is exactly [tag]. */
+    private fun heredoc(script: String, tag: String): String {
+        val lines = script.lines()
+        val start = lines.indexOfFirst { it.trimEnd().endsWith("<<'$tag'") }
+        assertTrue("heredoc $tag not found", start >= 0)
+        val end = lines.subList(start + 1, lines.size).indexOf(tag)
+        assertTrue("heredoc $tag is not terminated", end >= 0)
+        return lines.subList(start + 1, start + 1 + end).joinToString("\n", postfix = "\n")
+    }
+
+    /** A top-level function from its header to the first closing brace in column 0. */
+    private fun shellFunction(script: String, name: String): String {
+        val start = script.indexOf("\n$name() {\n")
+        assertTrue("function $name not found", start >= 0)
+        val end = script.indexOf("\n}\n", start + 1)
+        assertTrue("function $name is not terminated", end >= 0)
+        return script.substring(start + 1, end + 2)
+    }
+
+    private fun assertBashSyntax(label: String, script: String) {
+        val result = runBash(script, "-n")
+        assertEquals("$label: ${result.output}", 0, result.exitCode)
+    }
+
+    private fun runBash(
+        script: String,
+        vararg arguments: String,
+        env: Map<String, String> = emptyMap(),
+    ): BashResult {
+        val process = try {
+            ProcessBuilder(listOf("bash") + arguments)
+                .redirectErrorStream(true)
+                .apply { environment().putAll(env) }
+                .start()
+        } catch (error: IOException) {
+            assumeTrue("bash is unavailable: ${error.message}", false)
+            throw error
+        }
+        process.outputStream.bufferedWriter().use { it.write(script) }
+        val output = process.inputStream.bufferedReader().use { it.readText() }
+        assertTrue("bash timed out", process.waitFor(30, TimeUnit.SECONDS))
+        return BashResult(process.exitValue(), output)
     }
 }
