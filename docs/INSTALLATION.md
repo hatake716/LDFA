@@ -1,6 +1,6 @@
 # LDFAの導入とデータ移行
 
-この手順は`com.hatake716.linuxdesktop`を使用するLDFA 1.2.5向けです。
+この手順は`com.hatake716.linuxdesktop`を使用するLDFA 1.2.6向けです。
 
 ## 新しくはじめる
 

@@ -1,6 +1,6 @@
 # LDFAの内部構成
 
-対象は1.2.5です。アプリIDは`com.hatake716.linuxdesktop`、実行環境のprefixは`/data/data/com.hatake716.linuxdesktop/files/usr`です。
+対象は1.2.6です。アプリIDは`com.hatake716.linuxdesktop`、実行環境のprefixは`/data/data/com.hatake716.linuxdesktop/files/usr`です。
 
 ## モジュール
 
@@ -87,6 +87,8 @@ DebianのPulse clientは`/tmp/ldfa-pulse/native`を使います。ホスト側�
 ホストのPulseAudioは、workerがデスクトップの起動と並行してバックグラウンドで起動します。デーモンは`--daemonize=no --exit-idle-time=-1`で起動した1つだけです。確認用の`pactl`がデーモンを自動起動（autospawn）しないよう、ホスト側の`client.conf.d`で無効にしています。自動起動されたデーモンは既定の20秒アイドルで終了し、ブリッジのソケットも削除してしまうためです。`daemon.conf.d`でもアイドル終了を無効にしています。
 
 PRoot越しのARM端末では、PulseAudioの起動（LD_BIND_NOWによる再実行、約16モジュールの読み込み、Android sinkの作成）に数秒かかります。そこで準備完了は制御ソケットの応答で判定し、起動60秒・全体90秒を上限とします。応答しない既存デーモンも、起動の上限時間までは起動中として待ちます。1.2.4以前は1〜2秒の制限で起動途中のデーモンを停止していたため、実機ではAndroid sinkが作られませんでした。
+
+PulseAudioは強制終了されるとpidファイルを残します。Androidがその番号をほかのアプリのプロセスに再利用すると、`kill -0`はプロセスありと答えますが、`/proc`は隠されて中身を確認できません。PulseAudioはこの状態を「すでに起動中」と判断して終了します（1.2.5までの実機の無音の原因）。そこで起動前に、LDFAのPulseAudioが応答せず見当たらないことを確認したうえで、pidファイルを削除します。停止処理が信号を送る相手は、`/proc`で名前を確認できたpulseaudioか、そのworkerが起動したプロセスだけです。
 
 デスクトップはブリッジの完成を最大10秒待ってから開き、それ以降は完成を待たずに起動します。XFCEの音量プラグインとDebianのALSA→Pulse経路は、ソケットができた時点で接続します。監視ループは約10秒ごとにPulseAudioのpidとソケットを組み込みコマンドだけで確認し、デーモンが消えていれば1回の起動につき最大5回まで作り直します。デーモンのログは`logs/pulseaudio.log`に保存します。
 

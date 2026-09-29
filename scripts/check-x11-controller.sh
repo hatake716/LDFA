@@ -413,7 +413,7 @@ app_build="$repository/app/build.gradle.kts"
 refute grep -Fq -- 'include(":embedded-x11-loader")' "$settings"
 refute grep -Fq -- 'embedded-x11-loader' "$app_build"
 refute grep -Fq -- 'x11-loader-assets' "$app_build"
-grep -Fq -- 'versionName = "1.2.5"' "$app_build"
+grep -Fq -- 'versionName = "1.2.6"' "$app_build"
 grep -Fq -- 'HOST_SCRIPT_VERSION", "\"1.2.0\""' "$app_build"
 
 startup_overlay="$repository/app/src/main/java/com/hatake716/linuxdesktop/ui/DesktopStartupOverlay.kt"

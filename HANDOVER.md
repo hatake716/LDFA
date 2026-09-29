@@ -2,6 +2,14 @@
 
 最終更新: 2026-09-29 (JST)
 
+## 0000. 1.2.6: 実機で残っていた本当の原因は古いpidファイル（2026-09-29）
+
+1.2.5を実機（Pixel 10a / Android 17）へ入れても音が出ませんでした。アップロード鍵で署名したdebuggable版を一時的に入れ、`run-as`で`logs/pulseaudio.log`を読むと、次のエラーが出ていました。
+`pid.c: Could not check to see if pid 11660 is a pulseaudio process. Assuming it is and the daemon is already running.`と`pa_pid_file_create() failed.`です。
+`$PREFIX/var/run/ldfa-pulse-rt/pid`は09-18の古いファイルで、11660は別のUIDのプロセス（スレッド）に再利用されていました。`kill -0`はEPERMでプロセスありと判定され、`/proc/11660`はhidepidで読めません。そのためPulseAudioは起動済みと判断して終了します（1.2.4の`--start`では「起動済み＝成功」と扱われ、デーモンは存在しないままでした）。
+teardownはデーモンをSIGKILLするため、pidファイルは残り続けます。1.2.6では、応答も`pgrep`もない場合に起動直前でpidファイルを削除します。エミュレーターではpidがたまたま再利用されていなかったため再現しませんでした。`run-as`はreadprocグループを持つので、この条件はアプリ本体からの起動でしか再現しません。
+実機での確認：PIDファイルを`1`（init）に書き換えた状態でアプリからデスクトップを開き、PulseAudioは1秒で応答、6秒でブリッジが完成、OpenSLプレイヤーが作られ、利用者が音声の再生を確認しました。起動時間の実測は、応答まで4秒、準備完了まで10秒（run-as経由）です。
+
 ## 000. 1.2.5: Play版（native PRoot）で音声が出なかった原因（2026-09-29）
 
 §00の修正後、Play版の実行方式（08-26以降）で音声が再び出なくなっていました。音声ロジックは

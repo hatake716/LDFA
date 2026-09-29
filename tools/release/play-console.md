@@ -1,7 +1,7 @@
-# Google Play 提出資料 — LDFA 1.2.5
+# Google Play 提出資料 — LDFA 1.2.6
 
-対象：`com.hatake716.linuxdesktop` / versionCode `26` / targetSdk `36`。
-新しい成果物・画像・提出文面は、ローカルの`release-assets/v1.2.5/`にまとめます。
+対象：`com.hatake716.linuxdesktop` / versionCode `27` / targetSdk `36`。
+新しい成果物・画像・提出文面は、ローカルの`release-assets/v1.2.6/`にまとめます。
 旧`release-assets/LDFA-v1.1.0-release.aab`とは区別してください。
 
 ## ストア掲載情報（日本語）
@@ -205,7 +205,7 @@ Google Playへのアップロード・審査申請は、この資料やAABを生
 
 保存済みデスクトップの起動を最適化し、工程に連動する進捗バー・パーセントと各工程の経過時間を追加しました。ログは端末内で表示し、新しい権限・SDK・収集データは追加していません。dataSyncとspecialUseの用途は従来どおりです。[1.2.4の実演動画](https://github.com/hatake716/LDFA/releases/download/v1.2.4/ldfa-startup-progress-demo.mp4)と[検証資料](../../docs/TESTING.md)を参照してください。過去のFGS申告動画は1.2.1で撮影した記録として区別します。
 
-## 1.2.5の更新
+## 1.2.5の更新（未提出。内容は1.2.6に含む）
 
 Linuxデスクトップの音声がAndroidから出ない不具合を修正しました。アプリ内のPulseAudioがPRoot越しに起動し終えるのを待つようにし、アイドル時に終了しないようにしました。新しい権限・SDK・収集データは追加していません。音声は再生のみで、マイク・録音の権限はありません。dataSyncとspecialUseの用途は従来どおりです。[検証資料](../../docs/TESTING.md)を参照してください。
 <ja-JP>
@@ -213,4 +213,14 @@ Linuxデスクトップの音声がAndroidから出ない不具合を修正し�
 </ja-JP>
 <en-US>
 Fixed Linux desktop audio not playing through Android. LDFA now waits for its PulseAudio sound server to finish starting on devices where this takes several seconds, and keeps it running while idle. Audio setup runs alongside desktop startup, and the sound server restarts automatically if it stops during a session. Also fixed first-start cleanup for desktops restored from a backup.
+</en-US>
+
+## 1.2.6の更新
+
+Google Playの前回提出は1.2.4です。1.2.6には1.2.5の変更も含みます。Linuxデスクトップの音声がAndroidから出ない不具合を修正しました。原因は、PulseAudioの古いpidファイルが残り、その番号がほかのアプリのプロセスに再利用されると、起動のたびに「すでに起動中」と判断して終了していたことです。起動前に古いファイルを削除します。起動に時間がかかる端末での待機と、実行中の自動復旧も含みます。新しい権限・SDK・収集データは追加していません。音声は再生のみで、マイク・録音の権限はありません。dataSyncとspecialUseの用途は従来どおりです。Pixel 10a / Android 17で、利用者が音声の再生を確認しました。
+<ja-JP>
+Linuxデスクトップの音声がAndroidから出ない不具合を修正しました。音声機能（PulseAudio）の古い記録ファイルが残っていると、起動のたびに誤って終了していました。起動前に古い記録を削除するようにしました。あわせて、起動に時間がかかる端末でも準備を待ち、実行中に止まった場合は自動で復旧します。バックアップから復元した環境で、初回起動時の後片付けが実行されない問題も修正しました。
+</ja-JP>
+<en-US>
+Fixed Linux desktop audio not playing through Android. A leftover PulseAudio pid file made the sound server think it was already running, so it exited on every start; LDFA now clears it first. LDFA also waits for PulseAudio to finish starting on slower devices, keeps it running while idle, and restarts it automatically if it stops. Also fixed first-start cleanup for desktops restored from a backup.
 </en-US>

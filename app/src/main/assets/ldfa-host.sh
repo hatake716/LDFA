@@ -776,10 +776,15 @@ stop_owned_pulseaudio() {
         pid=""
         read -r pid 2>/dev/null < "$candidate" || true
         [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null || continue
-        # Skip a recycled pid when /proc lets us check the name.
+        # Pid files outlive their daemons and numbers are recycled. Our daemon is
+        # an exec'd process whose /proc entry we can read, so a pid whose name we
+        # cannot confirm is someone else's (possibly the app's own hidden
+        # process). Only the pid this worker launched itself may skip the check.
         comm=""
         if read -r comm 2>/dev/null < "/proc/$pid/comm"; then
             [[ "$comm" == pulseaudio* ]] || continue
+        elif [[ "$candidate" != "$PULSE_LAUNCH_PID_FILE" ]]; then
+            continue
         fi
         kill -TERM "$pid" 2>/dev/null || true
         for attempt in $(seq 1 20); do
@@ -819,6 +824,13 @@ start_or_recover_pulseaudio() {
     fi
 
     rm -f "$PULSE_HOST_SOCKET"
+    # No PulseAudio of ours is running at this point (none answers and none is
+    # visible), so its pid file is stale: teardown SIGKILLs the daemon, which
+    # never removes it. Android reuses the number for processes of other apps,
+    # which kill -0 reports as existing but /proc hides. PulseAudio then assumes
+    # "the daemon is already running" and exits on every start, which is what
+    # silenced every desktop start on a Pixel 10a (pid file from days earlier).
+    rm -f "$PULSE_RUNTIME_PATH/pid"
     # Keep the previous daemon's log: after a crash it holds the reason.
     if [[ -s "$PULSE_DAEMON_LOG" ]]; then
         mv -f "$PULSE_DAEMON_LOG" "$PULSE_DAEMON_LOG.1" 2>/dev/null || true

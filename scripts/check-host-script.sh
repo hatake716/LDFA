@@ -266,6 +266,8 @@ required=(
   'pulse_bridge_alive()'
   'stop_audio_bridge_job'
   'stop_owned_pulseaudio'
+  'rm -f "$PULSE_RUNTIME_PATH/pid"'
+  'elif [[ "$candidate" != "$PULSE_LAUNCH_PID_FILE" ]]; then'
   'PULSE_LAUNCH_PID_FILE="$RUN_ROOT/pulseaudio-daemon.pid"'
   'LDFA_AUDIO_JOB_PID=$!'
   'module-aaudio-sink'

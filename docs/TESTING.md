@@ -1,4 +1,45 @@
-# LDFA 1.2.5 音声出力の修正の検証
+# LDFA 1.2.6 音声出力の修正（実機の原因）の検証
+
+対象：`com.hatake716.linuxdesktop` / versionName `1.2.6` / versionCode `27`。2026-09-29に検証しました。
+成果物と記録はローカルの`release-assets/v1.2.6/`に保存しています。
+
+## 1.2.5で実機の音声が直らなかった原因
+
+1.2.5をPixel 10a / Android 17へ入れても音が出なかったため、アップロード鍵で署名したdebuggable版の1.2.5を一時的に上書きしました（データ保持）。`run-as`で`logs/pulseaudio.log`を読むと、次のエラーでPulseAudioが起動直後に終了していました。
+
+```text
+W: [pulseaudio] pid.c: Could not check to see if pid 11660 is a pulseaudio process. Assuming it is and the daemon is already running.
+E: [pulseaudio] main.c: pa_pid_file_create() failed.
+```
+
+`files/usr/var/run/ldfa-pulse-rt/pid`は2026-09-18の古いファイルでした。11660は別のUIDのプロセスに再利用されており、`kill -0`はEPERM、`/proc/11660`は読めません（hidepid）。停止時のteardownはPulseAudioをSIGKILLするため、pidファイルは残ったままになります。1.2.4の`pulseaudio --start`はこの状態を「起動済み」と扱って成功を返していたため、デーモンは存在しないままでした。エミュレーターでは古い番号がたまたま再利用されておらず、再現しませんでした。
+
+## 修正と実機での確認
+
+- LDFAのPulseAudioが応答せず、`pgrep`でも見つからないことを確認した時点で、起動直前にpidファイルを削除します。
+- 停止処理は、`/proc`で名前を確認できたpulseaudioか、そのworkerが起動したpidだけに信号を送ります。
+- ホスト統合テストに、生きている別プロセスを指すpidファイルが残っていても起動できることを追加しました。1.2.5のスクリプトではこのテストが`pa_pid_file_create() failed`で失敗します。
+
+Pixel 10aでの確認（修正を含むdebuggable版）：
+
+- `run-as`で起動したブリッジは、PulseAudioの応答まで4秒、OpenSL ES sinkを含む準備完了まで10秒でした。1.2.4の1〜2秒の制限では間に合わない値です。LDFAのUIDで初めて`OpenSL ES AudioPlayer`が登録され、Debian側から無音データを再生するとAudioFlingerのトラックが`Active yes`（ミュートなし）になりました。
+- pidファイルを`1`（init）へ書き換えて古いファイルを再現しました。そのうえで、利用者がアプリからデスクトップを開きました。PulseAudioは1秒で応答し、6秒でブリッジが完成し、Androidのプレイヤーが作成・開始され、**利用者が音声の再生を確認しました**。
+
+## テストとパッケージ
+
+- 単体テスト205件成功（app 60件、terminal-emulator 145件）。app / termux-runtime / embedded-x11のLint、ホスト構文・統合・起動テスト、X11コントローラー検査も成功しました。
+- 最終APK（ARM64 / x86_64）とARM64 AABを既存のアップロード鍵で署名しました。APKのv2署名、AABのjar署名、bundletool validation、不要な権限・ユーザー補助サービス・HiddenApiBypass SDKの不在を確認しています。あわせて、APK内18本・AAB内9本のネイティブライブラリの16KB ELF配置、APKの16KB zip alignment、両成果物のホストスクリプトとソースの一致を確認しました。同梱ホストスクリプトは、実機で音声を確認したdebuggable版と同一です。
+- Pixel 10aへ最終APKを`install -r`で上書きしました。versionCode 27、debuggableなし、初回インストール日時の維持（データ保持）、端末内APKのSHA-256一致を確認しています。
+
+最終APKのSHA-256は`6e495037e1afc0362385f31a3a4209ba05a8457d7eda73aa5fcc9df12b3f6f41`、ARM64 AABは`acab5efcc497db25cf76b8171c61e4dd63de8ca8505909e453835f24bc668e77`です。
+
+## 検証範囲
+
+最終のリリース版（debuggableなし）で利用者が音声を聞いた確認は、この記録の時点では取れていません。ホストスクリプトは確認済みのdebuggable版と同一です。ARM64 16KB環境、Android 17エミュレーター、長時間負荷、Bluetooth出力は未確認です。Google Play更新用AABと提出資料を作成しています。Consoleへのアップロード・審査申請・公開は未実施です。
+
+---
+
+# LDFA 1.2.5 音声出力の修正の検証（過去の記録。実機では未解決、Play未提出）
 
 対象：`com.hatake716.linuxdesktop` / versionName `1.2.5` / versionCode `26`。2026-09-29に検証しました。
 成果物と記録はローカルの`release-assets/v1.2.5/`に保存しています。

@@ -202,7 +202,7 @@ jobs:
 
           # LDFA branding and Material 3 tools are included.
           grep -Fxq 'com.hatake716.linuxdesktop' "$VERIFY_DIR/application-id.txt"
-          grep -Fq "versionCode='26' versionName='1.2.5'" "$VERIFY_DIR/badging.txt"
+          grep -Fq "versionCode='27' versionName='1.2.6'" "$VERIFY_DIR/badging.txt"
           grep -Fq "targetSdkVersion:'36'" "$VERIFY_DIR/badging.txt"
           grep -Fq "application-label:'LDFA'" "$VERIFY_DIR/badging.txt"
           grep -Fq 'ToolsScreen' "$VERIFY_DIR/dex-strings.txt"
@@ -218,6 +218,9 @@ jobs:
           grep -Fq 'PULSE_BRIDGE_MARKER="# LDFA_PULSE_BRIDGE_VERSION=2"' "$VERIFY_DIR/ldfa-host.sh"
           grep -Fq 'pulseaudio --daemonize=no --exit-idle-time=-1' "$VERIFY_DIR/ldfa-host.sh"
           grep -Fq 'autospawn = no' "$VERIFY_DIR/ldfa-host.sh"
+          # 1.2.6: a stale PulseAudio pid file (number reused by another app's
+          # process, hidden by /proc hidepid) must be removed before every start.
+          grep -Fq 'rm -f "$PULSE_RUNTIME_PATH/pid"' "$VERIFY_DIR/ldfa-host.sh"
           grep -Fq -- '--renderer-process-limit=2' "$VERIFY_DIR/ldfa-host.sh"
           grep -Fq -- '--disable-background-mode' "$VERIFY_DIR/ldfa-host.sh"
           grep -Fq -- '--disable-extensions' "$VERIFY_DIR/ldfa-host.sh"

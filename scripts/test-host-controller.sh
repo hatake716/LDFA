@@ -166,6 +166,15 @@ case " ${*:-} " in
   *' --daemonize=no '*)
     [[ ! -f "$root/daemon" ]] || { : > "$root/start-collision"; exit 1; }
     [[ "${PULSE_TEST_START_EXIT:-0}" != 1 ]] || exit 1
+    # Like PulseAudio's pid.c: a recorded pid that still exists and is (or might
+    # be) a pulseaudio process means "already running", and the start fails.
+    if read -r old_pid 2>/dev/null < "${PULSE_RUNTIME_PATH:?}/pid" && \
+        [[ "$old_pid" =~ ^[0-9]+$ && "$old_pid" != "$$" ]] && kill -0 "$old_pid" 2>/dev/null; then
+      if ! old_comm="$(cat "/proc/$old_pid/comm" 2>/dev/null)" || [[ "$old_comm" == pulseaudio* ]]; then
+        printf 'E: [pulseaudio] main.c: pa_pid_file_create() failed.\n' >&2
+        exit 1
+      fi
+    fi
     if [[ "${PULSE_TEST_START_HANG:-0}" == 1 ]]; then
       # Stuck before the mainloop: never answers and ignores SIGTERM.
       printf '%s\n' "$$" > "$root/hung.pid"
@@ -478,6 +487,22 @@ for _ in $(seq 1 30); do kill -0 "$hung_pid" 2>/dev/null || break; sleep 0.1; do
 refute kill -0 "$hung_pid" 2>/dev/null
 bash "$controller" audio-probe >/dev/null
 [[ -f "$PULSE_FAKE_ROOT/daemon" ]]
+
+# A pid file left by a SIGKILLed daemon whose number now belongs to another
+# live process made PulseAudio exit with "already running" on every start (the
+# Pixel 10a failure). With no daemon of ours running, the stale file is removed.
+stop_fake_pulseaudio
+bash -c 'printf pulseaudio > "/proc/$$/comm"; exec sleep 30' &
+impostor=$!
+sleep 0.2
+mkdir -p "$PREFIX/var/run/ldfa-pulse-rt"
+printf '%s\n' "$impostor" > "$PREFIX/var/run/ldfa-pulse-rt/pid"
+audio_report="$(bash "$controller" audio-probe 2>/dev/null)"
+grep -q '^audio_sink=OpenSL_ES_sink$' <<<"$audio_report"
+[[ "$(cat "$PREFIX/var/run/ldfa-pulse-rt/pid")" != "$impostor" ]]
+kill -0 "$impostor"
+kill "$impostor"
+wait "$impostor" 2>/dev/null || true
 
 # Each start keeps the previous daemon's log for crash diagnosis.
 pulse_log="$XDG_DATA_HOME/linux-desktop-for-android/logs/pulseaudio.log"
