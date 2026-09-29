@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# `! cmd` never trips `set -e`, so a negated check that fails would pass
+# silently. refute turns an unexpected success into a real test failure.
+refute() {
+  if "$@"; then
+    printf 'Unexpected success: %s\n' "$*" >&2
+    exit 1
+  fi
+}
+
 controller="${1:-app/src/main/assets/ldfa-x11.sh}"
 repository="${2:-.}"
 bash -n "$controller"
@@ -28,7 +37,7 @@ for forbidden in \
   'am start' \
   'cmd_start()' \
   'cmd_stop()'; do
-  ! grep -Fq -- "$forbidden" "$controller"
+  refute grep -Fq -- "$forbidden" "$controller"
 done
 
 service="$repository/app/src/main/java/com/hatake716/linuxdesktop/x11/EmbeddedX11ServerService.kt"
@@ -49,13 +58,14 @@ grep -Fq -- 'Process.killProcess(Process.myPid())' "$service"
 grep -Fq -- 'writeServiceState(requestedGeneration)' "$service"
 grep -Fq -- 'EXTRA_GENERATION' "$service"
 grep -Fq -- 'SERVICE_STATE_FILE' "$service"
-! grep -Fq -- 'return START_STICKY' "$service"
-! grep -Fq -- 'ServerSocket' "$service"
-! grep -Fq -- '7892' "$service"
-! grep -Fq -- 'sendBroadcast' "$service"
-! grep -Fq -- 'CmdEntryPoint.ACTION_START' "$service"
-! grep -Fq -- 'ActivityThread' "$service"
-! grep -Fq -- 'Unsafe' "$service"
+refute grep -Fq -- 'return START_STICKY' "$service"
+refute grep -Fq -- 'ServerSocket' "$service"
+# The KDoc names the removed upstream TCP 7892 path; only code lines must not.
+test "$(grep -Ev '^[[:space:]]*(\*|/\*|//)' "$service" | grep -Fc -- '7892')" -eq 0
+refute grep -Fq -- 'sendBroadcast' "$service"
+refute grep -Fq -- 'CmdEntryPoint.ACTION_START' "$service"
+refute grep -Fq -- 'ActivityThread' "$service"
+refute grep -Fq -- 'Unsafe' "$service"
 
 grep -Fq -- 'EmbeddedX11PrerequisiteController.ensure(context)' "$lifecycle"
 grep -Fq -- 'ContextCompat.startForegroundService(context, intent)' "$lifecycle"
@@ -71,7 +81,7 @@ grep -Fq -- 'serviceGeneration,' "$lifecycle"
 # builds (only debuggable builds hold the readproc exemption). kill(pid, 0)
 # is the hidepid-safe liveness/ownership probe.
 grep -Fq -- 'X11_PROCESS_NAME = "${BuildConfig.APPLICATION_ID}:x11"' "$lifecycle"
-! grep -Fq -- 'File("/proc/$pid/cmdline")' "$lifecycle"
+refute grep -Fq -- 'File("/proc/$pid/cmdline")' "$lifecycle"
 grep -Fq -- 'Os.kill(pid, 0)' "$lifecycle"
 grep -Fq -- 'OsConstants.SIGTERM' "$lifecycle"
 grep -Fq -- 'OsConstants.SIGKILL' "$lifecycle"
@@ -88,7 +98,7 @@ grep -Fq -- 'fun consumeDisplayOpenFailure()' "$lifecycle"
 grep -Fq -- 'pendingDisplayBinds.clear()' "$lifecycle"
 grep -Fq -- 'fun cancelPendingDisplayOpen()' "$lifecycle"
 grep -Fq -- 'cleanupServiceStateAfterVerifiedExit' "$lifecycle"
-! grep -Fq -- '/system/bin/am' "$lifecycle"
+refute grep -Fq -- '/system/bin/am' "$lifecycle"
 
 grep -Fq -- 'object EmbeddedX11PrerequisiteController' "$prereq"
 grep -Fq -- 'context.assets.open("ldfa-x11.sh")' "$prereq"
@@ -114,7 +124,7 @@ grep -Fq -- 'Intent(context, TermuxService::class.java)' "$repository_source"
 grep -Fq -- 'Context.BIND_AUTO_CREATE' "$repository_source"
 grep -Fq -- 'releaseTermuxServiceLifetime()' "$repository_source"
 grep -Fq -- 'display cleanup failed; retaining Termux service lease' "$repository_source"
-! grep -Fq -- 'runInstalledX11("stop"' "$repository_source"
+refute grep -Fq -- 'runInstalledX11("stop"' "$repository_source"
 
 # An old notification must not stop the foreground monitor after a newer
 # container became active while the stop command was waiting on lifecycle IO.
@@ -125,7 +135,7 @@ grep -Fq -- 'withContext(Dispatchers.Main.immediate)' "$keep_alive"
 grep -Fq -- 'val remainingId = repository.activeContainerId()' "$keep_alive"
 grep -Fq -- 'startMonitoring(remainingId)' "$keep_alive"
 grep -Fq -- 'stopSelfResult(stopStartId)' "$keep_alive"
-! grep -Fq -- 'runCatching { repository.stopContainer(id) }' "$keep_alive"
+refute grep -Fq -- 'runCatching { repository.stopContainer(id) }' "$keep_alive"
 python3 - "$keep_alive" <<'PY'
 from pathlib import Path
 import sys
@@ -149,10 +159,10 @@ grep -Fq -- 'display preflight xset failed' "$host_compat"
 app_manifest="$repository/app/src/main/AndroidManifest.xml"
 grep -Fq -- '.x11.EmbeddedX11ServerService' "$app_manifest"
 grep -Fq -- 'android:process=":x11"' "$app_manifest"
-! grep -Fq -- 'android:extractNativeLibs=' "$app_manifest"
+refute grep -Fq -- 'android:extractNativeLibs=' "$app_manifest"
 
 embedded_manifest="$repository/embedded-x11/src/main/AndroidManifest.xml"
-! grep -Fq -- 'com.termux.x11.CmdEntryPoint.ACTION_START' "$embedded_manifest"
+refute grep -Fq -- 'com.termux.x11.CmdEntryPoint.ACTION_START' "$embedded_manifest"
 
 bridge_java="$repository/embedded-x11/src/main/java/com/termux/x11/EmbeddedX11ServerBridge.java"
 bridge_native="$repository/embedded-x11/src/main/cpp/embedded_server.cpp"
@@ -194,7 +204,7 @@ trap 'rm -rf "$hardened_tmp"' EXIT
 python3 "$native_patch" "$repository/vendor/termux-x11/lorie/src/main/cpp" "$hardened_tmp"
 grep -Fq -- 'CPU_ZERO(&mask)' "$hardened_tmp/cmdentrypoint.cpp"
 grep -Fq -- 'unsetenv("LD_PRELOAD")' "$hardened_tmp/cmdentrypoint.cpp"
-! grep -Fq -- 'setenv("LD_PRELOAD", "/data/data/com.termux/files/usr/lib/libtermux-exec.so"' "$hardened_tmp/cmdentrypoint.cpp"
+refute grep -Fq -- 'setenv("LD_PRELOAD", "/data/data/com.termux/files/usr/lib/libtermux-exec.so"' "$hardened_tmp/cmdentrypoint.cpp"
 grep -Fq -- 'if (!choreographer)' "$hardened_tmp/cmdentrypoint.cpp"
 grep -Fq -- 'return JNI_FALSE' "$hardened_tmp/cmdentrypoint.cpp"
 grep -Fq -- 'Java_com_termux_x11_EmbeddedX11Display_nativeSuccessfulPresentSerial' "$hardened_tmp/activity.cpp"
@@ -219,8 +229,8 @@ grep -Fq -- 'windowDeadline.tv_sec += 1' "$hardened_tmp/renderer.cpp"
 grep -Fq -- 'attempt < 20 && !buf && !stopping.load(std::memory_order_acquire)' "$hardened_tmp/renderer.cpp"
 grep -Fq -- 'Do not begin another potentially blocking vendor EGL call' "$hardened_tmp/renderer.cpp"
 grep -Fq -- 'do not enter the second fence wait' "$hardened_tmp/renderer.cpp"
-! grep -Fq -- 'stateDeadline.tv_sec += 5' "$hardened_tmp/renderer.cpp"
-! grep -Fq -- 'windowDeadline.tv_sec += 5' "$hardened_tmp/renderer.cpp"
+refute grep -Fq -- 'stateDeadline.tv_sec += 5' "$hardened_tmp/renderer.cpp"
+refute grep -Fq -- 'windowDeadline.tv_sec += 5' "$hardened_tmp/renderer.cpp"
 grep -Fq -- 'clock_gettime(CLOCK_REALTIME' "$hardened_tmp/lorie.h"
 grep -Fq -- 'ownerAlive || lorieConnectionAlive()' "$hardened_tmp/lorie.h"
 grep -Fq -- 'return serverAlive || ldfaViewerConnectionAlive()' "$hardened_tmp/cmdentrypoint.cpp"
@@ -228,10 +238,10 @@ grep -Fq -- 'extern "C" bool ldfaViewerConnectionAlive(void)' "$hardened_tmp/act
 grep -Fq -- '+[](JNIEnv *env, __unused jobject thiz, jlong ptr, jbyteArray text)' "$hardened_tmp/activity.cpp"
 grep -Fq -- '+[](JNIEnv* env, __unused jobject cls, jlong ptr, jfloat x, jfloat y' "$hardened_tmp/activity.cpp"
 grep -Fq -- '+[](JNIEnv *env, __unused jobject thiz, jlong ptr, jfloat x, jfloat y, jint pressure' "$hardened_tmp/activity.cpp"
-! grep -Fq -- '+[](__unused JNIEnv *env, __unused jobject thiz, jlong ptr, jbyteArray text)' "$hardened_tmp/activity.cpp"
+refute grep -Fq -- '+[](__unused JNIEnv *env, __unused jobject thiz, jlong ptr, jbyteArray text)' "$hardened_tmp/activity.cpp"
 grep -Fq -- 'MSG_DONTWAIT | MSG_NOSIGNAL' "$hardened_tmp/renderer.cpp"
-! grep -Fq -- 'ANativeWindow_acquire(newWin)' "$hardened_tmp/renderer.cpp"
-! grep -Fq -- 'abort();' "$hardened_tmp/renderer.cpp"
+refute grep -Fq -- 'ANativeWindow_acquire(newWin)' "$hardened_tmp/renderer.cpp"
+refute grep -Fq -- 'abort();' "$hardened_tmp/renderer.cpp"
 python3 - "$hardened_tmp/renderer.cpp" "$hardened_tmp/lorie.h" <<'PY'
 from pathlib import Path
 import sys
@@ -268,7 +278,7 @@ assert swap < post_swap_guard < prequeue
 PY
 grep -Fq -- 'find_program(LDFA_HOST_C_COMPILER NAMES cc gcc REQUIRED)' \
   "$hardened_tmp/upstream-cpp/recipes/xkbcomp.cmake"
-! grep -Fq -- '/usr/bin/gcc' "$hardened_tmp/upstream-cpp/recipes/xkbcomp.cmake"
+refute grep -Fq -- '/usr/bin/gcc' "$hardened_tmp/upstream-cpp/recipes/xkbcomp.cmake"
 rm -rf "$hardened_tmp"
 trap - EXIT
 
@@ -278,13 +288,13 @@ trap 'rm -rf "$java_tmp"' EXIT
 python3 "$java_patch" "$repository/vendor/termux-x11/lorie/src/main/java" "$java_tmp" "$java_tmp/resources"
 test ! -e "$java_tmp/com/termux/x11/utils/KeyInterceptor.java"
 test ! -e "$java_tmp/resources/xml/accessibility_service_config.xml"
-! grep -Fq 'enableAccessibilityService' "$java_tmp/resources/xml/preferences.xml"
-! grep -Rq 'KeyInterceptor' "$java_tmp/com/termux/x11"
+refute grep -Fq 'enableAccessibilityService' "$java_tmp/resources/xml/preferences.xml"
+refute grep -Rq 'KeyInterceptor' "$java_tmp/com/termux/x11"
 generated_lorie="$java_tmp/com/termux/x11/LorieView.java"
 generated_activity="$java_tmp/com/termux/x11/MainActivity.java"
 generated_input="$java_tmp/com/termux/x11/input/TouchInputHandler.java"
-! grep -Fq -- 'CriticalNative' "$generated_lorie"
-! grep -Fq -- 'FastNative' "$generated_lorie"
+refute grep -Fq -- 'CriticalNative' "$generated_lorie"
+refute grep -Fq -- 'FastNative' "$generated_lorie"
 grep -Fq -- 'onReceiveConnection(getIntent());' "$generated_activity"
 grep -Fq -- 'if (serviceBinder != binder)' "$generated_activity"
 grep -Fq -- 'handler.removeCallbacks(connectRetry)' "$generated_activity"
@@ -298,8 +308,8 @@ grep -Fq -- 'view.requestFullRedraw()' "$generated_activity"
 grep -Fq -- 'getLorieView().requestFullRedraw()' "$generated_activity"
 grep -Fq -- 'MainActivity activity = MainActivity.getInstance();' "$generated_lorie"
 grep -Fq -- 'activity != null && activity.useTermuxEKBarBehaviour' "$generated_lorie"
-! grep -Fq -- 'private final MainActivity a = MainActivity.getInstance();' "$generated_lorie"
-! grep -Fq -- 'a.useTermuxEKBarBehaviour' "$generated_lorie"
+refute grep -Fq -- 'private final MainActivity a = MainActivity.getInstance();' "$generated_lorie"
+refute grep -Fq -- 'a.useTermuxEKBarBehaviour' "$generated_lorie"
 grep -Fq -- 'view.shutdownNative()' "$generated_activity"
 grep -Fq -- 'EmbeddedX11Display.isLaunchIntentAllowed(getIntent())' "$generated_activity"
 grep -Fq -- 'EmbeddedX11Display.viewerDestroyed(getIntent())' "$generated_activity"
@@ -308,15 +318,18 @@ grep -Fq -- 'private static final String LDFA_IME_RESIZE_MIGRATION = "ldfaImeRes
 grep -Fq -- '.putBoolean("Reseed", true)' "$generated_activity"
 grep -Fq -- 'LDFA enabled IME-aware X11 resizing' "$generated_activity"
 grep -Fq -- 'long getNativeContext()' "$generated_lorie"
-! grep -Fq -- 'nativeDestroy(mNativeContext)' "$generated_lorie"
-! grep -Fq -- 'postDelayed(this::finishStartupDraw' "$generated_activity"
-! grep -Fq -- 'postDelayed(this::onPreferencesChangedCallback' "$generated_activity"
-! grep -Fq -- 'getLorieView().requestConnection()' "$generated_activity"
+refute grep -Fq -- 'nativeDestroy(mNativeContext)' "$generated_lorie"
+refute grep -Fq -- 'postDelayed(this::finishStartupDraw' "$generated_activity"
+refute grep -Fq -- 'postDelayed(this::onPreferencesChangedCallback' "$generated_activity"
+refute grep -Fq -- 'getLorieView().requestConnection()' "$generated_activity"
 test "$(grep -Fc -- 'refreshInputDevices(mActivity);' "$generated_input")" -eq 4
 grep -Fq -- 'refreshInputDevices(MainActivity.getInstance());' "$generated_input"
 grep -Fq -- 'private static void refreshInputDevices(MainActivity activity)' "$generated_input"
 grep -Fq -- 'LorieView view = activity.getLorieView();' "$generated_input"
-! grep -Fq -- 'MainActivity.getInstance().getLorieView()' "$generated_input"
+# Only the refresh path runs before MainActivity publishes its singleton; the
+# upstream stylus onTouch() dereference runs after publication and is kept.
+refute grep -Fq -- 'MainActivity.getInstance().getLorieView().requestStylusEnabled' "$generated_input"
+refute grep -Fq -- 'MainActivity.getInstance().setExternalKeyboardConnected' "$generated_input"
 rm -rf "$java_tmp"
 trap - EXIT
 
@@ -336,8 +349,8 @@ grep -Fq -- 'isSurfaceReady()' "$display"
 grep -Fq -- 'public static boolean isViewerReady()' "$display"
 grep -Fq -- 'successfulPresentSerial()' "$display"
 grep -Fq -- 'return view.getNativeContext();' "$display"
-! grep -Fq -- 'getDeclaredField("mNativeContext")' "$display"
-! grep -Fq -- 'renderedFrames() > 0' "$display"
+refute grep -Fq -- 'getDeclaredField("mNativeContext")' "$display"
+refute grep -Fq -- 'renderedFrames() > 0' "$display"
 grep -Fq -- 'activity.finishAffinity()' "$display"
 grep -Fq -- 'viewerWasOpen && isNativeViewerForeground()' "$repository_source"
 grep -Fq -- 'native heartbeat kept Xorg/XFCE alive while viewer is backgrounded' "$repository_source"
@@ -392,15 +405,15 @@ grep -Fq -- 'fun setHostActivityVisible(visible: Boolean)' "$main_view_model"
 grep -Fq -- 'containerRefreshJob?.cancel()' "$main_view_model"
 # The VNC fallback (VncFallbackActivity / ldfa-vnc.sh) was removed: nothing of
 # it may return.
-! test -e "$repository/app/src/main/java/com/hatake716/linuxdesktop/display/VncFallbackActivity.kt"
-! test -e "$repository/app/src/main/assets/ldfa-vnc.sh"
+refute test -e "$repository/app/src/main/java/com/hatake716/linuxdesktop/display/VncFallbackActivity.kt"
+refute test -e "$repository/app/src/main/assets/ldfa-vnc.sh"
 
 settings="$repository/settings.gradle.kts"
 app_build="$repository/app/build.gradle.kts"
-! grep -Fq -- 'include(":embedded-x11-loader")' "$settings"
-! grep -Fq -- 'embedded-x11-loader' "$app_build"
-! grep -Fq -- 'x11-loader-assets' "$app_build"
-grep -Fq -- 'versionName = "1.2.4"' "$app_build"
+refute grep -Fq -- 'include(":embedded-x11-loader")' "$settings"
+refute grep -Fq -- 'embedded-x11-loader' "$app_build"
+refute grep -Fq -- 'x11-loader-assets' "$app_build"
+grep -Fq -- 'versionName = "1.2.5"' "$app_build"
 grep -Fq -- 'HOST_SCRIPT_VERSION", "\"1.2.0\""' "$app_build"
 
 startup_overlay="$repository/app/src/main/java/com/hatake716/linuxdesktop/ui/DesktopStartupOverlay.kt"
@@ -409,8 +422,8 @@ settings_screen="$repository/app/src/main/java/com/hatake716/linuxdesktop/ui/Set
 process_exit_diagnostics="$repository/app/src/main/java/com/hatake716/linuxdesktop/data/ProcessExitDiagnostics.kt"
 grep -Fq -- 'desktopStartInProgress' "$main_view_model"
 grep -Fq -- '起動ログ' "$startup_overlay"
-! grep -Fq -- 'X11ディスプレイを開く' "$settings_screen"
-! grep -Fq -- 'onOpenDisplay' "$settings_screen"
+refute grep -Fq -- 'X11ディスプレイを開く' "$settings_screen"
+refute grep -Fq -- 'onOpenDisplay' "$settings_screen"
 grep -Fq -- 'getHistoricalProcessExitReasons' "$process_exit_diagnostics"
 grep -Fq -- 'isLowMemoryKillReportSupported()' "$process_exit_diagnostics"
 grep -Fq -- 'same_uid_rss_kib=' "$process_exit_diagnostics"

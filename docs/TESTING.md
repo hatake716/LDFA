@@ -1,4 +1,59 @@
-# LDFA 1.2.4 起動高速化・進捗バーの検証
+# LDFA 1.2.5 音声出力の修正の検証
+
+対象：`com.hatake716.linuxdesktop` / versionName `1.2.5` / versionCode `26`。2026-09-29に検証しました。
+成果物と記録はローカルの`release-assets/v1.2.5/`に保存しています。
+
+## 実機での症状と原因の特定
+
+Pixel 10a / Android 17 / API 37 / ARM64にインストールされた1.2.4で、利用者がデスクトップを起動した時間帯（16:58〜17:06、4回）の記録を読み取り専用で確認しました。アプリの画面操作・入力注入は行っていません。
+
+- `dumpsys audio`の再生アクティビティ（直近100件、17:12まで）に、LDFAのUID（10507）の音声プレイヤーが1件もありませんでした。正常な環境では、PulseAudioがOpenSL ES sinkを読み込んだ時点で`OpenSL ES AudioPlayer`が登録されます。つまり、Android側の音声出力が一度も作られていません。
+- SELinuxの監査記録では、17:03:24にpulseaudioが実行された約1秒後に`timeout`、その後X11確認が続いていました。1秒・2秒のタイムアウトで起動を打ち切る旧コードの経路と一致します。
+- Android 17ではPRoot越しの`/dev/socket/logdw`へのアクセスが拒否されるため、PulseAudioのログは端末のlogcatに残りませんでした。1.2.5ではアプリ内の`logs/pulseaudio.log`へ保存します。
+
+## エミュレーターでの再現と修正確認
+
+Android 15 / API 35 / x86_64 / 4KBのAVDに、`.ldfa`バックアップから復元したDebian 12 / XFCE環境を用意しました。ARM端末の遅い起動を模擬するため、検証用にだけ`pulseaudio`の実行前に2.5秒待つラッパーを置きました。
+
+| 条件 | 結果 |
+| --- | --- |
+| 1.2.4・遅延なし | autospawnされたデーモン（`--start --log-target=syslog`、アイドル終了20秒）で音声ブリッジ完成 |
+| 1.2.4・2.5秒遅延 | `PulseAudio daemon did not start`、`Audio bridge is unavailable`。pulseaudioのプロセスもAndroidの音声プレイヤーも作られない（実機と同じ状態） |
+| 1.2.5・2.5秒遅延 | 3秒で応答し、`OpenSL_ES_sink`でブリッジ完成、Androidに`OpenSL ES AudioPlayer`を登録。デーモンは`--daemonize=no --exit-idle-time=-1`で1つだけ（最終コードで再確認） |
+| 1.2.5・遅延なし | 起動・停止を2回繰り返し、毎回1秒でブリッジ完成。停止後にpulseaudioとPRootは残らない |
+
+1.2.5では、次の再生と復旧を確認しました。
+
+- Debian側の`pacat`で4秒の正弦波を再生し、Android AudioFlingerにPulseAudioデーモンのトラック（usage media、スピーカー）が`Active yes`で現れ、フレームが進むことを確認しました。
+- Debian側のGoogle ChromeでWeb Audioの発振音を再生し、`float32le`のsink-input、sinkの`RUNNING`、AudioFlingerの有効なトラックを確認しました。
+- 実行中のPulseAudioを`kill -9`で終了させ、監視ループが3秒後に検知し、3秒で作り直すことを確認しました。XFCEの音量プラグインも新しいデーモンへ再接続しました。
+- `pulseaudio --dump-conf`で`exit-idle-time = -1`が有効なこと、ホストの`client.conf.d`の`autospawn = no`で`pactl info`がデーモンを起動しないことを確認しました。
+
+Android 17（API 37.0 x86_64 4KB）のAVDも用意しましたが、この検証環境ではsystem_serverとランチャーが再起動を繰り返し、アプリを起動できませんでした。Android 17での再生確認は実機で行う必要があります。
+
+## テストとパッケージ
+
+- ホスト統合テストに、起動に2秒かかるデーモンを待つこと、起動中の既存デーモンを停止しないこと、起動中に終了したデーモンを早期に失敗扱いにすること、パスの別名、監視による再構築の上限、セッション前の待機の上限を追加しました。旧1.2.4のスクリプトではこれらのテストが失敗します。
+- テストスクリプトとCIの`! grep`は`set -e`で失敗を検出しないため、`refute`に置き換えました。これまで見逃されていた検査条件の誤り2件も修正しています。
+
+## 同梱した修正：復元後の初回起動
+
+`.ldfa`から復元した環境の初回起動では、アプリ側の互換置換が単一引用符の中へコードを差し込み、後片付け（/tmp・/runの掃除、Chromeのロック解除、machine-idの再生成）が構文エラーで実行されていませんでした。ホストスクリプトの該当箇所を置換対象にならない実装へ変更しました。既存環境のセッションスクリプトも入れ替わるよう、`LDFA_SESSION_RUNTIME_VERSION`を38へ上げています。互換置換後のスクリプトの構文と、復元後クリーンアップのコマンド文字列を検証する単体テストを追加しました。API 35 AVDで復元した環境の初回起動ログに、構文エラーが出ないことを確認しました（1.2.4では`step: command not found`などが出ていました）。
+- 単体テスト205件成功（app 60件、terminal-emulator 145件）、失敗・エラー・スキップなし。app / termux-runtime / embedded-x11のLint、ホスト構文・統合・起動テスト、X11コントローラー検査も成功しました。
+- 最終APK（ARM64 / x86_64）とARM64 AABを既存のアップロード鍵で署名し、APKのv2署名、AABのjar署名、bundletool validation、不要な権限・ユーザー補助サービス・HiddenApiBypass SDKの不在、APK内18本・AAB内9本のネイティブライブラリの16KB ELF配置、APKの16KB zip alignment、両成果物のホストスクリプトとソースの一致を確認しました。
+- API 35 AVDで、1.2.4の署名済みAPKで復元・起動した環境へ最終APKを`install -r`で上書きし、環境を保持したまま起動できること、1.2.5のデーモンがAndroidへOpenSLプレイヤーを登録することを確認しました。再生の確認（pacat・Chrome）は、同じホストスクリプトを含むdebugビルドで行っています。
+
+最終APKのSHA-256は`3e64809d037d3d0af55012f49763c9f6b633d330eee861950114512ae50fd941`、ARM64 AABは`4900932e2ed494191e99c6a03071717d6c5e1cd0886fbd08fdcb5b9606286cd6`です。
+
+## 検証範囲
+
+Pixel 10a / Android 17 / API 37 / ARM64 / 4KBへ、最終APKを`install -r`で1.2.4から上書き更新しました。versionCode 26、初回インストール日時の維持（データ保持）、端末内APKのSHA-256一致を確認しています。アプリの起動・画面操作・入力注入は行っていないため、実機での音声の試聴は利用者による確認待ちです。
+
+ARM64 16KB環境、Android 17エミュレーター、長時間負荷、Bluetooth機器への出力は未確認です。Google Play更新用AABと提出資料を作成しています。Consoleへのアップロード・審査申請・公開は未実施です。
+
+---
+
+# LDFA 1.2.4 起動高速化・進捗バーの検証（過去の記録）
 
 対象：`com.hatake716.linuxdesktop` / versionName `1.2.4` / versionCode `25`。2026-09-18に検証しました。
 成果物と記録はローカルの`release-assets/v1.2.4/`に保存しています。

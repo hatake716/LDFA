@@ -1,7 +1,7 @@
-# Google Play 提出資料 — LDFA 1.2.4
+# Google Play 提出資料 — LDFA 1.2.5
 
-対象：`com.hatake716.linuxdesktop` / versionCode `25` / targetSdk `36`。
-新しい成果物・画像・提出文面は、ローカルの`release-assets/v1.2.4/`にまとめます。
+対象：`com.hatake716.linuxdesktop` / versionCode `26` / targetSdk `36`。
+新しい成果物・画像・提出文面は、ローカルの`release-assets/v1.2.5/`にまとめます。
 旧`release-assets/LDFA-v1.1.0-release.aab`とは区別してください。
 
 ## ストア掲載情報（日本語）
@@ -204,3 +204,13 @@ Google Playへのアップロード・審査申請は、この資料やAABを生
 ## 1.2.4の更新
 
 保存済みデスクトップの起動を最適化し、工程に連動する進捗バー・パーセントと各工程の経過時間を追加しました。ログは端末内で表示し、新しい権限・SDK・収集データは追加していません。dataSyncとspecialUseの用途は従来どおりです。[1.2.4の実演動画](https://github.com/hatake716/LDFA/releases/download/v1.2.4/ldfa-startup-progress-demo.mp4)と[検証資料](../../docs/TESTING.md)を参照してください。過去のFGS申告動画は1.2.1で撮影した記録として区別します。
+
+## 1.2.5の更新
+
+Linuxデスクトップの音声がAndroidから出ない不具合を修正しました。アプリ内のPulseAudioがPRoot越しに起動し終えるのを待つようにし、アイドル時に終了しないようにしました。新しい権限・SDK・収集データは追加していません。音声は再生のみで、マイク・録音の権限はありません。dataSyncとspecialUseの用途は従来どおりです。[検証資料](../../docs/TESTING.md)を参照してください。
+<ja-JP>
+Linuxデスクトップの音声がAndroidから出ない不具合を修正しました。音声機能（PulseAudio）の起動に時間がかかる端末でも準備を待つようにし、アイドル時に音声の接続が切れないようにしました。音声の準備はデスクトップの起動と並行して行い、実行中に止まった場合は自動で復旧します。バックアップから復元した環境で、初回起動時の後片付けが実行されない問題も修正しました。
+</ja-JP>
+<en-US>
+Fixed Linux desktop audio not playing through Android. LDFA now waits for its PulseAudio sound server to finish starting on devices where this takes several seconds, and keeps it running while idle. Audio setup runs alongside desktop startup, and the sound server restarts automatically if it stops during a session. Also fixed first-start cleanup for desktops restored from a backup.
+</en-US>

@@ -27,9 +27,9 @@ SHARED_ROOT="$HOME/storage/shared/LinuxDesktop"
 SELF="$BIN_DIR/ldfa-host"
 BOOTSTRAP_LOG="$LOG_ROOT/bootstrap.log"
 CHROME_LAUNCHER_MARKER="# LDFA_CHROME_LAUNCHER_VERSION=8"
-DESKTOP_RUNTIME_MARKER="# LDFA_SESSION_RUNTIME_VERSION=37"
+DESKTOP_RUNTIME_MARKER="# LDFA_SESSION_RUNTIME_VERSION=38"
 AUDIO_CLIENT_MARKER="# LDFA_AUDIO_CLIENT_VERSION=3"
-PULSE_BRIDGE_MARKER="# LDFA_PULSE_BRIDGE_VERSION=1"
+PULSE_BRIDGE_MARKER="# LDFA_PULSE_BRIDGE_VERSION=2"
 # Modern Node.js runtime provisioned into the guest so Node-based CLIs (Claude
 # Code, Codex, and other npm tools) install and run out of the box. Debian 12's
 # apt Node is 18.x — too old for tools that now require Node >= 22 — so LDFA
@@ -61,8 +61,36 @@ PULSE_HOST_SERVER="unix:$PULSE_HOST_SOCKET"
 PULSE_GUEST_DIR="/tmp/ldfa-pulse"
 PULSE_GUEST_SERVER="unix:$PULSE_GUEST_DIR/native"
 PULSE_GUEST_BIND="$PULSE_HOST_DIR:$PULSE_GUEST_DIR"
+# The worker sees the app prefix as /data/user/0/..., RUN_COMMAND shells as
+# /data/data/...; both name the same socket, so module matching accepts either.
+case "$PULSE_HOST_SOCKET" in
+    /data/user/0/*) PULSE_HOST_SOCKET_ALIAS="/data/data/${PULSE_HOST_SOCKET#/data/user/0/}" ;;
+    /data/data/*) PULSE_HOST_SOCKET_ALIAS="/data/user/0/${PULSE_HOST_SOCKET#/data/data/}" ;;
+    *) PULSE_HOST_SOCKET_ALIAS="" ;;
+esac
 PULSE_CONFIG_DROP_IN="$PREFIX/etc/pulse/default.pa.d/ldfa-audio.pa"
 PULSE_DAEMON_DROP_IN="$PREFIX/etc/pulse/daemon.conf.d/99-ldfa-noshm.conf"
+# Host-side libpulse clients (our pactl probes) must never autospawn a daemon.
+# An autospawned "pulseaudio --start --log-target=syslog" skips the flags below
+# and keeps PulseAudio's 20 s idle exit, so it quit (taking the bridge socket
+# with it) before XFCE connected. The only daemon is the one we start.
+PULSE_CLIENT_DROP_IN="$PREFIX/etc/pulse/client.conf.d/99-ldfa-host.conf"
+PULSE_DAEMON_LOG="$LOG_ROOT/pulseaudio.log"
+# Every host PulseAudio binary runs through the native-library PRoot. On ARM
+# phones a cold daemon start (LD_BIND_NOW re-exec, ~16 modules, the Android
+# sink) takes seconds, and the old 1-2 s limits killed a healthy daemon before
+# it created the Android sink. These values only bound a hang.
+PULSE_CONTROL_TIMEOUT="${LDFA_PULSE_CONTROL_TIMEOUT:-15}"
+PULSE_START_TIMEOUT="${LDFA_PULSE_START_TIMEOUT:-60}"
+PULSE_BRIDGE_TIMEOUT="${LDFA_PULSE_BRIDGE_TIMEOUT:-90}"
+# How long the worker lets the bridge job finish before XFCE starts.
+PULSE_SESSION_WAIT="${LDFA_PULSE_SESSION_WAIT:-10}"
+LDFA_AUDIO_JOB_PID=""
+LDFA_AUDIO_RESTARTS=0
+LDFA_AUDIO_LAST_REBUILD=0
+# The daemon this controller launched (the pid file PulseAudio writes itself
+# appears only once it is up). The worker stops that daemon when it ends.
+PULSE_LAUNCH_PID_FILE="$RUN_ROOT/pulseaudio-daemon.pid"
 # Fallback timezone used to sync the guest clock when persist.sys.timezone is
 # unreadable (empty property, or getprop absent). PRoot shares Android's kernel
 # clock, so only the timezone — never the absolute UTC time — can drift.
@@ -587,9 +615,21 @@ retry_command() {
     return "$rc"
 }
 
+# Host-side pactl on the app-owned daemon's own control socket. autospawn is
+# disabled by PULSE_CLIENT_DROP_IN, so a missing daemon fails fast here instead
+# of starting one that lacks our flags.
+host_pactl() {
+    env -u PULSE_SERVER timeout "${PULSE_CONTROL_TIMEOUT}s" pactl "$@"
+}
+
+# The same daemon through the dedicated bridge socket that Debian clients use.
+bridge_pactl() {
+    PULSE_SERVER="$PULSE_HOST_SERVER" timeout "${PULSE_CONTROL_TIMEOUT}s" pactl "$@"
+}
+
 pulse_module_loaded() {
     local wanted="$1" index="" name="" arguments="" modules=""
-    modules="$(env -u PULSE_SERVER timeout 1s pactl list short modules 2>/dev/null)" || \
+    modules="$(host_pactl list short modules 2>/dev/null)" || \
         return 2
     while read -r index name arguments; do
         [[ "$name" == "$wanted" ]] && return 0
@@ -597,13 +637,21 @@ pulse_module_loaded() {
     return 1
 }
 
+pulse_bridge_socket_argument() {
+    local arguments=" $1 " candidate
+    for candidate in "$PULSE_HOST_SOCKET" "$PULSE_HOST_SOCKET_ALIAS"; do
+        [[ -n "$candidate" && "$arguments" == *" socket=$candidate "* ]] && return 0
+    done
+    return 1
+}
+
 pulse_bridge_module_indexes() {
     local index="" name="" arguments="" modules=""
-    modules="$(env -u PULSE_SERVER timeout 1s pactl list short modules 2>/dev/null)" || \
+    modules="$(host_pactl list short modules 2>/dev/null)" || \
         return 2
     while read -r index name arguments; do
         [[ "$name" == module-native-protocol-unix ]] || continue
-        [[ "$arguments" == *"socket=$PULSE_HOST_SOCKET"* ]] || continue
+        pulse_bridge_socket_argument "$arguments" || continue
         [[ "$index" =~ ^[0-9]+$ ]] && printf '%s\n' "$index"
     done <<< "$modules"
     return 0
@@ -611,9 +659,7 @@ pulse_bridge_module_indexes() {
 
 pulse_real_sink() {
     local index="" name="" rest="" sinks=""
-    sinks="$(
-        PULSE_SERVER="$PULSE_HOST_SERVER" timeout 1s pactl list short sinks 2>/dev/null
-    )" || return 2
+    sinks="$(bridge_pactl list short sinks 2>/dev/null)" || return 2
     while read -r index name rest; do
         [[ -n "$name" && "$name" != auto_null ]] || continue
         printf '%s' "$name"
@@ -623,36 +669,56 @@ pulse_real_sink() {
 }
 
 ensure_audio_bridge_config() {
-    local config daemon_config
-    mkdir -p "$PULSE_HOST_DIR" "$PULSE_RUNTIME_PATH" \
+    local config config_alias="" current daemon_config client_config
+    mkdir -p "$PULSE_HOST_DIR" "$PULSE_RUNTIME_PATH" "$LOG_ROOT" \
         "$(dirname "$PULSE_CONFIG_DROP_IN")" \
-        "$(dirname "$PULSE_DAEMON_DROP_IN")"
+        "$(dirname "$PULSE_DAEMON_DROP_IN")" \
+        "$(dirname "$PULSE_CLIENT_DROP_IN")"
     chmod 700 "$PULSE_HOST_DIR" "$PULSE_RUNTIME_PATH"
     config="$PULSE_BRIDGE_MARKER
 load-module module-native-protocol-unix socket=$PULSE_HOST_SOCKET auth-anonymous=1
 "
+    if [[ -n "$PULSE_HOST_SOCKET_ALIAS" ]]; then
+        config_alias="$PULSE_BRIDGE_MARKER
+load-module module-native-protocol-unix socket=$PULSE_HOST_SOCKET_ALIAS auth-anonymous=1
+"
+    fi
+    # Either spelling of the prefix names the same socket; rewriting between them
+    # would only churn the file.
+    current="$(cat "$PULSE_CONFIG_DROP_IN" 2>/dev/null || true)"$'\n'
     if [[ ! -f "$PULSE_CONFIG_DROP_IN" ]] || \
-        [[ "$(cat "$PULSE_CONFIG_DROP_IN" 2>/dev/null || true)"$'\n' != "$config" ]]; then
+        [[ "$current" != "$config" && ( -z "$config_alias" || "$current" != "$config_alias" ) ]]; then
         write_file "$PULSE_CONFIG_DROP_IN" "$config"
     fi
 
     # PRoot cannot pass SHM/memfd descriptors across the guest boundary, so the
     # app-owned daemon must never negotiate shared-memory transport with a Debian
-    # client. pulseaudio honours a daemon.conf.d drop-in, which holds even when
-    # "pulseaudio --start" re-execs the daemon without our command-line flags.
+    # client. exit-idle-time=-1 keeps the daemon (and the bridge socket, which it
+    # unlinks when it quits) alive while no client is connected, for example
+    # during a slow XFCE start or between Chrome streams. The drop-in holds for
+    # every way the daemon can be started, not only our command line.
     daemon_config="$PULSE_BRIDGE_MARKER
 enable-shm = no
 enable-memfd = no
+exit-idle-time = -1
 "
     if [[ ! -f "$PULSE_DAEMON_DROP_IN" ]] || \
         [[ "$(cat "$PULSE_DAEMON_DROP_IN" 2>/dev/null || true)"$'\n' != "$daemon_config" ]]; then
         write_file "$PULSE_DAEMON_DROP_IN" "$daemon_config"
     fi
+
+    client_config="$PULSE_BRIDGE_MARKER
+autospawn = no
+"
+    if [[ ! -f "$PULSE_CLIENT_DROP_IN" ]] || \
+        [[ "$(cat "$PULSE_CLIENT_DROP_IN" 2>/dev/null || true)"$'\n' != "$client_config" ]]; then
+        write_file "$PULSE_CLIENT_DROP_IN" "$client_config"
+    fi
 }
 
 pulse_process_state() {
     local rc=0
-    timeout 1s pgrep -x pulseaudio >/dev/null 2>&1 || rc=$?
+    timeout "${PULSE_CONTROL_TIMEOUT}s" pgrep -x pulseaudio >/dev/null 2>&1 || rc=$?
     case "$rc" in
         0) printf 'present' ;;
         1) printf 'absent' ;;
@@ -664,67 +730,138 @@ pulse_process_state() {
     esac
 }
 
-start_or_recover_pulseaudio() {
-    local deadline="${1:-$((SECONDS + 12))}" attempt process_state=""
-
-    # Reuse a healthy daemon before asking PulseAudio to start. TermuxService can
-    # clear $PREFIX/tmp while an old daemon survives; starting first in that state
-    # races a second daemon against the stale process and still does not recreate
-    # its native control socket.
-    env -u PULSE_SERVER timeout 1s pactl info >/dev/null 2>&1 && return 0
-    (( SECONDS < deadline )) || return 1
-
-    process_state="$(pulse_process_state)" || return 1
-    (( SECONDS < deadline )) || return 1
-    if [[ "$process_state" == present ]]; then
-        printf '[%s] PulseAudio control socket is stale; restarting the app-owned daemon\n' \
-            "$(date -Iseconds)" >&2
-        if ! env -u PULSE_SERVER timeout 1s pulseaudio --kill >/dev/null 2>&1; then
-            timeout 1s pkill -TERM -x pulseaudio >/dev/null 2>&1 || true
+# Wait until the daemon answers on its control socket. $2, when given, is the
+# daemon we launched: once it has exited there is nothing left to wait for.
+wait_for_pulse_control() {
+    local deadline="$1" daemon_pid="${2:-}"
+    while :; do
+        host_pactl info >/dev/null 2>&1 && return 0
+        if [[ -n "$daemon_pid" ]] && ! kill -0 "$daemon_pid" 2>/dev/null; then
+            return 1
         fi
-        for attempt in $(seq 1 10); do
-            process_state="$(pulse_process_state)" || return 1
-            [[ "$process_state" == absent ]] && break
-            (( SECONDS < deadline )) || return 1
-            sleep 0.1
-        done
-        process_state="$(pulse_process_state)" || return 1
         (( SECONDS < deadline )) || return 1
-        if [[ "$process_state" == present ]]; then
-            timeout 1s pkill -KILL -x pulseaudio >/dev/null 2>&1 || true
-            for attempt in $(seq 1 5); do
-                process_state="$(pulse_process_state)" || return 1
-                [[ "$process_state" == absent ]] && break
-                (( SECONDS < deadline )) || return 1
-                sleep 0.1
-            done
-        fi
-        process_state="$(pulse_process_state)" || return 1
-        [[ "$process_state" == absent ]] || return 1
+        sleep 0.5
+    done
+}
+
+# Stop a stale daemon, escalating to SIGKILL. This uses its own short budget,
+# not the caller's deadline (which the start wait may have used up): a daemon
+# that ignores SIGTERM must still be killed before a new one starts.
+stop_pulseaudio_daemon() {
+    local attempt process_state=""
+    if ! env -u PULSE_SERVER timeout "${PULSE_CONTROL_TIMEOUT}s" pulseaudio --kill \
+        >/dev/null 2>&1; then
+        timeout "${PULSE_CONTROL_TIMEOUT}s" pkill -TERM -x pulseaudio >/dev/null 2>&1 || true
     fi
-
-    (( SECONDS < deadline )) || return 1
-    rm -f "$PULSE_HOST_SOCKET"
-    # PRoot's syscall emulation cannot pass SHM/memfd file descriptors across the
-    # guest boundary. When the daemon offers shared-memory transport, a Debian
-    # client authenticates over the Unix socket but its playback stream dies during
-    # the SHM/srbchannel handshake ("Connection died"), so the Android sink never
-    # leaves IDLE and no sound is heard. The client-side drop-in refuses SHM, and
-    # ensure_audio_bridge_config also disables it daemon-side via daemon.conf.d so
-    # the fallback to plain socket transport holds even if pulseaudio --start
-    # re-execs the daemon without inheriting a command-line flag.
-    env -u PULSE_SERVER timeout 2s pulseaudio --start --exit-idle-time=-1 || return 1
-    for attempt in 1 2 3; do
-        env -u PULSE_SERVER timeout 1s pactl info >/dev/null 2>&1 && return 0
-        (( SECONDS < deadline )) || return 1
-        sleep 0.1
+    for attempt in $(seq 1 20); do
+        process_state="$(pulse_process_state)" || return 1
+        [[ "$process_state" == absent ]] && return 0
+        sleep 0.25
+    done
+    timeout "${PULSE_CONTROL_TIMEOUT}s" pkill -KILL -x pulseaudio >/dev/null 2>&1 || true
+    for attempt in $(seq 1 20); do
+        process_state="$(pulse_process_state)" || return 1
+        [[ "$process_state" == absent ]] && return 0
+        sleep 0.25
     done
     return 1
 }
 
+# The worker owns the daemon it started. Stop it whenever the worker ends: a
+# live PulseAudio keeps the worker's persistent PRoot running, which would hide
+# a dead worker from the app. Builtins and signals only; /proc may be hidden.
+stop_owned_pulseaudio() {
+    local candidate pid comm attempt
+    for candidate in "$PULSE_LAUNCH_PID_FILE" "$PULSE_RUNTIME_PATH/pid"; do
+        pid=""
+        read -r pid 2>/dev/null < "$candidate" || true
+        [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null || continue
+        # Skip a recycled pid when /proc lets us check the name.
+        comm=""
+        if read -r comm 2>/dev/null < "/proc/$pid/comm"; then
+            [[ "$comm" == pulseaudio* ]] || continue
+        fi
+        kill -TERM "$pid" 2>/dev/null || true
+        for attempt in $(seq 1 20); do
+            kill -0 "$pid" 2>/dev/null || break
+            sleep 0.1
+        done
+        if kill -0 "$pid" 2>/dev/null; then
+            kill -KILL "$pid" 2>/dev/null || true
+        fi
+    done
+    rm -f "$PULSE_LAUNCH_PID_FILE"
+}
+
+start_or_recover_pulseaudio() {
+    local deadline="${1:-$((SECONDS + PULSE_BRIDGE_TIMEOUT))}" process_state=""
+    local daemon_pid="" existing_pid="" start_deadline started attempt
+
+    # Reuse a healthy daemon. With autospawn disabled this probe cannot start one.
+    host_pactl info >/dev/null 2>&1 && return 0
+    (( SECONDS < deadline )) || return 1
+
+    process_state="$(pulse_process_state)" || return 1
+    if [[ "$process_state" == present ]]; then
+        # A PulseAudio that exists but does not answer is usually still starting;
+        # under PRoot on ARM that takes seconds. Only a daemon that stays silent
+        # for the whole start budget is stale (TermuxService can also clear an
+        # old daemon's runtime socket while the process survives). Its own pid
+        # file, once written, lets the wait end early if it dies.
+        read -r existing_pid 2>/dev/null < "$PULSE_RUNTIME_PATH/pid" || true
+        [[ "$existing_pid" =~ ^[0-9]+$ ]] && kill -0 "$existing_pid" 2>/dev/null || existing_pid=""
+        start_deadline=$((SECONDS + PULSE_START_TIMEOUT))
+        (( start_deadline <= deadline )) || start_deadline="$deadline"
+        wait_for_pulse_control "$start_deadline" "$existing_pid" && return 0
+        printf '[%s] PulseAudio control socket is stale; restarting the app-owned daemon\n' \
+            "$(date -Iseconds)" >&2
+        stop_pulseaudio_daemon || return 1
+    fi
+
+    rm -f "$PULSE_HOST_SOCKET"
+    # Keep the previous daemon's log: after a crash it holds the reason.
+    if [[ -s "$PULSE_DAEMON_LOG" ]]; then
+        mv -f "$PULSE_DAEMON_LOG" "$PULSE_DAEMON_LOG.1" 2>/dev/null || true
+    fi
+    # Keep the daemon in the foreground of a background job rather than
+    # "pulseaudio --start": a start timeout used to signal the whole process
+    # group and kill a slow but healthy daemon before it forked away. Readiness
+    # is decided by the control socket; the start budget only bounds a hang.
+    started="$SECONDS"
+    env -u PULSE_SERVER pulseaudio --daemonize=no --exit-idle-time=-1 \
+        --log-target=stderr </dev/null >/dev/null 2>"$PULSE_DAEMON_LOG" &
+    daemon_pid=$!
+    printf '%s\n' "$daemon_pid" > "$PULSE_LAUNCH_PID_FILE" 2>/dev/null || true
+    # A new daemon always gets the full start budget, even after a stale one.
+    start_deadline=$((SECONDS + PULSE_START_TIMEOUT))
+    if wait_for_pulse_control "$start_deadline" "$daemon_pid"; then
+        printf '[%s] PulseAudio daemon answered after %ss\n' \
+            "$(date -Iseconds)" "$((SECONDS - started))" >&2
+        return 0
+    fi
+    if kill -0 "$daemon_pid" 2>/dev/null; then
+        printf '[%s] PulseAudio did not answer within %ss; stopping it\n' \
+            "$(date -Iseconds)" "$((SECONDS - started))" >&2
+        kill -TERM "$daemon_pid" 2>/dev/null || true
+        # A daemon stuck before its mainloop never handles SIGTERM. Make sure it
+        # is gone, or it would block every later rebuild in this session.
+        for attempt in $(seq 1 30); do
+            kill -0 "$daemon_pid" 2>/dev/null || break
+            sleep 0.1
+        done
+        if kill -0 "$daemon_pid" 2>/dev/null; then
+            kill -KILL "$daemon_pid" 2>/dev/null || true
+        fi
+    else
+        printf '[%s] PulseAudio exited during startup\n' "$(date -Iseconds)" >&2
+    fi
+    tail -n 20 "$PULSE_DAEMON_LOG" >&2 2>/dev/null || true
+    return 1
+}
+
 ensure_audio_bridge() {
-    local attempt bridge_ready=0 module_index="" sink="" query_status=0
-    local bridge_module_output="" deadline=$((SECONDS + 12))
+    local attempt bridge_ready=0 module_index="" sink="" query_status=0 started="$SECONDS"
+    local bridge_module_output="" deadline=$((SECONDS + PULSE_BRIDGE_TIMEOUT))
     local -a bridge_indexes=()
     has pulseaudio || { printf '[%s] PulseAudio server command is missing\n' "$(date -Iseconds)" >&2; return 1; }
     has pactl || { printf '[%s] PulseAudio control command is missing\n' "$(date -Iseconds)" >&2; return 1; }
@@ -745,14 +882,13 @@ ensure_audio_bridge() {
         mapfile -t bridge_indexes <<< "$bridge_module_output"
     fi
     if [[ "${#bridge_indexes[@]}" == 1 ]] && [[ -S "$PULSE_HOST_SOCKET" ]] && \
-        PULSE_SERVER="$PULSE_HOST_SERVER" timeout 1s pactl info >/dev/null 2>&1; then
+        bridge_pactl info >/dev/null 2>&1; then
         bridge_ready=1
     fi
     if [[ "$bridge_ready" != 1 ]]; then
         for module_index in "${bridge_indexes[@]}"; do
             (( SECONDS < deadline )) || return 1
-            if ! env -u PULSE_SERVER timeout 1s pactl unload-module "$module_index" \
-                >/dev/null 2>&1; then
+            if ! host_pactl unload-module "$module_index" >/dev/null 2>&1; then
                 printf '[%s] PulseAudio bridge module %s could not be unloaded; refusing replacement\n' \
                     "$(date -Iseconds)" "$module_index" >&2
                 return 1
@@ -760,7 +896,7 @@ ensure_audio_bridge() {
         done
         rm -f "$PULSE_HOST_SOCKET"
         module_index="$(
-            env -u PULSE_SERVER timeout 2s pactl load-module module-native-protocol-unix \
+            host_pactl load-module module-native-protocol-unix \
                 "socket=$PULSE_HOST_SOCKET" auth-anonymous=1 2>/dev/null || true
         )"
         [[ "$module_index" =~ ^[0-9]+$ ]] || \
@@ -768,14 +904,13 @@ ensure_audio_bridge() {
                 "$(date -Iseconds)" >&2
     fi
 
-    for attempt in 1 2; do
-        if [[ -S "$PULSE_HOST_SOCKET" ]] && \
-            PULSE_SERVER="$PULSE_HOST_SERVER" timeout 1s pactl info >/dev/null 2>&1; then
+    for attempt in 1 2 3 4 5; do
+        if [[ -S "$PULSE_HOST_SOCKET" ]] && bridge_pactl info >/dev/null 2>&1; then
             bridge_ready=1
             break
         fi
         (( SECONDS < deadline )) || return 1
-        sleep 0.1
+        sleep 0.5
     done
     [[ "$bridge_ready" == 1 ]] || {
         printf '[%s] dedicated PulseAudio Unix socket is unavailable: %s\n' \
@@ -798,7 +933,9 @@ ensure_audio_bridge() {
             query_status=$?
             [[ "$query_status" == 1 ]] || return 1
             (( SECONDS < deadline )) || return 1
-            env -u PULSE_SERVER timeout 2s pactl load-module module-aaudio-sink \
+            # no_close_hack keeps AAudioStream_close() out of the suspend path,
+            # where Termux's module is known to crash the whole daemon.
+            host_pactl load-module module-aaudio-sink no_close_hack=1 \
                 >/dev/null 2>&1 || true
             if sink="$(pulse_real_sink)"; then
                 :
@@ -816,8 +953,7 @@ ensure_audio_bridge() {
             query_status=$?
             [[ "$query_status" == 1 ]] || return 1
             (( SECONDS < deadline )) || return 1
-            env -u PULSE_SERVER timeout 2s pactl load-module module-sles-sink \
-                >/dev/null 2>&1 || true
+            host_pactl load-module module-sles-sink >/dev/null 2>&1 || true
             if sink="$(pulse_real_sink)"; then
                 :
             else
@@ -830,12 +966,98 @@ ensure_audio_bridge() {
     [[ -n "$sink" ]] || {
         printf '[%s] PulseAudio is running but Android audio sink is unavailable\n' \
             "$(date -Iseconds)" >&2
+        tail -n 20 "$PULSE_DAEMON_LOG" >&2 2>/dev/null || true
         return 1
     }
-    PULSE_SERVER="$PULSE_HOST_SERVER" timeout 1s pactl set-default-sink "$sink" \
-        >/dev/null 2>&1 || true
-    printf '[%s] PulseAudio bridge ready: server=%s sink=%s\n' \
-        "$(date -Iseconds)" "$PULSE_GUEST_SERVER" "$sink"
+    bridge_pactl set-default-sink "$sink" >/dev/null 2>&1 || true
+    printf '[%s] PulseAudio bridge ready: server=%s sink=%s (%ss)\n' \
+        "$(date -Iseconds)" "$PULSE_GUEST_SERVER" "$sink" "$((SECONDS - started))"
+}
+
+# Cheap health check for the supervision loop: bash builtins only, no fork or
+# PRoot exec. PulseAudio unlinks its pid file and socket on a clean exit; after
+# SIGKILL (e.g. Android trimming phantom processes) the recorded pid is dead.
+pulse_bridge_alive() {
+    local pid=""
+    [[ -S "$PULSE_HOST_SOCKET" && -r "$PULSE_RUNTIME_PATH/pid" ]] || return 1
+    read -r pid < "$PULSE_RUNTIME_PATH/pid" || [[ -n "$pid" ]] || return 1
+    [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null
+}
+
+# Build the bridge for one desktop run. The worker runs this in the background
+# so a slow cold start never holds the desktop back: the session binds the
+# whole bridge directory, and clients connect once the socket appears.
+run_audio_bridge_job() {
+    local id="$1"
+    if ensure_audio_bridge; then
+        write_meta "$id" audio_ready 1
+    else
+        write_meta "$id" audio_ready 0
+        printf '[%s] Audio bridge is unavailable; continuing the graphical session without sound\n' \
+            "$(date -Iseconds)" >&2
+    fi
+}
+
+audio_bridge_job_running() {
+    local stat="" ppid=""
+    if ! [[ "$LDFA_AUDIO_JOB_PID" =~ ^[0-9]+$ ]] || ! kill -0 "$LDFA_AUDIO_JOB_PID" 2>/dev/null; then
+        LDFA_AUDIO_JOB_PID=""
+        return 1
+    fi
+    # A finished job's pid can be recycled; the job is always this shell's child.
+    if read -r stat 2>/dev/null < "/proc/$LDFA_AUDIO_JOB_PID/stat"; then
+        stat="${stat##*) }"
+        ppid="${stat#* }"
+        ppid="${ppid%% *}"
+        if [[ "$ppid" != "$BASHPID" ]]; then
+            LDFA_AUDIO_JOB_PID=""
+            return 1
+        fi
+    fi
+    return 0
+}
+
+wait_for_audio_bridge_job() {
+    local id="$1" limit="$2" ticks=0 stop
+    stop="$(stop_file "$id")"
+    while audio_bridge_job_running && (( ticks < limit * 4 )); do
+        [[ -f "$stop" ]] && return 0
+        sleep 0.25
+        ticks=$((ticks + 1))
+    done
+    if audio_bridge_job_running; then
+        printf '[%s] Android audio is still starting; opening the desktop meanwhile\n' \
+            "$(date -Iseconds)" >&2
+    fi
+    return 0
+}
+
+# Rebuild the bridge when its daemon has gone away (crash, or Android trimming
+# the app's child processes). Bounded, so a device that cannot play audio at
+# all does not restart PulseAudio forever.
+supervise_audio_bridge() {
+    local id="$1"
+    audio_bridge_job_running && return 0
+    if pulse_bridge_alive; then
+        # A bridge that has stayed up for a minute earns its restart budget back;
+        # only a daemon that keeps dying soon after a rebuild exhausts it.
+        (( SECONDS - LDFA_AUDIO_LAST_REBUILD < 60 )) || LDFA_AUDIO_RESTARTS=0
+        return 0
+    fi
+    (( LDFA_AUDIO_RESTARTS < 5 )) || return 0
+    LDFA_AUDIO_RESTARTS=$((LDFA_AUDIO_RESTARTS + 1))
+    LDFA_AUDIO_LAST_REBUILD="$SECONDS"
+    printf '[%s] Android audio bridge is not running; rebuilding it (%s/5)\n' \
+        "$(date -Iseconds)" "$LDFA_AUDIO_RESTARTS" >&2
+    run_audio_bridge_job "$id" &
+    LDFA_AUDIO_JOB_PID=$!
+}
+
+stop_audio_bridge_job() {
+    if audio_bridge_job_running; then
+        kill -TERM "$LDFA_AUDIO_JOB_PID" 2>/dev/null || true
+    fi
+    LDFA_AUDIO_JOB_PID=""
 }
 
 guest_audio_ready() {
@@ -866,7 +1088,7 @@ guest_audio_ready() {
 desktop_session_script() {
     cat <<'SESSION'
 #!/bin/bash
-# LDFA_SESSION_RUNTIME_VERSION=37
+# LDFA_SESSION_RUNTIME_VERSION=38
 # Hardened LDFA Session Script
 set -Eeuo pipefail
 
@@ -1641,7 +1863,7 @@ ensure_desktop_runtime() {
         # side effects); -p prepends so ~/.local/bin wins, matching bash.
         install -d -m 0755 /etc/fish/conf.d
         cat > /etc/fish/conf.d/00-ldfa.fish <<'"'"'LDFA_FISH'"'"'
-# LDFA_SESSION_RUNTIME_VERSION=37
+# LDFA_SESSION_RUNTIME_VERSION=38
 # Managed by LDFA. fish ignores ~/.profile and ~/.bashrc, so the PATH and env
 # LDFA sets for bash are re-applied here for fish users. conf.d is sourced in
 # every fish mode (login, interactive, script), so no status guard is needed.
@@ -3427,7 +3649,7 @@ cmd_ensure_apps() {
 }
 
 worker_run() {
-    local id="$1" display_number="${2:-${LDFA_DISPLAY_NUMBER:-$(read_meta "$1" display "$DEFAULT_DISPLAY_NUMBER")}}" shared log rc=0 wait_count=0 xset_attempt xset_ready=0 audio_ready=0 session_tz session_env request
+    local id="$1" display_number="${2:-${LDFA_DISPLAY_NUMBER:-$(read_meta "$1" display "$DEFAULT_DISPLAY_NUMBER")}}" shared log rc=0 wait_count=0 xset_attempt xset_ready=0 audio_ticks=0 session_tz session_env request
     validate_id "$id"
     validate_display_number "$display_number"
     # Under native proot the app launched this worker in its own persistent proot;
@@ -3455,6 +3677,8 @@ worker_run() {
     cleanup_run_worker() {
         local exit_code=$? id="$1"
         set +e
+        stop_audio_bridge_job
+        stop_owned_pulseaudio
         if [[ -f "$(stop_file "$id")" ]]; then
             set_status "$id" ready 100 "Linuxデスクトップを起動できます"
         else
@@ -3470,11 +3694,15 @@ worker_run() {
     printf '\n[%s] Linux Desktop worker started: %s display=:%s\n' "$(date -Iseconds)" "$id" "$DISPLAY_NUMBER"
     termux-wake-lock >/dev/null 2>&1 || true
     rm -f "$(stop_file "$id")"
-    if ensure_audio_bridge && guest_audio_ready "$id"; then
-        audio_ready=1
-    fi
-    write_meta "$id" audio_ready "$audio_ready"
-    if [[ "$audio_ready" != 1 ]]; then
+    # The session binds the bridge directory, so create it before the request is
+    # published; the daemon itself comes up in the background (see
+    # run_audio_bridge_job). audio_ready stays empty until that job decides.
+    write_meta "$id" audio_ready ""
+    if ensure_audio_bridge_config; then
+        run_audio_bridge_job "$id" &
+        LDFA_AUDIO_JOB_PID=$!
+    else
+        write_meta "$id" audio_ready 0
         printf '[%s] Audio bridge is unavailable; continuing the graphical session without sound\n' \
             "$(date -Iseconds)" >&2
     fi
@@ -3526,6 +3754,12 @@ worker_run() {
     # matter for this sub-second command.
     ensure_machine_id "$id" >> "$(log_file "$id")" 2>&1 || true
 
+    # Let a normal cold PulseAudio start finish before XFCE comes up, so the panel
+    # and the first browser stream find the bridge at once. Never hold the desktop
+    # for a slow or failing one: the job keeps going, and XFCE's volume plugin and
+    # Debian's ALSA-to-Pulse route both connect whenever the socket appears.
+    wait_for_audio_bridge_job "$id" "$PULSE_SESSION_WAIT"
+
     # DON'T launch ldfa-session from HERE: we are inside the outer (host-transparent)
     # proot, so a pd_login here nests proot-in-proot and XFCE stalls (~125s, never
     # composes). Instead publish a session request the APP reads, and it spawns the
@@ -3551,9 +3785,16 @@ worker_run() {
     # Host-side supervisor: stay alive (holding the wake lock and the audio bridge) until
     # the desktop is stopped. The app owns the single-layer session Process; we only need
     # to keep this outer worker running so its proot (and thus the shared state) persists.
+    # Every ~10 s it also rebuilds the audio bridge if the daemon has gone away.
     while [[ ! -f "$(stop_file "$id")" ]]; do
         sleep 2
+        audio_ticks=$((audio_ticks + 1))
+        if (( audio_ticks >= 5 )); then
+            audio_ticks=0
+            supervise_audio_bridge "$id"
+        fi
     done
+    stop_audio_bridge_job
     rm -f "$(session_request_file "$(run_session "$id")")"
 
     set_status "$id" ready 100 "Linuxデスクトップを起動できます"

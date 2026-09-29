@@ -1,6 +1,29 @@
 # LDFA Linux GUI 起動修正 引き継ぎ
 
-最終更新: 2026-08-23 (JST)
+最終更新: 2026-09-29 (JST)
+
+## 000. 1.2.5: Play版（native PRoot）で音声が出なかった原因（2026-09-29）
+
+§00の修正後、Play版の実行方式（08-26以降）で音声が再び出なくなっていました。音声ロジックは
+§00のままで、実行モデルの変化が原因です。
+
+- **起動タイムアウト**: ホストのPulseAudioはネイティブライブラリPRoot越しに実行されます。ARM実機では
+  コールドスタートに数秒かかります。旧コードの`timeout 1s pactl info`、`timeout 2s pulseaudio --start`、
+  全体12秒はネイティブ実行を前提とした値でした。そのため起動途中のデーモンを「stale」と判断して停止し、
+  `--start`もプロセスグループごと打ち切っていました。Pixel 10a / Android 17の`dumpsys audio`では、
+  デスクトップを4回起動してもLDFAのOpenSLプレイヤーが一度も作られていません。エミュレーターでも
+  pulseaudioに2.5秒の遅延を入れると、1.2.4のコードで同じ無音を再現できました。
+- **autospawn**: 最初の`pactl info`がlibpulseのautospawnで`pulseaudio --start --log-target=syslog`を
+  起動していました。このデーモンには`--exit-idle-time=-1`が付かず、既定の20秒アイドルで終了し、
+  ブリッジsocketも削除します。§00.2の「CLIフラグはre-execで伝播しない」という記述は誤りです。
+  実際には、フラグ付きの起動ではなくautospawnのデーモンを見ていました。
+- 修正: ホスト`client.conf.d`で`autospawn = no`、`daemon.conf.d`で`exit-idle-time = -1`を設定しました。
+  起動は`pulseaudio --daemonize=no --exit-idle-time=-1`のバックグラウンドジョブにし、制御socketの
+  応答で準備完了を判定します（制御15秒／起動60秒／全体90秒）。workerはブリッジ構築を並行実行し、
+  セッション公開前に最大10秒待ち、監視ループで消えたデーモンを作り直します。
+  詳細は`docs/ARCHITECTURE.md`の「音声」と`docs/TESTING.md`を参照してください。
+- 注意: ホスト側でデーモンの状態を調べるときに`env -u PULSE_SERVER pactl …`を使うと、1.2.4以前の
+  設定ではautospawnで新しいデーモンが起動し、症状が隠れます。1.2.5以降は自動起動しません。
 
 ## 00. 最新確定: 音声の真因（SHM + socket位置）と起動高速化（2026-08-23、実機音声OK確認済み）
 

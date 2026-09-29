@@ -2,6 +2,15 @@
 set -euo pipefail
 script="${1:-app/src/main/assets/ldfa-host.sh}"
 
+# `! cmd` never trips `set -e`, so a negated check that fails would pass
+# silently. refute turns an unexpected success into a real test failure.
+refute() {
+  if "$@"; then
+    printf 'Unexpected success: %s\n' "$*" >&2
+    exit 1
+  fi
+}
+
 bash -n "$script"
 test_sandbox="$(mktemp -d)"
 generated_session="$test_sandbox/ldfa-session"
@@ -13,8 +22,8 @@ audio_client_setup="$test_sandbox/audio-client-setup.sh"
 sed -n '/<<'"'"'AUDIO_CLIENT_SETUP'"'"'$/,/^AUDIO_CLIENT_SETUP$/p' "$script" | \
   sed '1d;$d' > "$audio_client_setup"
 bash -n "$audio_client_setup"
-! grep -Fq 'apt-get clean' "$audio_client_setup"
-! grep -Fq 'rm -rf /var/lib/apt/lists' "$audio_client_setup"
+refute grep -Fq 'apt-get clean' "$audio_client_setup"
+refute grep -Fq 'rm -rf /var/lib/apt/lists' "$audio_client_setup"
 nodejs_setup="$test_sandbox/nodejs-setup.sh"
 sed -n '/<<'"'"'NODEJS_SETUP'"'"'$/,/^NODEJS_SETUP$/p' "$script" | \
   sed '1d;$d' > "$nodejs_setup"
@@ -83,9 +92,9 @@ cp "$panel_config" "$fresh_panel_config"
 cp "$fresh_panel_config" "$test_sandbox/fresh-panel-expected.xml"
 HOME="$fresh_panel_home" XDG_STATE_HOME="$fresh_panel_state" bash "$panel_block"
 [[ "$(grep -Fc '<value type="int" value="8"/>' "$fresh_panel_config")" == 1 ]]
-! grep -Fq '<value type="int" value="9"/>' "$fresh_panel_config"
-! grep -Fq '<value type="int" value="10"/>' "$fresh_panel_config"
-! grep -Fq '<value type="int" value="14"/>' "$fresh_panel_config"
+refute grep -Fq '<value type="int" value="9"/>' "$fresh_panel_config"
+refute grep -Fq '<value type="int" value="10"/>' "$fresh_panel_config"
+refute grep -Fq '<value type="int" value="14"/>' "$fresh_panel_config"
 cmp "$test_sandbox/fresh-panel-expected.xml" \
   "$fresh_panel_config.ldfa-before-mobile-optimization"
 required=(
@@ -131,10 +140,10 @@ required=(
   'test -x /usr/bin/curl'
   'ca-certificates wget xz-utils curl'
   'CHROME_LAUNCHER_MARKER="# LDFA_CHROME_LAUNCHER_VERSION=8"'
-  'DESKTOP_RUNTIME_MARKER="# LDFA_SESSION_RUNTIME_VERSION=37"'
+  'DESKTOP_RUNTIME_MARKER="# LDFA_SESSION_RUNTIME_VERSION=38"'
   'AUDIO_CLIENT_MARKER="# LDFA_AUDIO_CLIENT_VERSION=3"'
   'NODEJS_MARKER="# LDFA_NODEJS_VERSION=5"'
-  'PULSE_BRIDGE_MARKER="# LDFA_PULSE_BRIDGE_VERSION=1"'
+  'PULSE_BRIDGE_MARKER="# LDFA_PULSE_BRIDGE_VERSION=2"'
   'PULSE_HOST_DIR="$PREFIX/var/run/ldfa-pulse-bridge"'
   'PULSE_RUNTIME_PATH="$PREFIX/var/run/ldfa-pulse-rt"'
   'export PULSE_RUNTIME_PATH'
@@ -147,9 +156,9 @@ required=(
   'grep -Fqx "$1" /usr/local/bin/google-chrome-ldfa'
   '/usr/local/bin/google-chrome-ldfa'
   '# LDFA_CHROME_LAUNCHER_VERSION=8'
-  '# LDFA_SESSION_RUNTIME_VERSION=37'
+  '# LDFA_SESSION_RUNTIME_VERSION=38'
   '# LDFA_AUDIO_CLIENT_VERSION=3'
-  '# LDFA_PULSE_BRIDGE_VERSION=1'
+  '# LDFA_PULSE_BRIDGE_VERSION=2'
   'export ELECTRON_DISABLE_SANDBOX=1'
   'grep -Fq "ELECTRON_DISABLE_SANDBOX" "$shell_rc"'
   'install -d -m 0755 /etc/fish/conf.d'
@@ -232,13 +241,33 @@ required=(
   'could not be unloaded; refusing replacement'
   'module-native-protocol-unix'
   'auth-anonymous=1'
-  'env -u PULSE_SERVER timeout 2s pactl load-module module-native-protocol-unix'
-  'pactl unload-module "$module_index"'
+  'host_pactl load-module module-native-protocol-unix'
+  'host_pactl unload-module "$module_index"'
+  'env -u PULSE_SERVER timeout "${PULSE_CONTROL_TIMEOUT}s" pactl "$@"'
+  'PULSE_SERVER="$PULSE_HOST_SERVER" timeout "${PULSE_CONTROL_TIMEOUT}s" pactl "$@"'
   'pulseaudio --kill'
-  'timeout 1s pkill -TERM -x pulseaudio'
-  'timeout 1s pkill -KILL -x pulseaudio'
-  'timeout 1s pgrep -x pulseaudio'
-  'local deadline="${1:-$((SECONDS + 12))}"'
+  'timeout "${PULSE_CONTROL_TIMEOUT}s" pkill -TERM -x pulseaudio'
+  'timeout "${PULSE_CONTROL_TIMEOUT}s" pkill -KILL -x pulseaudio'
+  'timeout "${PULSE_CONTROL_TIMEOUT}s" pgrep -x pulseaudio'
+  'PULSE_CONTROL_TIMEOUT="${LDFA_PULSE_CONTROL_TIMEOUT:-15}"'
+  'PULSE_START_TIMEOUT="${LDFA_PULSE_START_TIMEOUT:-60}"'
+  'PULSE_BRIDGE_TIMEOUT="${LDFA_PULSE_BRIDGE_TIMEOUT:-90}"'
+  'local deadline="${1:-$((SECONDS + PULSE_BRIDGE_TIMEOUT))}"'
+  'env -u PULSE_SERVER pulseaudio --daemonize=no --exit-idle-time=-1'
+  'wait_for_pulse_control "$start_deadline" "$daemon_pid"'
+  'PULSE_CLIENT_DROP_IN="$PREFIX/etc/pulse/client.conf.d/99-ldfa-host.conf"'
+  'autospawn = no'
+  'exit-idle-time = -1'
+  'PULSE_HOST_SOCKET_ALIAS='
+  'no_close_hack=1'
+  'run_audio_bridge_job "$id" &'
+  'wait_for_audio_bridge_job "$id" "$PULSE_SESSION_WAIT"'
+  'supervise_audio_bridge "$id"'
+  'pulse_bridge_alive()'
+  'stop_audio_bridge_job'
+  'stop_owned_pulseaudio'
+  'PULSE_LAUNCH_PID_FILE="$RUN_ROOT/pulseaudio-daemon.pid"'
+  'LDFA_AUDIO_JOB_PID=$!'
   'module-aaudio-sink'
   'module-sles-sink'
   'pulseaudio-utils'
@@ -257,7 +286,7 @@ required=(
   '"${APT[@]}" --no-download install'
   'pcm.!default {'
   'type pulse'
-  'write_meta "$id" audio_ready "$audio_ready"'
+  'write_meta "$id" audio_ready 1'
   'continuing the graphical session without sound'
   'cmd_audio_probe()'
   'audio-probe'
@@ -318,60 +347,63 @@ for pattern in "${required[@]}"; do
   grep -Fq -- "$pattern" "$script"
 done
 
-! grep -q 'gnome-session' "$script"
+refute grep -q 'gnome-session' "$script"
 
 # HostScriptCompatibility.normalize() rewrites this legacy command everywhere with a
 # bash block that calls `step` and contains single quotes; it breaks -c strings.
-if grep -Fq -- 'dbus-uuidgen --ensure=' "$script"; then
-  printf 'Legacy machine-id command found in %s\n' "$script" >&2
-  exit 1
-fi
+refute grep -Fq -- 'dbus-uuidgen --ensure=' "$script"
 
-! grep -q 'UBUNTU_IMAGE=' "$script"
+refute grep -q 'UBUNTU_IMAGE=' "$script"
 
-! grep -Eq 'proot-distro install --help.*\|.*grep -q' "$script"
+refute grep -Eq 'proot-distro install --help.*\|.*grep -q' "$script"
 
-! grep -q 'export PROOT_NO_SECCOMP=1' "$script"
+refute grep -q 'export PROOT_NO_SECCOMP=1' "$script"
 
-! grep -Eq 'apt(-get)?[^\n]*install[^\n]*chromium' "$script"
+refute grep -Eq 'apt(-get)?[^\n]*install[^\n]*chromium' "$script"
 
-! grep -q -- '--single-process' "$script"
+refute grep -q -- '--single-process' "$script"
 
 # The old JIS hardcode set only the layout; that leaves symbols shifted. The new
 # path always pairs -model with -layout, so a bare "setxkbmap -layout jp" must
 # not survive anywhere.
-! grep -Fq 'setxkbmap -layout jp' "$script"
+refute grep -Fq 'setxkbmap -layout jp' "$script"
 
 # Copying the tzfile breaks ICU zone-ID recovery; /etc/localtime must be a symlink.
-! grep -Eq 'cp[^\n]*zoneinfo[^\n]*/etc/localtime' "$script"
+refute grep -Eq 'cp[^\n]*zoneinfo[^\n]*/etc/localtime' "$script"
 
 # PRoot has no clock-sync mechanism; these would signal a wrong design.
-! grep -Eq 'hwclock|timedatectl|ntpdate' "$script"
+refute grep -Eq 'hwclock|timedatectl|ntpdate' "$script"
 
-! grep -q -- '--enable-low-end-device-mode' "$script"
+refute grep -q -- '--enable-low-end-device-mode' "$script"
 
-! grep -Fq -- 'wait -n -p exited_component_pid \' "$script"
+refute grep -Fq -- 'wait -n -p exited_component_pid \' "$script"
 
-! grep -Fq 'PULSE_SERVER=127.0.0.1' "$script"
+refute grep -Fq 'PULSE_SERVER=127.0.0.1' "$script"
 
-! grep -Fq 'module-native-protocol-tcp' "$script"
+refute grep -Fq 'module-native-protocol-tcp' "$script"
 
-! grep -Fq 'listen=0.0.0.0' "$script"
+refute grep -Fq 'listen=0.0.0.0' "$script"
 
-! grep -Fq 'pulseaudio --start --exit-idle-time=-1 >/dev/null 2>&1 || true' "$script"
+refute grep -Fq 'pulseaudio --start --exit-idle-time=-1 >/dev/null 2>&1 || true' "$script"
 
-! grep -Fq 'pactl list short modules 2>/dev/null || true' "$script"
+# pulseaudio --start under a short timeout killed a slow but healthy daemon via
+# its process group, and 1-2 s control limits misread a cold PRoot start on ARM
+# as a dead daemon. Neither may come back.
+refute grep -Eq '^[^#]*pulseaudio --start' "$script"
+refute grep -Eq '^[^#]*(^|[^[:alnum:]_-])timeout (--[a-z-]+(=[^ ]+)? )*([0-2](\.[0-9]+)?|0?\.[0-9]+)s? (pactl|pgrep|pkill|pulseaudio)' "$script"
 
-! grep -Fq 'pactl list short sinks 2>/dev/null || true' "$script"
+refute grep -Fq 'pactl list short modules 2>/dev/null || true' "$script"
 
-! grep -Fq 'value="(8|9|10|14)"' "$script"
+refute grep -Fq 'pactl list short sinks 2>/dev/null || true' "$script"
 
-! grep -Fq 'cat > /home/desktop/.config/pulse/client.conf' "$script"
+refute grep -Fq 'value="(8|9|10|14)"' "$script"
 
-! grep -Fq 'cat > /home/desktop/.asoundrc' "$script"
+refute grep -Fq 'cat > /home/desktop/.config/pulse/client.conf' "$script"
+
+refute grep -Fq 'cat > /home/desktop/.asoundrc' "$script"
 
 # The storage readiness check must not depend on traversing into the FUSE mount
 # (a bare `-d` on the symlink stats /storage/emulated/0 and races the grant).
-! grep -Fq '[[ -d "$HOME/storage/shared" ]] && storage_ok=1' "$script"
+refute grep -Fq '[[ -d "$HOME/storage/shared" ]] && storage_ok=1' "$script"
 
 echo "Debian XFCE host script checks passed"

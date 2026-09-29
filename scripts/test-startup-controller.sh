@@ -1,5 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
+# `! cmd` never trips `set -e`, so a negated check that fails would pass
+# silently. refute turns an unexpected success into a real test failure.
+refute() {
+    if "$@"; then
+        printf 'Unexpected success: %s\n' "$*" >&2
+        exit 1
+    fi
+}
 repository="$(cd "$(dirname "$0")/.." && pwd)"
 sandbox="$(mktemp -d)"
 trap 'rm -rf "$sandbox"' EXIT
@@ -25,12 +33,12 @@ sed '/^main "\$@"$/d' "$repository/app/src/main/assets/ldfa-host.sh" > "$sandbox
     [[ ! -e "$sandbox/guest-calls" ]]
     # Package removal and configuration edits must immediately miss the fast path.
     sed -i 's/install ok installed/deinstall ok config-files/g' "$rootfs/var/lib/dpkg/status"
-    ! apps_required_files_ready test
+    refute apps_required_files_ready test
     cmd_prepare_apps test >/dev/null
     [[ -s "$sandbox/guest-calls" ]]
     sed -i 's/deinstall ok config-files/install ok installed/g' "$rootfs/var/lib/dpkg/status"
     printf 'old marker\n' > "$rootfs/etc/fish/conf.d/00-ldfa.fish"
-    ! apps_required_files_ready test
+    refute apps_required_files_ready test
     # If the guest also rejects the configuration, retain the provisioning route.
     apps_combined_ready() { return 1; }
     cmd_prepare_apps test >/dev/null

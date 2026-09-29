@@ -3,11 +3,23 @@ set -euo pipefail
 trap 'printf "Host controller test failed at line %s: %s\n" "$LINENO" "$BASH_COMMAND" >&2' ERR
 
 controller="${1:-app/src/main/assets/ldfa-host.sh}"
+
+# `! cmd` never trips `set -e`, so a negated check that fails would pass
+# silently. refute turns an unexpected success into a real test failure.
+refute() {
+  if "$@"; then
+    printf 'Unexpected success: %s\n' "$*" >&2
+    exit 1
+  fi
+}
 sandbox="$(mktemp -d)"
 cleanup() {
-  if [[ -f "$sandbox/pulse/socket.pid" ]]; then
-    kill "$(cat "$sandbox/pulse/socket.pid")" 2>/dev/null || true
-  fi
+  local pid_file
+  for pid_file in "$sandbox/pulse/socket.pid" "$sandbox/pulse/daemon.pid"; do
+    if [[ -f "$pid_file" ]]; then
+      kill "$(cat "$pid_file")" 2>/dev/null || true
+    fi
+  done
   rm -rf "$sandbox"
 }
 trap cleanup EXIT
@@ -19,6 +31,11 @@ export SESSION_ROOT="$sandbox/tmux"
 export PROOT_TEST_STATE="$sandbox/proot-installed"
 export PROOT_INSTALL_ARGS="$sandbox/proot-install-args"
 export PULSE_FAKE_ROOT="$sandbox/pulse"
+# Short PulseAudio budgets keep the failure paths fast; the production values
+# are sized for a cold start under PRoot on ARM.
+export LDFA_PULSE_CONTROL_TIMEOUT=3
+export LDFA_PULSE_START_TIMEOUT=8
+export LDFA_PULSE_BRIDGE_TIMEOUT=30
 mkdir -p "$HOME/storage/shared" "$PREFIX/tmp/.X11-unix" "$SESSION_ROOT" "$sandbox/bin" "$PULSE_FAKE_ROOT"
 
 cat > "$sandbox/bin/tmux" <<'TMUX'
@@ -141,9 +158,35 @@ case " ${*:-} " in
       "$PREFIX/var/run/ldfa-pulse-bridge/native"
     ;;
   *' --start '*)
+    # LDFA never uses --start any more: it hid slow starts behind a process-group
+    # timeout. Record it so the tests can assert that nothing calls it.
+    : > "$root/legacy-start"
+    exit 1
+    ;;
+  *' --daemonize=no '*)
     [[ ! -f "$root/daemon" ]] || { : > "$root/start-collision"; exit 1; }
-    : > "$root/daemon"
+    [[ "${PULSE_TEST_START_EXIT:-0}" != 1 ]] || exit 1
+    if [[ "${PULSE_TEST_START_HANG:-0}" == 1 ]]; then
+      # Stuck before the mainloop: never answers and ignores SIGTERM.
+      printf '%s\n' "$$" > "$root/hung.pid"
+      trap '' TERM
+      while :; do sleep 0.1; done
+    fi
+    # A cold start under PRoot on ARM takes seconds before the control socket
+    # answers; the controller must wait for it instead of killing it.
+    # Name the process like the real daemon so name-guarded stops recognize it.
+    printf pulseaudio > "/proc/$$/comm" 2>/dev/null || true
+    printf 'fake pulseaudio %s started\n' "$$" >&2
+    sleep "${PULSE_TEST_START_DELAY:-0}"
+    printf '%s\n' "$$" > "$root/daemon.pid"
+    mkdir -p "${PULSE_RUNTIME_PATH:?}"
+    printf '%s\n' "$$" > "$PULSE_RUNTIME_PATH/pid"
     printf '1\tOpenSL_ES_sink\tmodule-sles-sink.c\ts16le 2ch 44100Hz\tIDLE\n' > "$root/sinks"
+    : > "$root/daemon"
+    # Stay in the foreground like the real daemon until --kill/pkill removes
+    # the marker, then exit.
+    while [[ -f "$root/daemon" ]]; do sleep 0.1; done
+    rm -f "$root/daemon.pid"
     ;;
   *) exit 0 ;;
 esac
@@ -255,27 +298,34 @@ audio_report="$(bash "$controller" audio-probe)"
 grep -q '^audio_server=1$' <<<"$audio_report"
 grep -q '^audio_sink=OpenSL_ES_sink$' <<<"$audio_report"
 grep -q '^audio_guest=0$' <<<"$audio_report"
-grep -Fqx '# LDFA_PULSE_BRIDGE_VERSION=1' \
+grep -Fqx '# LDFA_PULSE_BRIDGE_VERSION=2' \
   "$PREFIX/etc/pulse/default.pa.d/ldfa-audio.pa"
 grep -Fq "socket=$PREFIX/var/run/ldfa-pulse-bridge/native auth-anonymous=1" \
   "$PREFIX/etc/pulse/default.pa.d/ldfa-audio.pa"
 [[ "$(stat -c '%a' "$PREFIX/var/run/ldfa-pulse-bridge")" == 700 ]]
 [[ -S "$PREFIX/var/run/ldfa-pulse-bridge/native" ]]
 [[ "$(grep -c 'load-module module-native-protocol-unix' "$PULSE_FAKE_ROOT/pactl.calls")" == 1 ]]
-[[ "$(grep -c -- '--start --exit-idle-time=-1' "$PULSE_FAKE_ROOT/pulseaudio.calls")" == 1 ]]
+[[ "$(grep -c -- '--daemonize=no --exit-idle-time=-1' "$PULSE_FAKE_ROOT/pulseaudio.calls")" == 1 ]]
 # PRoot cannot pass SHM/memfd descriptors; the daemon must forbid shared memory
 # via a daemon.conf.d drop-in so guest playback streams fall back to socket
 # transport and reach the Android sink instead of dying after authentication.
-grep -Fqx '# LDFA_PULSE_BRIDGE_VERSION=1' \
+grep -Fqx '# LDFA_PULSE_BRIDGE_VERSION=2' \
   "$PREFIX/etc/pulse/daemon.conf.d/99-ldfa-noshm.conf"
 grep -Fqx 'enable-shm = no' "$PREFIX/etc/pulse/daemon.conf.d/99-ldfa-noshm.conf"
 grep -Fqx 'enable-memfd = no' "$PREFIX/etc/pulse/daemon.conf.d/99-ldfa-noshm.conf"
+# An idle daemon must not quit and unlink the bridge socket before XFCE connects.
+grep -Fqx 'exit-idle-time = -1' "$PREFIX/etc/pulse/daemon.conf.d/99-ldfa-noshm.conf"
+# Host-side probes must never autospawn a daemon without those settings.
+grep -Fqx '# LDFA_PULSE_BRIDGE_VERSION=2' "$PREFIX/etc/pulse/client.conf.d/99-ldfa-host.conf"
+grep -Fqx 'autospawn = no' "$PREFIX/etc/pulse/client.conf.d/99-ldfa-host.conf"
+[[ ! -f "$PULSE_FAKE_ROOT/legacy-start" ]]
+[[ -s "$PULSE_FAKE_ROOT/daemon.pid" ]]
 
 # A warm daemon and an already-valid bridge must not accumulate modules.
 bash "$controller" audio-probe >/dev/null
 [[ "$(grep -c 'load-module module-native-protocol-unix' "$PULSE_FAKE_ROOT/pactl.calls")" == 1 ]]
 [[ "$(grep -c 'module-native-protocol-unix' "$PULSE_FAKE_ROOT/modules")" == 1 ]]
-[[ "$(grep -c -- '--start --exit-idle-time=-1' "$PULSE_FAKE_ROOT/pulseaudio.calls")" == 1 ]]
+[[ "$(grep -c -- '--daemonize=no --exit-idle-time=-1' "$PULSE_FAKE_ROOT/pulseaudio.calls")" == 1 ]]
 
 # A module-inventory timeout is not equivalent to an empty inventory. Degrade
 # without unloading modules, unlinking the live socket, or loading a duplicate.
@@ -288,8 +338,8 @@ fi
 unset PULSE_TEST_MODULE_LIST_ERROR
 [[ -S "$PREFIX/var/run/ldfa-pulse-bridge/native" ]]
 [[ "$(grep -c 'module-native-protocol-unix' "$PULSE_FAKE_ROOT/modules")" == 1 ]]
-! grep -Fq 'unload-module' "$PULSE_FAKE_ROOT/pactl.calls"
-! grep -Fq 'load-module' "$PULSE_FAKE_ROOT/pactl.calls"
+refute grep -Fq 'unload-module' "$PULSE_FAKE_ROOT/pactl.calls"
+refute grep -Fq 'load-module' "$PULSE_FAKE_ROOT/pactl.calls"
 
 # A sink-inventory failure must not be mistaken for an empty sink list and
 # trigger duplicate Android sink modules.
@@ -301,8 +351,8 @@ if bash "$controller" audio-probe >/dev/null 2>&1; then
 fi
 unset PULSE_TEST_SINK_LIST_ERROR
 [[ -S "$PREFIX/var/run/ldfa-pulse-bridge/native" ]]
-! grep -Fq ' load-module module-aaudio-sink' "$PULSE_FAKE_ROOT/pactl.calls"
-! grep -Fq ' load-module module-sles-sink' "$PULSE_FAKE_ROOT/pactl.calls"
+refute grep -Fq ' load-module module-aaudio-sink' "$PULSE_FAKE_ROOT/pactl.calls"
+refute grep -Fq ' load-module module-sles-sink' "$PULSE_FAKE_ROOT/pactl.calls"
 
 # TermuxService can remove $PREFIX/tmp while PulseAudio survives. The next probe
 # must unload the stale module and recreate the exact same private socket.
@@ -316,7 +366,7 @@ if bash "$controller" audio-probe >/dev/null 2>&1; then
 fi
 unset PULSE_TEST_UNLOAD_ERROR
 [[ "$(grep -c 'module-native-protocol-unix' "$PULSE_FAKE_ROOT/modules")" == 1 ]]
-! grep -Fq ' load-module module-native-protocol-unix' "$PULSE_FAKE_ROOT/pactl.calls"
+refute grep -Fq ' load-module module-native-protocol-unix' "$PULSE_FAKE_ROOT/pactl.calls"
 : > "$PULSE_FAKE_ROOT/pactl.calls"
 bash "$controller" audio-probe >/dev/null
 [[ -S "$PREFIX/var/run/ldfa-pulse-bridge/native" ]]
@@ -342,7 +392,7 @@ grep -q '^audio_sink=OpenSL_ES_sink$' <<<"$audio_report"
 grep -Fq -- '--kill' "$PULSE_FAKE_ROOT/pulseaudio.calls"
 grep -Fq -- '-TERM -x pulseaudio' "$PULSE_FAKE_ROOT/pkill.calls"
 [[ "$(head -n 1 "$PULSE_FAKE_ROOT/pulseaudio.calls")" == *'--kill'* ]]
-[[ "$(grep -c -- '--start --exit-idle-time=-1' "$PULSE_FAKE_ROOT/pulseaudio.calls")" == 1 ]]
+[[ "$(grep -c -- '--daemonize=no --exit-idle-time=-1' "$PULSE_FAKE_ROOT/pulseaudio.calls")" == 1 ]]
 [[ ! -f "$PULSE_FAKE_ROOT/start-collision" ]]
 [[ "$(grep -c 'module-native-protocol-unix' "$PULSE_FAKE_ROOT/modules")" == 1 ]]
 
@@ -359,6 +409,194 @@ unset PULSE_TEST_PGREP_ERROR
 [[ ! -s "$PULSE_FAKE_ROOT/pulseaudio.calls" ]]
 [[ -f "$PULSE_FAKE_ROOT/daemon" ]]
 rm -f "$PULSE_FAKE_ROOT/local-control-failure"
+
+stop_fake_pulseaudio() {
+  rm -f "$PULSE_FAKE_ROOT/local-control-failure"
+  pulseaudio --kill >/dev/null 2>&1 || true
+  for _ in $(seq 1 50); do
+    [[ ! -f "$PULSE_FAKE_ROOT/daemon.pid" ]] && return 0
+    sleep 0.1
+  done
+  return 1
+}
+
+# A cold start under PRoot on ARM answers only after seconds. The controller
+# must wait for the daemon it launched instead of killing it after 1-2 s (the
+# pre-1.2.5 behavior, which left Pixel devices without any Android sink). The
+# 3 s delay is deliberately beyond the old 2 s budget.
+stop_fake_pulseaudio
+: > "$PULSE_FAKE_ROOT/pulseaudio.calls"
+: > "$PULSE_FAKE_ROOT/pkill.calls"
+export PULSE_TEST_START_DELAY=3
+audio_report="$(bash "$controller" audio-probe)"
+unset PULSE_TEST_START_DELAY
+grep -q '^audio_sink=OpenSL_ES_sink$' <<<"$audio_report"
+[[ "$(grep -c -- '--daemonize=no --exit-idle-time=-1' "$PULSE_FAKE_ROOT/pulseaudio.calls")" == 1 ]]
+refute grep -Fq -- '--kill' "$PULSE_FAKE_ROOT/pulseaudio.calls"
+[[ ! -s "$PULSE_FAKE_ROOT/pkill.calls" ]]
+[[ ! -f "$PULSE_FAKE_ROOT/start-collision" ]]
+[[ ! -f "$PULSE_FAKE_ROOT/legacy-start" ]]
+
+# A daemon that exists but does not answer yet is still starting: wait for it
+# within the start budget; never kill it or start a second one.
+: > "$PULSE_FAKE_ROOT/pulseaudio.calls"
+: > "$PULSE_FAKE_ROOT/local-control-failure"
+( sleep 2; rm -f "$PULSE_FAKE_ROOT/local-control-failure" ) &
+waiter=$!
+audio_report="$(bash "$controller" audio-probe)"
+wait "$waiter"
+grep -q '^audio_sink=OpenSL_ES_sink$' <<<"$audio_report"
+[[ ! -s "$PULSE_FAKE_ROOT/pulseaudio.calls" ]]
+[[ -f "$PULSE_FAKE_ROOT/daemon" ]]
+
+# A daemon that dies during startup fails the bridge promptly (the GUI goes on
+# without sound) instead of waiting out the whole budget.
+stop_fake_pulseaudio
+export PULSE_TEST_START_EXIT=1
+started=$SECONDS
+if audio_output="$(bash "$controller" audio-probe 2>&1)"; then
+  printf '%s\n' 'audio-probe unexpectedly accepted a daemon that exited' >&2
+  exit 1
+fi
+unset PULSE_TEST_START_EXIT
+(( SECONDS - started < LDFA_PULSE_START_TIMEOUT ))
+grep -Fq 'PulseAudio exited during startup' <<<"$audio_output"
+[[ ! -f "$PULSE_FAKE_ROOT/daemon" ]]
+bash "$controller" audio-probe >/dev/null
+[[ -f "$PULSE_FAKE_ROOT/daemon" ]]
+# A daemon that hangs during startup and ignores SIGTERM is killed when the start
+# budget runs out, so a later rebuild is not blocked by it.
+stop_fake_pulseaudio
+export PULSE_TEST_START_HANG=1
+if bash "$controller" audio-probe >/dev/null 2>&1; then
+  printf '%s\n' 'audio-probe unexpectedly accepted a hung daemon' >&2
+  exit 1
+fi
+unset PULSE_TEST_START_HANG
+hung_pid="$(cat "$PULSE_FAKE_ROOT/hung.pid")"
+for _ in $(seq 1 30); do kill -0 "$hung_pid" 2>/dev/null || break; sleep 0.1; done
+refute kill -0 "$hung_pid" 2>/dev/null
+bash "$controller" audio-probe >/dev/null
+[[ -f "$PULSE_FAKE_ROOT/daemon" ]]
+
+# Each start keeps the previous daemon's log for crash diagnosis.
+pulse_log="$XDG_DATA_HOME/linux-desktop-for-android/logs/pulseaudio.log"
+grep -Fq 'fake pulseaudio' "$pulse_log"
+grep -Fq 'fake pulseaudio' "$pulse_log.1"
+
+# An existing daemon that dies while we wait for it ends the wait at once
+# instead of consuming the whole start budget.
+stop_fake_pulseaudio
+: > "$PULSE_FAKE_ROOT/daemon"
+: > "$PULSE_FAKE_ROOT/local-control-failure"
+sleep 1 &
+dying_pid=$!
+mkdir -p "$PREFIX/var/run/ldfa-pulse-rt"
+printf '%s\n' "$dying_pid" > "$PREFIX/var/run/ldfa-pulse-rt/pid"
+started=$SECONDS
+audio_report="$(bash "$controller" audio-probe 2>/dev/null)"
+(( SECONDS - started < LDFA_PULSE_START_TIMEOUT ))
+grep -q '^audio_sink=OpenSL_ES_sink$' <<<"$audio_report"
+[[ -f "$PULSE_FAKE_ROOT/daemon" ]]
+
+controller_functions="$sandbox/controller-functions.sh"
+sed '/^main "\$@"$/d' "$controller" > "$controller_functions"
+(
+  source "$controller_functions"
+  # The worker names the prefix /data/user/0/..., RUN_COMMAND /data/data/...;
+  # a bridge module loaded under either spelling is the same socket.
+  PULSE_HOST_SOCKET=/data/user/0/app/files/usr/var/run/ldfa-pulse-bridge/native
+  PULSE_HOST_SOCKET_ALIAS=/data/data/app/files/usr/var/run/ldfa-pulse-bridge/native
+  pulse_bridge_socket_argument "socket=$PULSE_HOST_SOCKET auth-anonymous=1"
+  pulse_bridge_socket_argument "socket=$PULSE_HOST_SOCKET_ALIAS auth-anonymous=1"
+  refute pulse_bridge_socket_argument "socket=${PULSE_HOST_SOCKET}2 auth-anonymous=1"
+  refute pulse_bridge_socket_argument "auth-anonymous=1"
+
+  # The supervision loop rebuilds a vanished bridge, at most five times.
+  rebuilds="$sandbox/audio-rebuilds"
+  : > "$rebuilds"
+  run_audio_bridge_job() { printf '%s\n' "$1" >> "$rebuilds"; }
+  PULSE_HOST_SOCKET="$sandbox/no-such-socket"
+  for _ in 1 2 3 4 5 6 7; do
+    supervise_audio_bridge supervise-test
+    wait
+  done
+  [[ "$(wc -l < "$rebuilds")" == 5 ]]
+  grep -Fqx supervise-test "$rebuilds"
+
+  # A live bridge (socket + running pid) is left alone.
+  LDFA_AUDIO_RESTARTS=0
+  : > "$rebuilds"
+  PULSE_HOST_SOCKET="$PREFIX/var/run/ldfa-pulse-bridge/native"
+  pulse_bridge_alive
+  supervise_audio_bridge supervise-test
+  wait
+  [[ ! -s "$rebuilds" ]]
+
+  # A bridge that stayed up for a minute earns its restart budget back, so a
+  # long session survives more than five separate daemon losses.
+  LDFA_AUDIO_RESTARTS=5
+  LDFA_AUDIO_LAST_REBUILD=$((SECONDS - 61))
+  supervise_audio_bridge supervise-test
+  [[ "$LDFA_AUDIO_RESTARTS" == 0 ]]
+  LDFA_AUDIO_RESTARTS=5
+  LDFA_AUDIO_LAST_REBUILD=$SECONDS
+  supervise_audio_bridge supervise-test
+  [[ "$LDFA_AUDIO_RESTARTS" == 5 ]]
+
+  # A recycled pid that is alive but not our child is not the audio job.
+  LDFA_AUDIO_JOB_PID=$PPID
+  refute audio_bridge_job_running
+  [[ -z "$LDFA_AUDIO_JOB_PID" ]]
+
+  # After SIGKILL (Android trimming child processes) the pid file and socket
+  # stay behind; the dead pid alone must mark the bridge as gone.
+  daemon_pid="$(cat "$PREFIX/var/run/ldfa-pulse-rt/pid")"
+  kill -KILL "$daemon_pid"
+  for _ in $(seq 1 50); do kill -0 "$daemon_pid" 2>/dev/null || break; sleep 0.1; done
+  [[ -S "$PULSE_HOST_SOCKET" ]]
+  refute pulse_bridge_alive
+  rm -f "$PULSE_FAKE_ROOT/daemon" "$PULSE_FAKE_ROOT/daemon.pid"
+)
+
+# The worker stops the daemon it launched when it ends, so a dead worker cannot
+# hide behind a PRoot kept alive by PulseAudio.
+bash "$controller" audio-probe >/dev/null
+daemon_pid="$(cat "$PULSE_FAKE_ROOT/daemon.pid")"
+kill -0 "$daemon_pid"
+(
+  source "$controller_functions"
+  stop_owned_pulseaudio
+  for _ in $(seq 1 50); do kill -0 "$daemon_pid" 2>/dev/null || break; sleep 0.1; done
+  refute kill -0 "$daemon_pid" 2>/dev/null
+  [[ ! -f "$PULSE_LAUNCH_PID_FILE" ]]
+  # A pid that has been recycled by an unrelated process is never signalled.
+  sleep 30 &
+  unrelated=$!
+  printf '%s\n' "$unrelated" > "$PULSE_LAUNCH_PID_FILE"
+  stop_owned_pulseaudio
+  kill -0 "$unrelated"
+  kill "$unrelated"
+)
+rm -f "$PULSE_FAKE_ROOT/daemon" "$PULSE_FAKE_ROOT/daemon.pid"
+(
+  source "$controller_functions"
+
+  # The pre-session wait returns as soon as the job ends, and never exceeds its limit.
+  mkdir -p "$(dirname "$(stop_file wait-test)")"
+  ( sleep 0.5 ) &
+  LDFA_AUDIO_JOB_PID=$!
+  started=$SECONDS
+  wait_for_audio_bridge_job wait-test 10
+  (( SECONDS - started < 3 ))
+  ( sleep 30 ) &
+  LDFA_AUDIO_JOB_PID=$!
+  started=$SECONDS
+  wait_for_audio_bridge_job wait-test 1 2>/dev/null
+  (( SECONDS - started < 4 ))
+  stop_audio_bridge_job
+  [[ -z "$LDFA_AUDIO_JOB_PID" ]]
+)
 
 created="$(bash "$controller" create desk-test '仕事用 Debian XFCE')"
 [[ "$created" == desk-test ]]
@@ -506,7 +744,7 @@ grep -q '^timezone_ready=1$' <<<"$tz_report"
   trap 'kill "$unrelated_pid" "$owned_pid" 2>/dev/null || true; wait "$unrelated_pid" "$owned_pid" 2>/dev/null || true' EXIT
   mkdir -p "$RUN_ROOT"
   printf '%s\n' "$unrelated_pid" > "$(session_pid_file ldfa-run-identity-test)"
-  ! session_alive ldfa-run-identity-test
+  refute session_alive ldfa-run-identity-test
   session_kill ldfa-run-identity-test
   kill -0 "$unrelated_pid"
   printf '%s\n' "$owned_pid" > "$(session_pid_file ldfa-run-identity-test)"
@@ -528,7 +766,7 @@ grep -q '^timezone_ready=1$' <<<"$tz_report"
   SELF="$original_self"
   session_kill ldfa-run-identity-test
   wait "$owned_pid" 2>/dev/null || true
-  ! kill -0 "$owned_pid" 2>/dev/null
+  refute kill -0 "$owned_pid" 2>/dev/null
 )
 
 # Image publication is atomic and refuses an existing user's rootfs.
@@ -576,7 +814,7 @@ grep -q 'worker failed: exit=1' "$XDG_DATA_HOME/linux-desktop-for-android/logs/e
   source "$sandbox/guest-apps-library.sh"
   result="$(printf 'guest stdin' | pd_login guest --timeout 2 -- env LDFA_GUEST_TEST=ready bash -c 'printf "%s:" "$LDFA_GUEST_TEST"; cat')"
   [[ "$result" == 'ready:guest stdin' ]]
-  ! pd_login guest -- bash -c 'exit 23'
+  refute pd_login guest -- bash -c 'exit 23'
   desktop_session_script > "$sandbox/guest-session.sh"
   grep -Fxq "$DESKTOP_RUNTIME_MARKER" "$sandbox/guest-session.sh"
 )

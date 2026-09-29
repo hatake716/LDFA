@@ -95,6 +95,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # `! cmd` never trips `set -e`, so a negated check that fails would pass
+          # silently. refute turns an unexpected success into a real step failure.
+          refute() {
+            if "$@"; then
+              printf 'Unexpected success: %s\n' "$*" >&2
+              exit 1
+            fi
+          }
           APK=app/build/outputs/apk/debug/app-debug.apk
           test -f "$APK"
 
@@ -157,44 +165,44 @@ jobs:
           grep -Fq 'EmbeddedX11ServiceController' "$VERIFY_DIR/dex-strings.txt"
           grep -Fq 'com.hatake716.linuxdesktop.x11.EmbeddedX11ServerService' "$VERIFY_DIR/manifest.xml"
           grep -Fq 'android:process=":x11"' "$VERIFY_DIR/manifest.xml"
-          ! grep -Fq 'android.permission.RECORD_AUDIO' "$VERIFY_DIR/manifest.xml"
+          refute grep -Fq 'android.permission.RECORD_AUDIO' "$VERIFY_DIR/manifest.xml"
           python3 scripts/check-play-permissions.py "$VERIFY_DIR/manifest.xml"
           python3 scripts/check-no-hidden-api-bypass.py "$APK"
-          ! grep -Fq 'android.permission.FOREGROUND_SERVICE_MICROPHONE' "$VERIFY_DIR/manifest.xml"
+          refute grep -Fq 'android.permission.FOREGROUND_SERVICE_MICROPHONE' "$VERIFY_DIR/manifest.xml"
           # Play blockers: the unused all-files-access permission must stay OUT of the
           # merged manifest, and cleartext must be scoped via a network-security-config
           # rather than the app-wide usesCleartextTraffic flag.
-          ! grep -Fq 'android.permission.MANAGE_EXTERNAL_STORAGE' "$VERIFY_DIR/manifest.xml"
+          refute grep -Fq 'android.permission.MANAGE_EXTERNAL_STORAGE' "$VERIFY_DIR/manifest.xml"
           # The shared-storage feature is retired: NO storage permission may ship
           # (READ/WRITE are not user-grantable at targetSdk 35 anyway).
-          ! grep -Fq 'android.permission.READ_EXTERNAL_STORAGE' "$VERIFY_DIR/manifest.xml"
-          ! grep -Fq 'android.permission.WRITE_EXTERNAL_STORAGE' "$VERIFY_DIR/manifest.xml"
-          ! grep -Fq 'requestLegacyExternalStorage' "$VERIFY_DIR/manifest.xml"
+          refute grep -Fq 'android.permission.READ_EXTERNAL_STORAGE' "$VERIFY_DIR/manifest.xml"
+          refute grep -Fq 'android.permission.WRITE_EXTERNAL_STORAGE' "$VERIFY_DIR/manifest.xml"
+          refute grep -Fq 'requestLegacyExternalStorage' "$VERIFY_DIR/manifest.xml"
           # The VNC fallback is gone, and with it the last cleartext consumer:
           # neither a network-security-config nor usesCleartextTraffic may ship
           # (the platform default blocks cleartext).
-          ! grep -Fq 'networkSecurityConfig' "$VERIFY_DIR/manifest.xml"
-          ! grep -Fq 'usesCleartextTraffic' "$VERIFY_DIR/manifest.xml"
+          refute grep -Fq 'networkSecurityConfig' "$VERIFY_DIR/manifest.xml"
+          refute grep -Fq 'usesCleartextTraffic' "$VERIFY_DIR/manifest.xml"
           # Declaring a com.termux-owned permission makes LDFA uninstallable next to
           # real Termux (INSTALL_FAILED_DUPLICATE_PERMISSION); ours must be namespaced.
-          ! grep -Fq 'com.termux.permission' "$VERIFY_DIR/manifest.xml"
+          refute grep -Fq 'com.termux.permission' "$VERIFY_DIR/manifest.xml"
           grep -Fq 'com.hatake716.linuxdesktop.permission.RUN_COMMAND' "$VERIFY_DIR/manifest.xml"
 
           # The obsolete app_process/loader and shell-owned Android lifecycle must not return.
-          ! grep -Fq 'assets/x11-loader.apk' "$VERIFY_DIR/entries.txt"
-          ! grep -Fq '/system/bin/app_process' "$VERIFY_DIR/ldfa-x11.sh"
-          ! grep -Fq 'com.termux.x11.Loader' "$VERIFY_DIR/ldfa-x11.sh"
-          ! grep -Fq 'start-foreground-service' "$VERIFY_DIR/ldfa-x11.sh"
-          ! grep -Fq 'am start' "$VERIFY_DIR/ldfa-x11.sh"
+          refute grep -Fq 'assets/x11-loader.apk' "$VERIFY_DIR/entries.txt"
+          refute grep -Fq '/system/bin/app_process' "$VERIFY_DIR/ldfa-x11.sh"
+          refute grep -Fq 'com.termux.x11.Loader' "$VERIFY_DIR/ldfa-x11.sh"
+          refute grep -Fq 'start-foreground-service' "$VERIFY_DIR/ldfa-x11.sh"
+          refute grep -Fq 'am start' "$VERIFY_DIR/ldfa-x11.sh"
 
           # The VNC compatibility backend was removed (its provisioning and even
           # warm starts were minutes-slow); nothing of it may ship again.
-          ! grep -Fqx 'assets/ldfa-vnc.sh' "$VERIFY_DIR/entries.txt"
-          ! grep -Fq 'VncFallbackActivity' "$VERIFY_DIR/dex-strings.txt"
+          refute grep -Fqx 'assets/ldfa-vnc.sh' "$VERIFY_DIR/entries.txt"
+          refute grep -Fq 'VncFallbackActivity' "$VERIFY_DIR/dex-strings.txt"
 
           # LDFA branding and Material 3 tools are included.
           grep -Fxq 'com.hatake716.linuxdesktop' "$VERIFY_DIR/application-id.txt"
-          grep -Fq "versionCode='25' versionName='1.2.4'" "$VERIFY_DIR/badging.txt"
+          grep -Fq "versionCode='26' versionName='1.2.5'" "$VERIFY_DIR/badging.txt"
           grep -Fq "targetSdkVersion:'36'" "$VERIFY_DIR/badging.txt"
           grep -Fq "application-label:'LDFA'" "$VERIFY_DIR/badging.txt"
           grep -Fq 'ToolsScreen' "$VERIFY_DIR/dex-strings.txt"
@@ -204,15 +212,20 @@ jobs:
           # Chrome keeps Google sign-in support while bounding its renderer pool.  The launcher
           # marker forces existing Debian environments to receive this update before startup.
           grep -Fq '# LDFA_CHROME_LAUNCHER_VERSION=8' "$VERIFY_DIR/ldfa-host.sh"
-          grep -Fq '# LDFA_SESSION_RUNTIME_VERSION=37' "$VERIFY_DIR/ldfa-host.sh"
+          grep -Fq '# LDFA_SESSION_RUNTIME_VERSION=38' "$VERIFY_DIR/ldfa-host.sh"
+          # The packaged host controller must carry the 1.2.5 audio bridge: no host
+          # autospawn, no idle exit, and a start that waits for a slow PRoot daemon.
+          grep -Fq 'PULSE_BRIDGE_MARKER="# LDFA_PULSE_BRIDGE_VERSION=2"' "$VERIFY_DIR/ldfa-host.sh"
+          grep -Fq 'pulseaudio --daemonize=no --exit-idle-time=-1' "$VERIFY_DIR/ldfa-host.sh"
+          grep -Fq 'autospawn = no' "$VERIFY_DIR/ldfa-host.sh"
           grep -Fq -- '--renderer-process-limit=2' "$VERIFY_DIR/ldfa-host.sh"
           grep -Fq -- '--disable-background-mode' "$VERIFY_DIR/ldfa-host.sh"
           grep -Fq -- '--disable-extensions' "$VERIFY_DIR/ldfa-host.sh"
           grep -Fq -- '--disable-component-extensions-with-background-pages' "$VERIFY_DIR/ldfa-host.sh"
           grep -Fq 'wait -n -p exited_component_pid || true' "$VERIFY_DIR/ldfa-host.sh"
           grep -Fq 'sleep 0.05' "$VERIFY_DIR/ldfa-host.sh"
-          ! grep -Fq -- '--single-process' "$VERIFY_DIR/ldfa-host.sh"
-          ! grep -Fq -- '--enable-low-end-device-mode' "$VERIFY_DIR/ldfa-host.sh"
+          refute grep -Fq -- '--single-process' "$VERIFY_DIR/ldfa-host.sh"
+          refute grep -Fq -- '--enable-low-end-device-mode' "$VERIFY_DIR/ldfa-host.sh"
 
           python3 scripts/verify-release-contents.py --apk "$APK" --report "$VERIFY_DIR/native-contents.json"
           "$ANDROID_HOME/build-tools/36.0.0/zipalign" -c -P 16 4 "$APK"
