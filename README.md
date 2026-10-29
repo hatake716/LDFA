@@ -2,22 +2,22 @@
 
 **LDFA** は、Androidスマートフォン／タブレットをLinux PCとして使うための入口となるAndroidアプリです。
 
-Android上のUbuntu 24.04 PRootコンテナへ **XFCE、日本語ロケール、日本語フォント、Fcitx5 + Mozc、sudo** を構築し、アプリに内蔵したターミナルとX11サーバーを通してLinuxデスクトップをGUI操作できます。通常は外部Termux、外部Termux:X11、外部VNCクライアントを必要としません。
+Android上のDebian 12 PRootコンテナへ **XFCE、日本語ロケール、日本語フォント、Fcitx5 + Mozc、sudo** を構築し、アプリに内蔵したターミナルとX11サーバーを通してLinuxデスクトップをGUI操作できます。通常は外部Termux、外部Termux:X11、外部VNCクライアントを必要としません。
 
 現在の開発版は **v0.9.0** です。
 
 ## できること
 
-- Android上にUbuntu 24.04環境を作成・保存
+- Android上にDebian 12環境を作成・保存
 - XFCEデスクトップをアプリ内で表示
 - タッチ、マウス、物理キーボードでLinux GUIを操作
-- 複数のUbuntu環境を作成・切り替え
+- 複数のDebian環境を作成・切り替え
 - 日本語ロケール、Noto CJK、Fcitx5 + Mozcを自動設定
 - 一般ユーザー `desktop` とパスワードなし `sudo` を設定
-- Ubuntuの `apt` でARM64対応Linuxアプリを追加
-- Android共有ストレージをUbuntuの `/mnt/android` へ接続
-- 内蔵ターミナルからUbuntuを保守
-- Ubuntu／XFCE／X11のインストール・診断ログをアプリ内表示
+- Debianの `apt` でARM64対応Linuxアプリを追加
+- Android共有ストレージをDebianの `/mnt/android` へ接続
+- 内蔵ターミナルからDebianを保守
+- Debian／XFCE／X11のインストール・診断ログをアプリ内表示
 - native X11が使えない端末では互換VNC表示へ自動切り替え
 - Foreground Service、WakeLock、heartbeatでセッションを監視・復旧
 
@@ -28,11 +28,11 @@ LDFAの初回画面では、1つの主ボタンが次に必要な操作を順番
 1. 内蔵ターミナルランタイムを展開
 2. 内蔵X11サーバーを確認
 3. Android共有ストレージへのアクセスを許可
-4. Ubuntu、XFCE、日本語環境を自動構築
+4. Debian、XFCE、日本語環境を自動構築
 
-準備が完了したら「Ubuntu環境を作成」を押します。インストール後は「Ubuntu XFCEを開く」だけでLinuxデスクトップを起動できます。
+準備が完了したら「Debian環境を作成」を押します。インストール後は「Debian XFCEを開く」だけでLinuxデスクトップを起動できます。
 
-Ubuntu環境1つにつき、最低3〜5GB程度の空き容量を推奨します。初回セットアップにはインターネット接続が必要です。
+Debian環境1つにつき、最低3〜5GB程度の空き容量を推奨します。初回セットアップにはインターネット接続が必要です。
 
 ## UI
 
@@ -41,15 +41,15 @@ Ubuntu環境1つにつき、最低3〜5GB程度の空き容量を推奨します
 - Android 12以降では端末のDynamic Colorへ対応
 - ライト／ダークテーマへ対応
 - セットアップの進捗を4段階で表示
-- ホーム画面からUbuntu作成・起動・停止・修復・削除
-- 設定画面で内蔵ターミナル、X11、共有ストレージ、Ubuntu基盤の状態を確認
+- ホーム画面からDebian作成・起動・停止・修復・削除
+- 設定画面で内蔵ターミナル、X11、共有ストレージ、Debian基盤の状態を確認
 - インストール中のリアルタイムログを表示
 
 ## 動作要件
 
 - Android 8.0以降
 - ARM64端末を推奨
-- Ubuntu + XFCE用に数GB以上の空き容量
+- Debian + XFCE用に数GB以上の空き容量
 - 初回セットアップ時のインターネット接続
 - Android共有ストレージへのアクセス許可
 - 互換VNC表示を使う場合はAndroid System WebView
@@ -76,19 +76,19 @@ adb install -r app-debug.apk
 
 ## 基本操作
 
-### Ubuntu環境を作成
+### Debian環境を作成
 
-ホーム画面の「Ubuntu環境を作成」または右下の追加ボタンを押し、表示名を入力します。Ubuntu 24.04、XFCE、日本語環境が自動で構築され、処理中はリアルタイムログを確認できます。
+ホーム画面の「Debian環境を作成」または右下の追加ボタンを押し、表示名を入力します。Debian 12、XFCE、日本語環境が自動で構築され、処理中はリアルタイムログを確認できます。
 
 ### Linuxデスクトップを開く
 
-環境カードの「Ubuntu XFCEを開く」を押します。
+環境カードの「Debian XFCEを開く」を押します。
 
 起動時は次を順に検証します。
 
 1. 内蔵X11 Foreground Service
 2. X11 Unix socket
-3. Ubuntu内部からの `xset q`
+3. Debian内部からの `xset q`
 4. Binder接続
 5. Android Surface
 6. 実描画フレーム
@@ -104,7 +104,7 @@ native X11が正常に描画できない場合のみ、legacy描画、互換VNC�
 
 設定画面の「ターミナルを開く」から、内蔵ターミナルを起動できます。
 
-UbuntuへLinuxアプリを追加する例:
+DebianへLinuxアプリを追加する例:
 
 ```bash
 sudo apt update
@@ -113,7 +113,7 @@ sudo apt install <package>
 
 ## 日本語入力
 
-Ubuntu側では次の環境変数を設定し、XFCEセッション開始時にFcitx5を自動起動します。
+Debian側では次の環境変数を設定し、XFCEセッション開始時にFcitx5を自動起動します。
 
 ```text
 GTK_IM_MODULE=fcitx
@@ -125,7 +125,7 @@ XMODIFIERS=@im=fcitx
 
 ## Androidとのファイル共有
 
-UbuntuからAndroid共有ストレージへ次のパスでアクセスできます。
+DebianからAndroid共有ストレージへ次のパスでアクセスできます。
 
 ```text
 /mnt/android
@@ -149,7 +149,7 @@ EmbeddedX11ServiceController
    |       v
    |    libXlorie / Xorg :1
    |       |
-   |       +---- Unix socket ---- Ubuntu PRoot / XFCE
+   |       +---- Unix socket ---- Debian PRoot / XFCE
    |       |
    |       +---- ICmdEntryInterface Binder
    |                         |
@@ -164,9 +164,11 @@ EmbeddedX11ServiceController
                          Android Surface
 ```
 
-X11サーバーは管理UIとは別の `com.termux:x11` プロセスでForeground Serviceとして動作します。native側のクラッシュが管理UIを巻き込まない構成です。
+Xorgサーバーは管理UIとは別の `com.termux:x11` プロセスでForeground Serviceとして動作するため、Xorg側の終了は管理UIから隔離されます。表示ActivityとEGL rendererは現在main processにあるため、renderer側にはmutex、EGL初期化、JNI ABI、再接続、teardownのhardeningを適用しています。
 
 表示ActivityはServiceへ直接 `bindService()` し、`ICmdEntryInterface` BinderからX接続FDを受け取ります。TCP 7892や通常接続用broadcastには依存しません。
+
+X11 Serviceの起動ごとにUUID世代とPID markerを照合し、旧processが完全に終了してから次の世代を開始します。Surface接続後とXFCE／xfwm4起動後の2段階で、成功したEGL presentationの増分を確認します。
 
 ## 描画フォールバック
 
@@ -182,7 +184,7 @@ native :1 / legacy描画
 互換VNC :2 / noVNC
 ```
 
-native Termux:X11は `DISPLAY=:1`、互換VNCは `DISPLAY=:2` / RFB 5902を使います。表示番号を分離し、fallback時にX11 socketやlockが競合しないようにしています。
+native Termux:X11は `DISPLAY=:1`、互換VNCは `DISPLAY=:2` / RFB 5902を使います。表示番号をmetadata、tmux worker、XFCE sessionまで明示的に伝え、fallback時にX11 socketやlockが競合しないようにしています。
 
 互換表示は次のloopbackアドレスだけで待ち受けます。
 
@@ -202,7 +204,7 @@ native X11を停止するときは、最初に通常の `stopService()` を使�
 ## ログ
 
 ```text
-Ubuntu / XFCE
+Debian / XFCE
 ~/.local/share/linux-desktop-for-android/logs/<環境ID>.log
 
 Native X11
@@ -243,18 +245,18 @@ bash ./gradlew --no-daemon \
 app/build/outputs/apk/debug/app-debug.apk
 ```
 
-`gradlew` はGradle Wrapper JARがない場合、Gradle公開のSHA-256と照合した上でGradle 8.13用JARを取得します。
+`gradlew` はGradle Wrapper JARがない場合、Gradle公開のSHA-256と照合した上で、Android Gradle Plugin 8.13.2と対応するGradle 8.13用JARを取得します。
 
 ## CIで検証する内容
 
-- Ubuntu host controllerの構文・統合テスト
+- Debian host controllerの構文・統合テスト
 - native X11 `:1` / 互換VNC `:2` の分離
 - Android-owned X11 lifecycle
 - `app_process` / loader APKが復活していないこと
-- `:x11` Foreground Serviceのmanifest設定
+- `:x11` Foreground Services manifest設定
 - direct Binder接続
 - normal / legacy / VNC fallback
-- Surfaceとrendered-frame probe
+- Surface/EGL readinessと、成功したEGL presentationだけを数える単調serial probe
 - Kotlin unit tests
 - Android lint
 - `libXlorie.so` を含むDebug APK生成
@@ -269,6 +271,6 @@ LDFAは **GNU GPL version 3 only** で提供され、明示・黙示を問わず
 
 - Termux App
 - Termux:X11
-- Ubuntu / proot-distro
+- Debian / proot-distro
 - XFCE
 - TigerVNC / noVNC

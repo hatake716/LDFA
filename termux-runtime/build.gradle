@@ -1,0 +1,147 @@
+plugins {
+    id 'com.android.library'
+}
+
+ext {
+    packageVariant = System.getenv('TERMUX_PACKAGE_VARIANT') ?: 'apt-android-7'
+}
+
+android {
+    namespace 'com.termux'
+    compileSdkVersion project.properties.compileSdkVersion.toInteger()
+    ndkVersion project.properties.ndkVersion
+
+    defaultConfig {
+        minSdkVersion project.properties.minSdkVersion.toInteger()
+        targetSdkVersion project.properties.targetSdkVersion.toInteger()
+        buildConfigField 'String', 'TERMUX_PACKAGE_VARIANT', '"' + project.ext.packageVariant + '"'
+
+        externalNativeBuild {
+            ndkBuild {
+                cFlags '-std=c11', '-Wall', '-Wextra', '-Werror', '-Os', '-fno-stack-protector', '-Wl,--gc-sections'
+            }
+        }
+    }
+
+    sourceSets {
+        main {
+            java.srcDirs = [
+                '../vendor/termux-app/app/src/main/java',
+                'src/main/java'
+            ]
+            res.srcDirs = [
+                '../vendor/termux-app/app/src/main/res',
+                'src/main/res'
+            ]
+            assets.srcDirs = [
+                '../vendor/termux-app/app/src/main/assets',
+                'src/main/assets'
+            ]
+            manifest.srcFile 'src/main/AndroidManifest.xml'
+        }
+    }
+
+    externalNativeBuild {
+        ndkBuild {
+            path file('../vendor/termux-app/app/src/main/cpp/Android.mk')
+        }
+    }
+
+    compileOptions {
+        coreLibraryDesugaringEnabled true
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+    buildFeatures {
+        buildConfig true
+    }
+
+    packagingOptions {
+        jniLibs {
+            useLegacyPackaging true
+        }
+    }
+
+    lint {
+        // These checks target newer AndroidX activity conventions, while the
+        // pinned upstream Termux activity intentionally owns its back-stack
+        // handling and protected-permission declarations.
+        disable 'ProtectedPermissions', 'MissingSuperCall'
+    }
+}
+
+dependencies {
+    implementation 'androidx.annotation:annotation:1.9.0'
+    implementation 'androidx.core:core:1.13.1'
+    implementation 'androidx.drawerlayout:drawerlayout:1.2.0'
+    implementation 'androidx.preference:preference:1.2.1'
+    implementation 'androidx.viewpager:viewpager:1.0.0'
+    implementation 'com.google.android.material:material:1.12.0'
+    implementation 'com.google.guava:guava:24.1-jre'
+    implementation "io.noties.markwon:core:${markwonVersion}"
+    implementation "io.noties.markwon:ext-strikethrough:${markwonVersion}"
+    implementation "io.noties.markwon:linkify:${markwonVersion}"
+    implementation "io.noties.markwon:recycler:${markwonVersion}"
+    implementation 'com.google.guava:listenablefuture:9999.0-empty-to-avoid-conflict-with-guava'
+
+    implementation project(':terminal-view')
+    implementation project(':termux-shared')
+
+    coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.5'
+}
+
+def downloadBootstrap(String arch, String expectedChecksum, String version) {
+    def digest = java.security.MessageDigest.getInstance('SHA-256')
+    def localFile = file("../vendor/termux-app/app/src/main/cpp/bootstrap-${arch}.zip")
+
+    if (localFile.exists()) {
+        localFile.withInputStream { input ->
+            byte[] buffer = new byte[8192]
+            int count
+            while ((count = input.read(buffer)) >= 0) digest.update(buffer, 0, count)
+        }
+        def checksum = new BigInteger(1, digest.digest()).toString(16).padLeft(64, '0')
+        if (checksum == expectedChecksum) return
+        logger.quiet("Deleting bootstrap with wrong checksum: ${localFile}")
+        localFile.delete()
+        digest.reset()
+    }
+
+    def remoteUrl = "https://github.com/termux/termux-packages/releases/download/bootstrap-${version}/bootstrap-${arch}.zip"
+    logger.quiet("Downloading ${remoteUrl}")
+    localFile.parentFile.mkdirs()
+
+    def connection = new URL(remoteUrl).openConnection()
+    connection.setInstanceFollowRedirects(true)
+    localFile.withOutputStream { output ->
+        new java.security.DigestInputStream(connection.inputStream, digest).withCloseable { input ->
+            output << input
+        }
+    }
+
+    def checksum = new BigInteger(1, digest.digest()).toString(16).padLeft(64, '0')
+    if (checksum != expectedChecksum) {
+        localFile.delete()
+        throw new GradleException("Wrong checksum for ${remoteUrl}: expected ${expectedChecksum}, actual ${checksum}")
+    }
+}
+
+tasks.register('downloadBootstraps') {
+    doLast {
+        if (project.ext.packageVariant != 'apt-android-7') {
+            throw new GradleException("Unsupported TERMUX_PACKAGE_VARIANT: ${project.ext.packageVariant}")
+        }
+        def version = '2026.02.12-r1%2Bapt.android-7'
+        downloadBootstrap('aarch64', 'ea2aeba8819e517db711f8c32369e89e7c52cee73e07930ff91185e1ab93f4f3', version)
+        downloadBootstrap('arm', 'a38f4d3b2f735f83be2bf54eff463e86dc32a3e2f9f861c1557c4378d249c018', version)
+        downloadBootstrap('i686', 'f5bc0b025b9f3b420b5fcaeefc064f888f5f22a0d6fd7090f4aac0c33eb3555b', version)
+        downloadBootstrap('x86_64', 'b7fd0f2e3a4de534be3144f9f91acc768630fc463eaf134ab2e64c545e834f7a', version)
+    }
+}
+
+afterEvaluate {
+    android.libraryVariants.all { variant ->
+        variant.javaCompileProvider.get().dependsOn(tasks.named('downloadBootstraps'))
+    }
+}
